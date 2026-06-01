@@ -32,7 +32,7 @@ The app manages the full lifecycle end to end:
 
 
 
-| Connections | VPS Management | Logs | Settings | Settings | 
+| Connections | VPS Management | Logs | Settings | More settings | 
 |---|---|---|---|---|
 | ![Connections](docs/screenshots/1connections.png) | ![VPS](docs/screenshots/2managevps.png) | ![Logs](docs/screenshots/3logs.png) | ![Settings](docs/screenshots/4settings1.png) | ![More settings](docs/screenshots/5settings2.png) |
 
