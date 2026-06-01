@@ -139,6 +139,46 @@ picks up the framework (`xcodegen` doesn't watch the filesystem).
 
 ---
 
+## Install without Xcode (sideload)
+
+No Mac to build the app? Install a prebuilt **unsigned** `.ipa`
+(`olcrtc-ios-unsigned.ipa`) attached to a [GitHub Release](../../releases). It is unsigned on
+purpose — sideloading tools re-sign it with *your own* Apple ID, so you still need a computer
+(macOS **or** Windows) to run one of those tools once. This is not a one-tap install.
+
+1. Download `olcrtc-ios-unsigned.ipa` from the latest [release](../../releases).
+2. On a Mac or Windows PC install a sideloading tool — [AltStore](https://altstore.io)
+   (installs over Wi-Fi via AltServer) or [Sideloadly](https://sideloadly.io) (installs over a
+   USB cable).
+3. Connect the iPhone, open the tool, sign in with **your** Apple ID, and drop in the `.ipa`.
+4. On the iPhone: **Settings ▸ General ▸ VPN & Device Management** → trust your developer
+   certificate, then launch the app.
+
+With a free Apple ID the signature lasts **7 days** (re-run the tool to refresh it) and you can
+keep at most three sideloaded apps; a paid Apple Developer account extends this to a year. The
+app needs no paid-only entitlements, so a free Apple ID is enough.
+
+### Build the .ipa yourself
+
+Needs the **full Xcode** (same iOS SDK requirement as the framework build) and an existing
+`App/Mobile.xcframework`.
+
+```bash
+# Build the app for a device without signing, then wrap it into an .ipa.
+xcodebuild -project olcrtc-ios.xcodeproj -scheme olcrtc-ios -configuration Release \
+  -sdk iphoneos -derivedDataPath build \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+
+cd build/Build/Products/Release-iphoneos
+rm -rf Payload && mkdir Payload && cp -R olcrtc-ios.app Payload/
+zip -qr ../../../../olcrtc-ios-unsigned.ipa Payload
+cd -
+```
+
+Attach the result to a release with `gh release upload <tag> olcrtc-ios-unsigned.ipa`.
+
+---
+
 ## Project structure
 
 ```
