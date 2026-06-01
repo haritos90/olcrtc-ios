@@ -1,0 +1,121 @@
+name: Bug report
+description: A scenario in the iOS app that doesn't work — crash, failed install, tunnel that won't connect or drops, wrong UI behaviour.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report.
+
+        **Before filing:**
+        - Search existing issues (open and closed) for a duplicate.
+        - Make sure you're on the latest build.
+        - This tracker is for the **iOS app** (UI, VPS install flow, tunnel client). Bugs in the
+          olcrtc **core/protocol/server** belong upstream — see the links when you open a new issue.
+        - **Redact secrets:** never paste your encryption key or a full `olcrtc://` URI (it contains
+          the key and grants full access). Redact room IDs too if you'd rather keep them private.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Pre-flight checklist
+      options:
+        - label: I searched existing issues and found no duplicate.
+          required: true
+        - label: I'm on the latest build of the app.
+          required: true
+        - label: This is an iOS-app bug, not a core/protocol/server bug.
+          required: true
+
+  - type: input
+    id: app_version
+    attributes:
+      label: App version
+      description: From Settings → Info (e.g. "1.2.207").
+      placeholder: "1.2.207"
+    validations:
+      required: true
+
+  - type: input
+    id: ios_version
+    attributes:
+      label: iOS version + device
+      placeholder: "iOS 18.4 — iPhone 14 Pro"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: How was the connection added?
+      options:
+        - VPS install from the app (SSH)
+        - Imported an olcrtc:// URI
+        - Scanned a QR code
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: carrier
+    attributes:
+      label: Carrier
+      options:
+        - jitsi
+        - telemost
+        - wbstream
+        - other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - datachannel
+        - vp8channel
+        - seichannel
+        - videochannel
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+      placeholder: |
+        After ~10 minutes the tunnel drops and reconnect doesn't recover; only re-installing the server helps.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add a VPS and install (jitsi / vp8channel)
+        2. Connect, enable the global proxy
+        3. Lock the phone for ~15 minutes
+        4. Open a page through the proxy — times out
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: From the app's Logs tab (Share → copy). Include the connection/install category around the failure. Redact the key and any full olcrtc:// URI.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Client network (carrier, country/city), VPS host/provider, anything non-default (DNS, SOCKS auth, SEI/VP8 tuning).
+    validations:
+      required: false

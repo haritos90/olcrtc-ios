@@ -1,0 +1,54 @@
+# #253: Publish a prebuilt Mobile.xcframework so cloners can download it
+# (./scripts/fetch-framework.sh) instead of building from source. Runs when a
+# version tag (v*) is pushed, or manually against an existing tag.
+name: Release framework
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build the framework for and attach it to"
+        required: true
+
+permissions:
+  contents: write # create/update the GitHub Release and upload the asset
+
+jobs:
+  framework:
+    name: Build & attach Mobile.xcframework
+    runs-on: macos-15
+    steps:
+      - name: Checkout (with olcrtc-upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Set up Go (version from the submodule's go.mod)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: olcrtc-upstream/go.mod
+          cache-dependency-path: olcrtc-upstream/go.sum
+
+      - name: Build Mobile.xcframework
+        run: bash scripts/build-framework.sh
+
+      # Archive root is Mobile.xcframework/ so fetch-framework.sh unzips straight
+      # into App/. -y preserves any symlinks in the bundle.
+      - name: Zip Mobile.xcframework
+        run: |
+          cd App
+          zip -r -y ../Mobile.xcframework.zip Mobile.xcframework
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "Prebuilt \`Mobile.xcframework\` for $TAG (device + simulator slices). Download with \`./scripts/fetch-framework.sh $TAG\` — see README -> Mobile.xcframework." \
+            Mobile.xcframework.zip \
+          || gh release upload "$TAG" Mobile.xcframework.zip --clobber

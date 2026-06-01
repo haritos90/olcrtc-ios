@@ -1,0 +1,4 @@
+[submodule "olcrtc"]
+	path = olcrtc-upstream
+	url = https://github.com/openlibrecommunity/olcrtc.git
+	branch = master
