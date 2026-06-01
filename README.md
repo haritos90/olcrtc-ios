@@ -43,12 +43,12 @@ Add PNGs under docs/screenshots/ and uncomment this table:
 
 ## Requirements
 
-| Tool | Version | Notes |
-|------|---------|-------|
-| Xcode | 15+ | iOS 17 deployment target |
-| [XcodeGen](https://github.com/yonaskolb/XcodeGen) | any | `brew install xcodegen` |
-| [gh CLI](https://cli.github.com) | optional | to download a prebuilt `Mobile.xcframework` |
-| Go + gomobile | optional | only to build `Mobile.xcframework` from source |
+| Tool | Version | Install | Needed for |
+|------|---------|---------|------------|
+| **Xcode** — the full app, not just the Command Line Tools | 15+ | Mac App Store | building the app (iOS 17 target) — and the framework, since gomobile needs the iOS SDK |
+| [XcodeGen](https://github.com/yonaskolb/XcodeGen) | any | `brew install xcodegen` | generating `olcrtc-ios.xcodeproj` |
+| [gh CLI](https://cli.github.com) | any | `brew install gh` | downloading a prebuilt `Mobile.xcframework` |
+| Go | per `olcrtc-upstream/go.mod` | `brew install go` | only if you build `Mobile.xcframework` yourself |
 
 `Mobile.xcframework` — the gomobile-built olcrtc core (~228 MB) — is **not tracked in git**. Download a prebuilt copy or build it from source; see [Mobile.xcframework](#mobilexcframework).
 
@@ -57,19 +57,31 @@ Add PNGs under docs/screenshots/ and uncomment this table:
 ## Quick start
 
 ```bash
+# 1. Prerequisites (Homebrew + full Xcode from the App Store assumed).
+#    `xcode-select -p` should print /Applications/Xcode.app/... — if it prints
+#    CommandLineTools, run:
+#    sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+brew install xcodegen gh                   # add `go` too if you'll build the framework yourself
+
+# 2. Clone the app and the olcrtc core submodule.
 git clone https://github.com/haritos90/olcrtc-ios.git
 cd olcrtc-ios
-git submodule update --init --recursive   # pulls olcrtc core into olcrtc-upstream/
+git submodule update --init --recursive    # pulls olcrtc core into olcrtc-upstream/
 
-# Get App/Mobile.xcframework (not in git) — download the prebuilt, or build it:
-./scripts/fetch-framework.sh              # fast path (needs the gh CLI)
-# ./scripts/build-framework.sh            # fallback (~5 min, needs Go + gomobile)
+# 3. Get App/Mobile.xcframework (not in git). Download the prebuilt…
+gh auth login                              # one-time GitHub login (needed for the download)
+./scripts/fetch-framework.sh               # grabs the latest release's framework
+#    …or build it from source — see "Mobile.xcframework" below:
+# ./scripts/build-framework.sh
 
-xcodegen generate --spec project.yml      # generates olcrtc-ios.xcodeproj
+# 4. Generate the Xcode project and open it.
+xcodegen generate --spec project.yml
 open olcrtc-ios.xcodeproj
 ```
 
 Set your development team in Xcode (or in `project.yml` → `DEVELOPMENT_TEAM`), then build and run.
+
+> Seeing `release not found` from `fetch-framework.sh`? There's no published [release](../../releases) to download yet — or the one for a just-pushed tag is still building and appears a minute or two later. [Build from source](#build-from-source) in the meantime.
 
 ---
 
@@ -81,28 +93,51 @@ The olcrtc core ships inside the app as `App/Mobile.xcframework`, compiled from
 
 ### Download a prebuilt (recommended)
 
-Every tagged release has the framework attached as `Mobile.xcframework.zip`, built by
-[`.github/workflows/release.yml`](.github/workflows/release.yml). Fetch and unpack it:
+Each [GitHub Release](../../releases) has the framework attached as `Mobile.xcframework.zip`,
+built automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml) when a
+`v*` tag is pushed. Once a release exists:
 
 ```bash
+gh auth login                           # one-time, if you haven't logged in yet
 ./scripts/fetch-framework.sh            # latest release
-./scripts/fetch-framework.sh v1.2.210   # a specific tag
+./scripts/fetch-framework.sh v1.2.211   # a specific tag
 ```
 
-Needs the [`gh` CLI](https://cli.github.com) (`brew install gh`, then `gh auth login`).
+`release not found` means there is no published release yet — or a tag's release is still
+building (it appears a minute or two after the tag is pushed). Wait for it, or build from source.
 
 ### Build from source
 
+This compiles an iOS framework, so you need the **full Xcode** (not just the Command Line
+Tools — gomobile needs the iOS SDK), plus Go.
+
 ```bash
-brew install go                         # the version pinned in olcrtc-upstream/go.mod
-./scripts/build-framework.sh            # installs gomobile if needed, then binds
+# 1. Point the toolchain at full Xcode and accept its licence (once per machine).
+#    Skip if `xcode-select -p` already prints /Applications/Xcode.app/...
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
+
+# 2. Install Go (the version pinned in olcrtc-upstream/go.mod).
+brew install go
+
+# 3. Build — the script installs gomobile if needed, then binds the framework.
+./scripts/build-framework.sh
 ```
 
-Takes ~5 minutes (mostly Go module fetches on first run); `-target=ios` produces both
+Under the hood, step 3 just runs this from the `olcrtc-upstream/` submodule:
+
+```bash
+gomobile bind -target=ios -o ../App/Mobile.xcframework ./mobile
+```
+
+It takes ~5 minutes on the first run (mostly Go module downloads); `-target=ios` produces both
 the device and simulator slices.
 
-Either way, run `xcodegen generate --spec project.yml` afterwards so Xcode picks up the
-framework — `xcodegen` doesn't watch the filesystem.
+> **`gomobile: -target="ios" requires Xcode`** means you're still on the Command Line Tools.
+> Run the `xcode-select` line from step 1, then retry.
+
+Either way — download or build — run `xcodegen generate --spec project.yml` afterwards so Xcode
+picks up the framework (`xcodegen` doesn't watch the filesystem).
 
 ---
 
@@ -258,14 +293,15 @@ See [How srv.sh works](#how-srvsh-works) for the full patching workflow.
 
 **Symptom:** Xcode cannot find `App/Mobile.xcframework`, or you see a "framework not found Mobile" linker error.
 
-The framework is not in git. Download or build it:
+The framework is not in git — download or build it:
 
 ```bash
-./scripts/fetch-framework.sh     # download the prebuilt (needs gh), or
-./scripts/build-framework.sh     # build from source (needs Go + gomobile)
+./scripts/fetch-framework.sh     # download a prebuilt (needs `gh auth login` + a published release), or
+./scripts/build-framework.sh     # build from source (needs full Xcode + Go)
 ```
 
-See [Mobile.xcframework](#mobilexcframework) for details.
+See [Mobile.xcframework](#mobilexcframework) for the full prerequisites — including the
+full-Xcode requirement and the `gomobile … requires Xcode` fix.
 
 ---
 
