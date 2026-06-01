@@ -29,15 +29,13 @@ The app manages the full lifecycle end to end:
 
 ## Screenshots
 
-> _Screenshots coming soon._
 
-<!--
-Add PNGs under docs/screenshots/ and uncomment this table:
 
-| Connections | Install a VPS | Logs | Settings |
-|---|---|---|---|
-| ![Connections](docs/screenshots/connections.png) | ![Install](docs/screenshots/install.png) | ![Logs](docs/screenshots/logs.png) | ![Settings](docs/screenshots/settings.png) |
--->
+
+| Connections | VPS Management | Logs | Settings | Settings | 
+|---|---|---|---|---|
+| ![Connections](docs/screenshots/1connections.png) | ![VPS](docs/screenshots/2managevps.png) | ![Logs](docs/screenshots/3logs.png) | ![Settings](docs/screenshots/4settings1.png) | ![More settings](docs/screenshots/5settings2.png) |
+
 
 ---
 
