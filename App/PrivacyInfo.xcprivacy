@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  #249: App Store privacy manifest. The app collects and transmits no personal
+  data and performs no tracking, so NSPrivacyTracking is false and both
+  NSPrivacyTrackingDomains and NSPrivacyCollectedDataTypes are empty.
+
+  Required-reason API audit of the App/ target: the only category used is User
+  Defaults (ConnectionStore / ServerHostStore / SettingsStore read and write
+  app-private preferences) -> reason CA92.1. No file-timestamp (only fileExists),
+  system-boot-time, disk-space, or active-keyboard APIs are used. Bundled
+  dependencies (Citadel / SwiftNIO) ship their own privacy manifests.
+
+  Keep this in sync with the privacy-policy document (#257).
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

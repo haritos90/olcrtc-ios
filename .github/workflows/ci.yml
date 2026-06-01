@@ -1,0 +1,72 @@
+# #250: CI — build + test the iOS app and verify srv.sh<->upstream parity on
+# every push/PR. The gomobile core (App/Mobile.xcframework, ~228 MB) is gitignored,
+# so CI rebuilds it from the olcrtc-upstream submodule and caches it by the pinned
+# upstream commit (the build is ~5 min; a cache hit skips Go entirely).
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build, test & parity
+    runs-on: macos-15
+    steps:
+      - name: Checkout (with olcrtc-upstream submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Fast-fail before the expensive Go/Xcode work: scripts/srv.sh must stay in
+      # sync with olcrtc-upstream/script/srv.sh (only boc/eoc-marked patches differ).
+      - name: Parity check (srv.sh vs upstream)
+        run: python3 scripts/parity_check.py
+
+      # The framework is a pure function of the upstream commit, so reuse it across
+      # runs until the submodule pin moves.
+      - name: Resolve pinned upstream commit (cache key)
+        id: upstream
+        run: echo "sha=$(git -C olcrtc-upstream rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Mobile.xcframework
+        id: fwcache
+        uses: actions/cache@v4
+        with:
+          path: App/Mobile.xcframework
+          key: mobile-xcframework-${{ runner.os }}-${{ steps.upstream.outputs.sha }}
+
+      - name: Set up Go (version from the submodule's go.mod)
+        if: steps.fwcache.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: olcrtc-upstream/go.mod
+          cache-dependency-path: olcrtc-upstream/go.sum
+
+      # Shared with humans + the release workflow. -target=ios emits both device
+      # and simulator slices; the simulator slice is what the tests link against.
+      - name: Build Mobile.xcframework
+        if: steps.fwcache.outputs.cache-hit != 'true'
+        run: bash scripts/build-framework.sh
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate olcrtc-ios.xcodeproj
+        run: xcodegen generate --spec project.yml
+
+      - name: Build & run tests (iPhone 16 simulator)
+        run: |
+          xcodebuild test \
+            -project olcrtc-ios.xcodeproj \
+            -scheme olcrtc-ios-tests \
+            -destination 'platform=iOS Simulator,name=iPhone 16'

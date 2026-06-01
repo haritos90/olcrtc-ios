@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest a new capability or an improvement to the iOS app.
+title: "[feat]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea.
+
+        **Before filing:**
+        - Search existing issues (open and closed) for a similar request.
+        - This is for the **iOS app**. Core/protocol/server features belong upstream
+          (see the links when you open a new issue).
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Pre-flight checklist
+      options:
+        - label: I searched existing issues and found no duplicate.
+          required: true
+        - label: This is an iOS-app feature, not a core/protocol/server feature.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What can't you do today, or what's awkward? Describe the situation, not just the solution.
+      placeholder: |
+        When a carrier degrades I have to fully re-install the server to switch — there's no quick way to change carrier.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What should the app do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, or how you work around it today.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Mockups, links, related issues — anything that helps.
+    validations:
+      required: false

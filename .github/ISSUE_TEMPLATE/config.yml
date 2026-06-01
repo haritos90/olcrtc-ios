@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: olcrtc core / protocol / server bug
+    url: https://github.com/openlibrecommunity/olcrtc/issues
+    about: Bugs in the tunnel core, protocol, or server live upstream — not in this iOS-app repo.
+  - name: Protocol & config docs
+    url: https://github.com/openlibrecommunity/olcrtc/tree/main/docs
+    about: Upstream docs for the protocol, server config, and URI format. Check here before opening an issue.
