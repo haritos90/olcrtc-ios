@@ -1,6 +1,6 @@
 <img src="docs/icon.png" width="120" align="left" alt="olcrtc-ios app icon"/>
 
-# olcrtc-ios
+### olcrtc-ios
 
 iOS client for [olcrtc](https://github.com/openlibrecommunity/olcrtc) — a WebRTC-based proxy that tunnels SOCKS5 traffic through video-conferencing carriers (Telemost, WBStream, Jitsi).
 
