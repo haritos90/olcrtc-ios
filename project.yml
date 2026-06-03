@@ -36,12 +36,15 @@ targets:
         UIBackgroundModes:
           - audio
         UILaunchScreen: {}
+        # #258: the redesign palette is authored for dark — force a dark appearance
+        # app-wide (covers SwiftUI + UIKit alerts / action sheets / share sheets).
+        UIUserInterfaceStyle: Dark
         # #241: home-screen name shows the brand "OlcRTC" (upstream's display
         # spelling) instead of the repo slug "olcrtc-ios". Technical IDs (scheme,
         # bundle id, container, OLCRTC_* env) stay lowercase olcrtc.
         CFBundleDisplayName: OlcRTC
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "211"
+        CFBundleVersion: "221"
         CFBundleURLTypes:
           - CFBundleURLName: olcrtc
             CFBundleURLSchemes:

@@ -72,78 +72,56 @@ struct AddConnectionView: View {
                              ? L10n.newConnectionTitle.localized()
                              : L10n.editConnectionTitle.localized())
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.cancel.localized()) { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.save.localized()) { save() }
-                        .disabled(!isValid)
-                }
-            }
+            // #262: shared sheet chrome (✕ close + full-width primary footer).
+            .olcSheet(confirm: L10n.save.localized(), disabled: !isValid) { save() }
         }
         .onAppear { prefill() }
         .sheet(isPresented: $showQRScan) {
             QRScannerSheet { scanned in
                 uriText = scanned
+                parseURI()
             }
         }
     }
 
     // MARK: URI paste
 
+    // #258: Scan-QR / Paste-URI shortcuts. Both feed `parseURI()`, which fills the
+    // manual fields below (was an inline TextEditor paste box).
     private var uriSection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 6) {
-                ZStack(alignment: .topLeading) {
-                    // Greyed-out placeholder shown while the editor is empty.
-                    if uriText.isEmpty {
-                        Text(L10n.uriPlaceholder.localized())
-                            .font(.system(.footnote, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 8)
-                            .allowsHitTesting(false)
-                    }
-                    TextEditor(text: $uriText)
-                        .font(.system(.footnote, design: .monospaced))
-                        .frame(minHeight: 80)
-                        .scrollContentBackground(.hidden)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .onChange(of: uriText) { _, newValue in
-                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !trimmed.isEmpty,
-                                  let cfg = try? OlcrtcURI.parse(trimmed) else { return }
-                            carrier      = cfg.carrier
-                            transport    = cfg.transport
-                            roomID       = cfg.roomID
-                            key          = cfg.key
-                            clientID     = cfg.clientID
-                            vp8FPS       = cfg.vp8FPS
-                            vp8BatchSize = cfg.vp8BatchSize
-                            if name.isEmpty {
-                                name = cfg.mimo.isEmpty ? "\(cfg.carrier) · \(cfg.transport)" : cfg.mimo
-                            }
-                            parseError = ""
-                            uriText    = ""
-                        }
+            HStack(spacing: 8) {
+                OlcButton(L10n.scanQRAction.localized(), systemImage: "qrcode.viewfinder",
+                          role: .secondary, fillWidth: true) {
+                    showQRScan = true
+                }
+                OlcButton(L10n.pasteURIAction.localized(), systemImage: "doc.on.clipboard",
+                          role: .secondary, fillWidth: true) {
+                    uriText = UIPasteboard.general.string ?? ""
+                    parseURI()
+                }
+            }
+            .padding(.vertical, 4)
+
+            // #265: manual entry — type or paste-and-edit a URI here; auto-parses
+            // into the fields below (the redesign had left only Scan/Paste).
+            TextField("olcrtc://…", text: $uriText, axis: .vertical)
+                .font(.system(.footnote, design: .monospaced))
+                .lineLimit(1...3)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .onChange(of: uriText) { _, newValue in
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty, let cfg = try? OlcrtcURI.parse(trimmed) else { return }
+                    carrier = cfg.carrier; transport = cfg.transport; roomID = cfg.roomID
+                    key = cfg.key; clientID = cfg.clientID
+                    vp8FPS = cfg.vp8FPS; vp8BatchSize = cfg.vp8BatchSize
+                    if name.isEmpty { name = cfg.mimo.isEmpty ? "\(cfg.carrier) · \(cfg.transport)" : cfg.mimo }
+                    parseError = ""
                 }
 
-                if !parseError.isEmpty {
-                    Text(parseError).font(.caption).foregroundStyle(.red)
-                }
-
-                HStack {
-                    Button(L10n.parseURIAction.localized()) { parseURI() }
-                        .disabled(uriText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Spacer()
-                    Button {
-                        showQRScan = true
-                    } label: {
-                        Label(L10n.actionQR.localized(), systemImage: "qrcode.viewfinder")
-                    }
-                }
+            if !parseError.isEmpty {
+                Text(parseError).font(.caption).foregroundStyle(.red)
             }
         } header: {
             Text(L10n.importByURI.localized())
@@ -161,21 +139,19 @@ struct AddConnectionView: View {
 
             groupField
 
-            Picker(L10n.sectionCarrier.localized(), selection: $carrier) {
-                ForEach(CarrierTransportMatrix.carriers, id: \.self) { Text($0).tag($0) }
+            // #258: carrier / transport via OlcChipPicker (was Picker). The
+            // per-transport compatibility symbols live in the Manage VPS matrix.
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.sectionCarrier.localized())
+                    .font(.caption).foregroundStyle(.secondary)
+                OlcChipPicker(selection: $carrier,
+                              options: CarrierTransportMatrix.carriers.map { ($0, $0) })
             }
-
-            Picker(L10n.labelTransport.localized(), selection: $transport) {
-                ForEach(["datachannel", "vp8channel", "seichannel", "videochannel"], id: \.self) { t in
-                    let cp = CarrierTransportMatrix.compat(carrier: carrier, transport: t)
-                    HStack(spacing: 4) {
-                        Text(t)
-                        Text(cp.symbol)
-                            .foregroundStyle(cp.color)
-                            .font(.caption)
-                    }
-                    .tag(t)
-                }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.labelTransport.localized())
+                    .font(.caption).foregroundStyle(.secondary)
+                OlcChipPicker(selection: $transport,
+                              options: CarrierTransportMatrix.transports.map { ($0, $0) })
             }
 
             FormField(label: "Room ID",   placeholder: L10n.roomIDLabel.localized(),  text: $roomID)

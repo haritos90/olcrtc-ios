@@ -5,6 +5,9 @@ import SwiftUI
 // Sheet shown before "Install" runs SSH. The user picks carrier,
 // transport and a room ID. Compatibility reference is
 // in the Servers tab (always visible), not here.
+//
+// #258: carrier / transport use OlcChipPicker; the confirm action is a single
+// full-width OlcButton(.primary) footer, with one close (✕) control.
 
 struct InstallOptionsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -38,32 +41,9 @@ struct InstallOptionsView: View {
             }
             .navigationTitle(L10n.installTitle.localized())
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.cancel.localized()) { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.actionInstall.localized()) {
-                        // Telemost shows room IDs with spaces ("3528 5410 1234")
-                        // for readability; the API form has no spaces. Strip them
-                        // here so users can paste either form verbatim.
-                        let cleanedRoom = roomID
-                            .components(separatedBy: .whitespacesAndNewlines)
-                            .joined()
-                        onConfirm(InstallOptions(
-                            carrier:   carrier,
-                            transport: transport,
-                            roomID:    requiresRoomID ? cleanedRoom : "",
-                            seiFPS:    seiFPS,
-                            seiBatch:  seiBatch,
-                            seiFrag:   seiFrag,
-                            seiACK:    seiACK
-                        ))
-                        dismiss()
-                    }
-                    .disabled(!canSubmit)
-                }
-            }
+            // #262: shared sheet chrome (✕ close + full-width primary footer).
+            .olcSheet(confirm: L10n.actionInstall.localized(), icon: "arrow.down.app",
+                      disabled: !canSubmit) { submit() }
         }
     }
 
@@ -71,28 +51,23 @@ struct InstallOptionsView: View {
 
     private var carrierSection: some View {
         Section(L10n.sectionCarrier.localized()) {
-            Picker(L10n.sectionCarrier.localized(), selection: $carrier) {
-                ForEach(CarrierTransportMatrix.carriers, id: \.self) { Text($0).tag($0) }
-            }
-            .pickerStyle(.menu)
-            .onChange(of: carrier) { _, c in
-                transport = CarrierTransportMatrix.defaultTransport(for: c)
-            }
+            OlcChipPicker(selection: $carrier,
+                          options: CarrierTransportMatrix.carriers.map { ($0, $0) })
+                .onChange(of: carrier) { _, c in
+                    transport = CarrierTransportMatrix.defaultTransport(for: c)
+                }
         }
     }
 
     private var transportSection: some View {
         Section {
-            Picker(L10n.labelTransport.localized(), selection: $transport) {
-                ForEach(CarrierTransportMatrix.transports, id: \.self) { t in
-                    Text(t).tag(t)
+            OlcChipPicker(selection: $transport,
+                          options: CarrierTransportMatrix.transports.map { ($0, $0) })
+                .onChange(of: transport) { _, newTransport in
+                    if newTransport != "seichannel" {
+                        seiFPS = 30; seiBatch = 10; seiFrag = 1200; seiACK = 1
+                    }
                 }
-            }
-            .onChange(of: transport) { _, newTransport in
-                if newTransport != "seichannel" {
-                    seiFPS = 30; seiBatch = 10; seiFrag = 1200; seiACK = 1
-                }
-            }
         } header: {
             Text(L10n.transportSectionHeader.localized())
         } footer: {
@@ -145,6 +120,26 @@ struct InstallOptionsView: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
+    }
+
+    // MARK: Logic
+
+    private func submit() {
+        // Telemost shows room IDs with spaces ("3528 5410 1234") for readability;
+        // the API form has no spaces. Strip them so users can paste either form.
+        let cleanedRoom = roomID
+            .components(separatedBy: .whitespacesAndNewlines)
+            .joined()
+        onConfirm(InstallOptions(
+            carrier:   carrier,
+            transport: transport,
+            roomID:    requiresRoomID ? cleanedRoom : "",
+            seiFPS:    seiFPS,
+            seiBatch:  seiBatch,
+            seiFrag:   seiFrag,
+            seiACK:    seiACK
+        ))
+        dismiss()
     }
 
     // MARK: Footer helpers

@@ -42,11 +42,14 @@ struct ContainerLogsView: View {
                     .frame(maxWidth: .infinity, minHeight: 200)
                     .padding(.top, 80)
                 } else {
-                    Text(payload.output)
-                        .font(.system(.caption2, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
+                    // #258: monospaced log dump wrapped in a design-system card.
+                    OlcCard {
+                        Text(payload.output)
+                            .font(.system(.caption2, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(16)
                 }
             }
             .navigationTitle(payload.containerName)

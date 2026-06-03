@@ -176,6 +176,10 @@ final class SettingsStore: ObservableObject {
     @Published var language: String {
         didSet { Self.persist(language, forKey: Keys.language) }
     }
+    /// #267: design direction. false = Refined (default), true = Console.
+    @Published var designConsole: Bool {
+        didSet { Self.persist(designConsole, forKey: Keys.designConsole) }
+    }
     @Published var keepAliveSeconds: Int {
         didSet {
             let v = keepAliveSeconds.clamped(to: Defaults.keepAliveRange)
@@ -211,6 +215,7 @@ final class SettingsStore: ObservableObject {
         localSocksAuthEnabled    = (d.object(forKey: Keys.localSocksAuthEnabled)    as? Bool)   ?? false
         localSocksUser           = (d.string(forKey: Keys.localSocksUser))                      ?? ""
         language                 = (d.string(forKey: Keys.language))                            ?? Self.defaultLanguage()
+        designConsole            = (d.object(forKey: Keys.designConsole) as? Bool)              ?? false
         keepAliveSeconds    = (d.object(forKey: Keys.keepAlive)           as? Int)  .map { $0.clamped(to: Defaults.keepAliveRange) }         ?? Defaults.keepAliveSeconds
         vpsAutoPingEnabled  = (d.object(forKey: Keys.vpsAutoPingEnabled)  as? Bool)                                                          ?? Defaults.vpsAutoPingEnabled
         vpsAutoPingInterval = (d.object(forKey: Keys.vpsAutoPingInterval) as? Int)  .map { $0.clamped(to: Defaults.vpsAutoPingRange) }       ?? Defaults.vpsAutoPingInterval
@@ -280,6 +285,7 @@ final class SettingsStore: ObservableObject {
         static let localSocksAuthEnabled     = "settings.localSocksAuthEnabled"
         static let localSocksUser            = "settings.localSocksUser"
         static let language                  = "settings.language"
+        static let designConsole             = "settings.designConsole"
         static let keepAlive                 = "settings.keepAliveSeconds"
         static let vpsAutoPingEnabled        = "settings.vpsAutoPingEnabled"
         static let vpsAutoPingInterval       = "settings.vpsAutoPingInterval"

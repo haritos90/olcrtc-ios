@@ -5,30 +5,20 @@ import SwiftUI
 // Third tab. Manages SSH credentials for VPS hosts where we can install /
 // uninstall olcrtc, plus triggers those operations from the device.
 //
-// State machine (VPSReadinessState):
-//   unknown          → gray ?  — never probed (readiness[id] == nil)
-//   noPodman         → gray ●  — full install ~5-7 min
-//   noImage          → yellow ● — image pull ~3-5 min
-//   imageReady       → green ● — fast reinstall ~1-2 min
-//   containerStopped → green ■ — running but stopped
-//   containerRunning → green ▶ — active
+// #258: SINGLE-SOURCE display model (replaces the old dual-source
+// `statusIconInfo`, which read `provisioner.status` + per-host `readiness`
+// together and wrote optimistic base states mid-flight — the cause of the
+// "status jumps"). A host now shows exactly ONE of:
+//   • .base(HostBase)            — what the server IS; set ONLY by a confirmed probe
+//   • .running(op, phase, note)  — what we're DOING; steady amber, phases advance
+//                                  forward only, never touches base state
+//   • .failed(op, phase, msg)    — an op threw; shown over the last base, with Retry
+// The dot stays amber for the whole operation and changes colour exactly once,
+// at the terminal probe result (`.animation(.easeInOut, value: display)`).
 //
-// Transitions:
-//   Status check         → any state (probed via SSH)
-//   Install              → containerRunning
-//   Uninstall            → imageReady (image stays cached)
-//   Start                → containerRunning (re-probed after)
-//   Stop                 → containerStopped (re-probed after)
-//   Reconfigure          → re-probed (container restarted, may be stopped or running)
-//   deepUninstall        → noPodman or noImage
-//
-// Operations NEVER transition to unknown. The last known state is preserved
-// while an operation is in-flight (yellow ● in-progress overlay via activeHostID).
-// Unknown (gray ?) only shows if we literally have no data at all.
-//
-// IMPORTANT: The context menu MUST mirror the card buttons.
-// Every action on the card must also appear in the menu, and vice versa.
-// When adding a new action, add it to BOTH hostCard and hostMenu.
+// Status / phase strings here are hardcoded English to match this file's existing
+// convention (the old statusIconInfo did the same); menu/action labels reuse the
+// existing L10n cases. Promoting these to L10n is a separate cleanup.
 
 struct ServersView: View {
     @ObservedObject var serverStore: ServerHostStore
@@ -42,10 +32,11 @@ struct ServersView: View {
     @State private var installFor     : ServerHost?
     @State private var reconfigureFor : ServerHost?
     @State private var logsPayload    : ContainerLogsPayload?
-    @State private var readiness      : [UUID: VPSReadinessState] = [:]
+    // #258 was: readiness[id] + activeHostID (two competing display sources).
+    // Now a single per-host display state; base is only ever set from a probe.
+    @State private var display        : [UUID: HostDisplay] = [:]
     @State private var vpsStats       : [UUID: SSHRunner.VPSStats] = [:]
-    @State private var pingLatencies  : [UUID: Double?] = [:]   // ms or nil=not yet pinged
-    @State private var activeHostID   : UUID?                   // which host is being operated on
+    @State private var pingLatencies  : [UUID: Double?] = [:]   // ms, nil=unreachable, absent=not pinged
     @State private var scanFor        : ServerHost?
     @State private var foundContainers: [SSHRunner.FoundContainer] = []
     @State private var alertText           : String?
@@ -79,6 +70,12 @@ struct ServersView: View {
             }
             .onAppear { startAutoPingIfNeeded() }
             .onDisappear { pingTimer?.invalidate(); pingTimer = nil }
+            // #258: route the provisioner's progress stream into the running host's
+            // phase/subtitle ONLY — never the base state or the dot colour.
+            .onChange(of: provisioner.status) { _, status in
+                guard case .running(let msg) = status else { return }
+                advancePhase(note: msg)
+            }
             .sheet(isPresented: $showAdd) {
                 AddServerHostView { host, pw in
                     serverStore.add(host, password: pw)
@@ -194,8 +191,11 @@ struct ServersView: View {
     // MARK: Compatibility matrix
 
     private var matrixSection: some View {
-        Section(L10n.carrierTransportMatrix.localized()) {
-            MatrixView()
+        Section {
+            OlcCard { MatrixView() }
+                .olcCardRow()
+        } header: {
+            Text(L10n.carrierTransportMatrix.localized())
         }
     }
 
@@ -203,83 +203,96 @@ struct ServersView: View {
 
     private var emptyState: some View {
         Section {
-            VStack(spacing: 8) {
-                Image(systemName: "externaldrive.connected.to.line.below")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.secondary)
-                Text(L10n.emptyNoServers.localized()).font(.headline)
-                Text(L10n.emptyNoServersHint.localized())
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+            // #258: shared OlcEmptyState with a primary CTA (was a bare VStack).
+            OlcEmptyState(systemImage: "externaldrive.connected.to.line.below",
+                          title: L10n.emptyNoServers.localized(),
+                          hint: L10n.emptyNoServersHint.localized(),
+                          ctaTitle: L10n.newServerTitle.localized()) {
+                showAdd = true
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 24)
+            .olcCardRow()
         }
     }
 
-    // MARK: Server state helpers (single source of truth)
+    // MARK: Display-state helpers (single source of truth)
 
-    /// Resolved state: probed readiness if available, else inferred from persisted data.
-    private func serverState(_ host: ServerHost) -> VPSReadinessState {
-        if let r = readiness[host.id] { return r }
-        // Fallback: conservative — show stopped if container name known, image-ready otherwise.
-        // Never assume running without a live SSH probe.
-        return host.lastContainerName != nil ? .containerStopped("tap to check") : .imageReady
+    /// The host's current display state. Before any probe, seed a conservative
+    /// base from persisted data: a known container → `.stopped` (so Start/Stop and
+    /// the metrics surface, and we never offer a reinstall by mistake); otherwise
+    /// `.unknown` ("tap Check"). Never asserts a running container without a probe.
+    private func displayState(_ host: ServerHost) -> HostDisplay {
+        display[host.id] ?? .base(.seed(lastContainerName: host.lastContainerName))
     }
 
-    private func hasContainer(_ host: ServerHost) -> Bool {
-        switch serverState(host) {
-        case .containerRunning, .containerStopped: return true
-        default: return false
+    /// The base under whatever is currently shown (running/failed keep the base
+    /// they started from). Drives the menu / button shape.
+    private func currentBase(_ host: ServerHost) -> HostBase { displayState(host).base }
+
+    private func hasContainer(_ host: ServerHost) -> Bool { currentBase(host).hasContainer }
+    private func isRunning(_ host: ServerHost)   -> Bool { currentBase(host) == .running }
+
+    /// Any host mid-operation. Operations are serialized (one provisioner), so we
+    /// disable every card's actions while one runs — this also keeps `runningHostID`
+    /// unambiguous for phase routing.
+    private var anyBusy: Bool { display.values.contains { $0.isRunning } }
+    private var actionsDisabled: Bool { anyBusy || provisioner.status.isRunning }
+    private var runningHostID: UUID? { display.first { $0.value.isRunning }?.key }
+
+    // MARK: The ONE operation driver
+    //
+    // Sets `.running`, lets `work` do the SSH work + the confirming probe (the
+    // ONLY thing that returns a base), then makes a SINGLE terminal assignment:
+    // `.base` on success, `.failed` on throw. `work` must not write `display`.
+
+    private func run(_ op: HostOp, on host: ServerHost,
+                     _ work: @escaping (_ password: String) async throws -> HostBase?) async {
+        guard !anyBusy else { return }
+        let prev = currentBase(host)
+        display[host.id] = .start(op, from: prev)
+
+        guard let pw = password(for: host) else {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                display[host.id] = HostDisplay.start(op, from: prev)
+                    .failed(message: L10n.alertPasswordMissingShort.localized())
+            }
+            return
         }
-    }
 
-    private func isRunning(_ host: ServerHost) -> Bool {
-        if case .containerRunning = serverState(host) { return true }
-        return false
-    }
-
-    // MARK: Status icon (shape + color)
-
-    private struct StatusIcon {
-        let systemName: String
-        let color: Color
-        let title: String
-        let subtitle: String
-        var subtitleIcon: String? = nil  // optional SF symbol shown before subtitle text
-    }
-
-    private func statusIconInfo(for host: ServerHost) -> StatusIcon {
-        let hostIsActive = activeHostID == host.id
-        // Not yet probed and no active operation → show neutral "unknown" state
-        if readiness[host.id] == nil && !hostIsActive && !provisioner.status.isRunning {
-            return StatusIcon(systemName: "questionmark.circle", color: .secondary,
-                              title: "Status unknown", subtitle: "Tap to check",
-                              subtitleIcon: "antenna.radiowaves.left.and.right")
-        }
-        if hostIsActive {
-            switch provisioner.status {
-            case .running(let msg):
-                return StatusIcon(systemName: "circle.fill", color: .yellow, title: "In progress", subtitle: msg)
-            case .failure(let msg):
-                return StatusIcon(systemName: "circle.fill", color: .red, title: "Error", subtitle: msg)
-            case .success(let msg):
-                return StatusIcon(systemName: "circle.fill", color: .green, title: "Done", subtitle: msg)
-            case .idle: break
+        do {
+            let resolved = try await work(pw)
+            // One terminal change — the probe result is authoritative (no optimism);
+            // else the op's nominal target; else keep the previous base (e.g. reboot).
+            let base = HostDisplay.terminalBase(op: op, probed: resolved, previous: prev)
+            withAnimation(.easeInOut(duration: 0.35)) { display[host.id] = .base(base) }
+        } catch {
+            let current = display[host.id] ?? .start(op, from: prev)
+            withAnimation(.easeInOut(duration: 0.35)) {
+                display[host.id] = current.failed(message: error.localizedDescription)
             }
         }
-        switch serverState(host) {
-        case .containerRunning(let s):
-            return StatusIcon(systemName: "play.fill",   color: .green,     title: "Running",          subtitle: s)
-        case .containerStopped(let s):
-            return StatusIcon(systemName: "stop.fill",   color: .orange,    title: "Stopped",          subtitle: s)
-        case .imageReady:
-            return StatusIcon(systemName: "circle.fill", color: .green,     title: "Ready to install", subtitle: "Image cached — fast reinstall")
-        case .noImage:
-            return StatusIcon(systemName: "circle.fill", color: .yellow,    title: "Podman ready",     subtitle: "First install pulls image (~300 MB)")
-        case .noPodman:
-            return StatusIcon(systemName: "circle.fill", color: .secondary, title: "Ready to install", subtitle: "Full setup ~5–7 min")
+    }
+
+    /// Maps a provisioner progress message onto the running host: phase forward
+    /// (monotonic, capped) + subtitle = the live message. Never touches base/dot.
+    private func advancePhase(note: String) {
+        guard let id = runningHostID else { return }
+        display[id] = display[id]?.advanced(note: note)
+    }
+
+    /// Re-runs the failed op. Returns to the previous base first, then dispatches
+    /// (sheet-driven ops reopen their sheet so the user reconfirms options).
+    private func retry(_ op: HostOp, on host: ServerHost) async {
+        if let restored = display[host.id]?.retryBase() { display[host.id] = restored }
+        switch op {
+        case .check:         await checkServer(host)
+        case .start:         await startContainer(host)
+        case .stop:          await stop(host)
+        case .update:        await update(host)
+        case .reboot:        await reboot(host)
+        case .install:       installFor = host
+        case .reconfigure:   reconfigureFor = host
+        case .uninstall:     uninstallConfirmHost = host
+        case .deepUninstall: deepUninstallConfirmHost = host
         }
     }
 
@@ -308,288 +321,220 @@ struct ServersView: View {
     // MARK: Host card
 
     private func hostCard(_ host: ServerHost) -> some View {
-        let icon = statusIconInfo(for: host)
-        let pingMs = pingLatencies[host.id]
-
+        let state = displayState(host)
         return Section {
-            VStack(alignment: .leading, spacing: 10) {
-                // ── Header row ──
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(host.label).font(.headline)
-                        Text("\(host.username)@\(host.host):\(String(host.port))")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    hostMenu(host)
-                }
-
-                // ── Status row: icon + title + subtitle ──
-                HStack(alignment: .center, spacing: 10) {
-                    Image(systemName: icon.systemName)
-                        .foregroundStyle(icon.color)
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 20)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(icon.title).font(.subheadline).fontWeight(.medium)
-                        if !icon.subtitle.isEmpty {
-                            HStack(spacing: 3) {
-                                if let sIcon = icon.subtitleIcon {
-                                    Image(systemName: sIcon)
-                                }
-                                Text(icon.subtitle)
-                            }
-                            .font(.caption).foregroundStyle(.secondary)
+            OlcCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    // Header: label + connection + the single complete action menu
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(host.label)
+                                .font(.headline)
+                                .foregroundStyle(Theme.Palette.textPrimary)
+                            Text("\(host.username)@\(host.host):\(String(host.port))")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(Theme.Palette.textSecondary)
                         }
-                    }
-                    Spacer()
-                    if activeHostID == host.id && provisioner.status.isRunning {
-                        ProgressView().controlSize(.small)
-                    }
-                }
-
-                // ── Ping row ──
-                HStack(spacing: 16) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Group {
-                            if let ms = pingMs {
-                                if let latency = ms {
-                                    Text(String(format: "%.0f ms", latency))
-                                        .foregroundStyle(latency < 100 ? .green : latency < 300 ? .orange : .red)
-                                } else {
-                                    Text(L10n.statusUnreachable.localized()).foregroundStyle(.red)
-                                }
-                            } else {
-                                Text("—").foregroundStyle(.tertiary)
-                            }
-                        }
-                        .font(.caption).monospacedDigit()
+                        Spacer()
+                        OlcOverflowMenu(items: menuItems(host))
+                            .disabled(actionsDisabled)
                     }
 
-                    if let s = vpsStats[host.id] {
-                        if !s.disk.isEmpty {
-                            Label(s.disk, systemImage: "internaldrive")
-                        }
-                        if !s.ram.isEmpty {
-                            Label(s.ram, systemImage: "memorychip")
-                        }
-                        if !s.uptime.isEmpty {
-                            Label(s.uptime, systemImage: "clock")
-                        }
-                    }
-                }
-                .font(.caption2).foregroundStyle(.tertiary).labelStyle(.titleAndIcon)
+                    statusRegion(host, state: state)
 
-                // ── Connection link ──
-                if let connID = host.lastConnectionID,
-                   let conn = connections.connections.first(where: { $0.id == connID }) {
-                    Text(L10n.connectionLine_fmt.formatted(conn.displayName))
-                        .font(.caption2).foregroundStyle(.tertiary)
-                }
+                    // Metrics only when idle on a container-bearing base.
+                    if case .base(let b) = state, b.hasContainer {
+                        metricsRow(host)
+                    }
 
-                // ── Action buttons (icon-only) ──
-                // IMPORTANT: mirror all actions in hostMenu too.
-                HStack(spacing: 8) {
-                    // Check server: SSH status probe + TCP ping combined
-                    iconButton("antenna.radiowaves.left.and.right", tint: .blue) {
-                        Task { await checkServer(host) }
-                    }
-                    if !hasContainer(host) {
-                        iconButton("arrow.down.app", tint: .accentColor) { installFor = host }
-                        iconButton("magnifyingglass", tint: .secondary) { Task { await scanContainers(host) } }
-                    } else {
-                        // Play/Stop
-                        iconButton(isRunning(host) ? "stop.fill" : "play.fill",
-                                   tint: isRunning(host) ? .red : .green) {
-                            if isRunning(host) { Task { await stop(host) } }
-                            else               { Task { await startContainer(host) } }
-                        }
-                        // Reconfigure room/transport
-                        iconButton("slider.horizontal.3", tint: .secondary) { reconfigureFor = host }
-                    }
-                    Spacer()
-                    // Reboot (always available when SSH credentials exist)
-                    iconButton("arrow.clockwise", tint: .secondary) {
-                        rebootConfirmHost = host
-                    }
+                    actionBar(host, state: state)
                 }
-                .padding(.top, 2)
+                .animation(.easeInOut(duration: 0.35), value: state)
             }
-            .padding(.vertical, 4)
+            .olcCardRow()
+        }
+    }
+
+    // Status region — exactly one of: operation / error / base.
+    @ViewBuilder
+    private func statusRegion(_ host: ServerHost, state: HostDisplay) -> some View {
+        switch state {
+        case .running(let op, let phase, let note, _):
+            VStack(alignment: .leading, spacing: 12) {
+                OlcStatusPill(tone: .progress,
+                              title: "\(op.verb)…",
+                              subtitle: "\(note) · \(min(phase + 1, op.stepCount))/\(op.stepCount)") {
+                    ProgressView().controlSize(.small)
+                }
+                ProgressView(value: Double(min(phase + 1, op.stepCount)),
+                             total: Double(max(op.stepCount, 1)))
+                    .tint(Theme.Palette.amber)
+            }
+        case .failed(let op, let phase, let message, _):
+            OlcStatusPill(tone: .error,
+                          title: L10n.vpsOpFailed_fmt.formatted(op.verb),
+                          subtitle: "\(phase.replacingOccurrences(of: "…", with: "")) · \(message)")
+        case .base(let b):
+            OlcStatusPill(tone: b.tone, title: b.title, subtitle: b.subtitle)
+        }
+    }
+
+    private func metricsRow(_ host: ServerHost) -> some View {
+        HStack(alignment: .top, spacing: 18) {
+            pingMetric(host)
+            if let s = vpsStats[host.id] {
+                if !s.disk.isEmpty   { OlcMetric(label: "Disk",   value: s.disk) }
+                if !s.ram.isEmpty    { OlcMetric(label: "RAM",    value: s.ram) }
+                if !s.uptime.isEmpty { OlcMetric(label: "Uptime", value: s.uptime) }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func pingMetric(_ host: ServerHost) -> OlcMetric {
+        switch pingLatencies[host.id] {
+        case .some(.some(let ms)):
+            return OlcMetric(label: "Ping", value: String(format: "%.0f ms", ms),
+                             tone: ms < 100 ? Theme.Palette.green
+                                 : ms < 300 ? Theme.Palette.orange : Theme.Palette.red)
+        case .some(.none):
+            return OlcMetric(label: "Ping", value: "✕", tone: Theme.Palette.red)
+        case .none:
+            return OlcMetric(label: "Ping", value: "—", tone: Theme.Palette.textTertiary)
+        }
+    }
+
+    // Action bar — one contextual primary + a fixed Check secondary. Both are a
+    // subset of `menuItems`; nothing here is unique to the card.
+    @ViewBuilder
+    private func actionBar(_ host: ServerHost, state: HostDisplay) -> some View {
+        HStack(spacing: 8) {
+            primaryButton(host, state: state)
+            OlcButton(systemImage: "antenna.radiowaves.left.and.right", role: .secondary) {
+                Task { await checkServer(host) }
+            }
+            .disabled(actionsDisabled)
         }
     }
 
     @ViewBuilder
-    private func iconButton(_ systemName: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 15, weight: .medium))
-                .frame(width: 40, height: 34)
-        }
-        .buttonStyle(.bordered)
-        .tint(tint)
-        .controlSize(.regular)
-        .disabled(provisioner.status.isRunning)
-    }
-
-    // MARK: Context menu
-    //
-    // IMPORTANT: MUST mirror card buttons — every action on the card must
-    // also appear here, and vice versa. When adding a new action add to BOTH.
-
-    @ViewBuilder
-    private func hostMenu(_ host: ServerHost) -> some View {
-        Menu {
-            // Check server = SSH probe + TCP ping (mirrors card ✓ button)
-            Button { Task { await checkServer(host) } } label: {
-                Label("Check server", systemImage: "antenna.radiowaves.left.and.right")
+    private func primaryButton(_ host: ServerHost, state: HostDisplay) -> some View {
+        switch state {
+        case .running:
+            OlcButton(L10n.vpsWorking.localized(), role: .secondary, isBusy: true, fillWidth: true) {}
+        case .failed(let op, _, _, _):
+            OlcButton(L10n.actionRetry.localized(), systemImage: "arrow.clockwise",
+                      role: .primary, fillWidth: true) {
+                Task { await retry(op, on: host) }
             }
-
-            if !hasContainer(host) {
-                Button { installFor = host } label: {
-                    Label(L10n.actionInstall.localized(), systemImage: "arrow.down.app")
-                }
-                Button { Task { await scanContainers(host) } } label: {
-                    Label(L10n.actionScanVPS.localized(), systemImage: "magnifyingglass")
+            .disabled(actionsDisabled)
+        case .base(let b):
+            if b.hasContainer {
+                if b == .running {
+                    OlcButton(L10n.actionStop.localized(), systemImage: "stop.fill",
+                              role: .danger, fillWidth: true) {
+                        Task { await stop(host) }
+                    }
+                    .disabled(actionsDisabled)
+                } else {
+                    OlcButton(L10n.actionStart.localized(), systemImage: "play.fill",
+                              role: .primary, fillWidth: true) {
+                        Task { await startContainer(host) }
+                    }
+                    .disabled(actionsDisabled)
                 }
             } else {
-                // Start / Stop (mirrors card play/stop button)
-                if isRunning(host) {
-                    Button(role: .destructive) { Task { await stop(host) } } label: {
-                        Label(L10n.actionStop.localized(), systemImage: "stop.fill")
-                    }
-                } else {
-                    Button { Task { await startContainer(host) } } label: {
-                        Label(L10n.actionStart.localized(), systemImage: "play.fill")
-                    }
+                OlcButton(L10n.actionInstall.localized(), systemImage: "arrow.down.app",
+                          role: .primary, fillWidth: true) {
+                    installFor = host
                 }
-
-                Divider()
-
-                // Container logs via SSH (NOT the app logs tab — these come from `podman logs`)
-                Button { Task { await fetchLogs(host) } } label: {
-                    Label(L10n.actionLogs.localized(), systemImage: "doc.text.magnifyingglass")
-                }
-
-                Divider()
-
-                Button { Task { await update(host) } } label: {
-                    Label(L10n.actionUpdate.localized(), systemImage: "arrow.triangle.2.circlepath")
-                }
-                // Reconfigure room/transport (mirrors card slider button)
-                Button { reconfigureFor = host } label: {
-                    Label(L10n.actionChangeRoomTransport.localized(), systemImage: "slider.horizontal.3")
-                }
-                Button(role: .destructive) {
-                    uninstallConfirmHost = host
-                } label: {
-                    Label(L10n.actionUninstall.localized(), systemImage: "trash")
-                }
+                .disabled(actionsDisabled)
             }
-
-            // Deep uninstall when Podman is present (has something to wipe)
-            switch serverState(host) {
-            case .noPodman: EmptyView()
-            default:
-                Button(role: .destructive) {
-                    deepUninstallConfirmHost = host
-                } label: {
-                    Label(L10n.actionDeepUninstall.localized(), systemImage: "flame")
-                }
-            }
-
-            Divider()
-
-            // Reboot (mirrors card arrow.clockwise button)
-            Button(role: .destructive) { rebootConfirmHost = host } label: {
-                Label(L10n.actionReboot.localized(), systemImage: "arrow.clockwise")
-            }
-
-            Divider()
-
-            Button { editHost = host } label: {
-                Label(L10n.edit.localized(), systemImage: "pencil")
-            }
-            Button(role: .destructive) {
-                removeHost = host
-            } label: {
-                Label(L10n.actionRemoveFromList.localized(), systemImage: "minus.circle")
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .disabled(provisioner.status.isRunning)
-    }
-
-    private func statusColor(_ s: ContainerStatus) -> Color {
-        switch s {
-        case .running:  return .green
-        case .stopped:  return .red
-        case .notFound: return .gray
         }
     }
 
-    // MARK: Actions
+    // MARK: Overflow menu — the single COMPLETE action set
+    //
+    // #258: this is the source of truth. The card's primary + Check buttons are a
+    // derived subset of these items (no more "MUST mirror card buttons" duplication).
+
+    private func menuItems(_ host: ServerHost) -> [OlcMenuItem] {
+        var items: [OlcMenuItem] = [
+            .action(L10n.vpsCheckServer.localized(), systemImage: "antenna.radiowaves.left.and.right") {
+                Task { await checkServer(host) }
+            }
+        ]
+
+        if hasContainer(host) {
+            if isRunning(host) {
+                items.append(.action(L10n.actionStop.localized(), systemImage: "stop.fill", role: .destructive) {
+                    Task { await stop(host) }
+                })
+            } else {
+                items.append(.action(L10n.actionStart.localized(), systemImage: "play.fill") {
+                    Task { await startContainer(host) }
+                })
+            }
+            items.append(.action(L10n.actionLogs.localized(), systemImage: "doc.text.magnifyingglass") {
+                Task { await fetchLogs(host) }
+            })
+            items.append(.action(L10n.actionChangeRoomTransport.localized(), systemImage: "slider.horizontal.3") {
+                reconfigureFor = host
+            })
+            items.append(.action(L10n.actionUpdate.localized(), systemImage: "arrow.triangle.2.circlepath") {
+                Task { await update(host) }
+            })
+            items.append(.divider)
+            items.append(.action(L10n.actionUninstall.localized(), systemImage: "trash", role: .destructive) {
+                uninstallConfirmHost = host
+            })
+        } else {
+            items.append(.action(L10n.actionInstall.localized(), systemImage: "arrow.down.app") {
+                installFor = host
+            })
+            items.append(.action(L10n.actionScanVPS.localized(), systemImage: "magnifyingglass") {
+                Task { await scanContainers(host) }
+            })
+        }
+
+        // Deep uninstall whenever there's something to wipe (Podman present).
+        if currentBase(host) != .noPodman {
+            items.append(.action(L10n.actionDeepUninstall.localized(), systemImage: "flame", role: .destructive) {
+                deepUninstallConfirmHost = host
+            })
+        }
+
+        items.append(.divider)
+        items.append(.action(L10n.actionReboot.localized(), systemImage: "arrow.clockwise", role: .destructive) {
+            rebootConfirmHost = host
+        })
+        items.append(.divider)
+        items.append(.action(L10n.edit.localized(), systemImage: "pencil") { editHost = host })
+        items.append(.action(L10n.actionRemoveFromList.localized(), systemImage: "minus.circle", role: .destructive) {
+            removeHost = host
+        })
+        return items
+    }
+
+    // MARK: Actions (each drives the card through `run`; the probe sets base)
 
     private func password(for host: ServerHost) -> String? {
         serverStore.password(for: host)
     }
 
-    /// Runs `op(password)` if the password exists, otherwise sets alertText.
-    /// Catches thrown errors and surfaces them as alertText.
-    private func withPassword(for host: ServerHost,
-                               _ op: (String) async throws -> Void) async {
-        guard let pw = password(for: host) else {
-            alertText = L10n.alertPasswordMissingShort.localized(); return
-        }
-        do { try await op(pw) }
-        catch { alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription) }
-    }
-
-    /// Runs `op(password, containerName)` if both exist, otherwise sets alertText.
-    private func withPasswordAndContainer(for host: ServerHost,
-                                          _ op: (String, String) async throws -> Void) async {
-        guard let pw = password(for: host) else {
-            alertText = L10n.alertPasswordMissingShort.localized(); return
-        }
-        guard let cname = host.lastContainerName else {
-            alertText = L10n.containerNotInstalled.localized(); return
-        }
-        do { try await op(pw, cname) }
-        catch { alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription) }
-    }
-
-    /// SSH status probe + TCP ping combined. Sets activeHostID so the card shows
-    /// yellow in-progress; clears on completion. Does NOT nil out readiness first —
-    /// the last known state stays visible during the probe.
+    /// SSH status probe + TCP ping. The probe is the authoritative base setter.
     private func checkServer(_ host: ServerHost) async {
-        activeHostID = host.id
-        Task { await doPing(host) }  // ping runs in parallel, doesn't need activeHostID
-        await withPassword(for: host) { pw in
-            // checkReadiness sets provisioner.status = .running so the card shows
-            // the yellow indicator and buttons are disabled during the probe.
+        Task { await doPing(host) }  // parallel TCP ping; updates the Ping metric
+        await run(.check, on: host) { pw in
             let (rstate, stats) = try await provisioner.checkReadiness(
                 on: host, password: pw, containerName: host.lastContainerName)
-            readiness[host.id] = rstate
             if let stats { vpsStats[host.id] = stats }
+            return HostBase(rstate)
         }
-        activeHostID = nil
     }
 
     private func install(_ host: ServerHost, options: InstallOptions) async {
-        guard let pw = password(for: host) else {
-            alertText = L10n.alertPasswordMissingDetail.localized(); return
-        }
-        activeHostID = host.id
-        do {
+        await run(.install, on: host) { pw in
             let result = try await provisioner.install(on: host, password: pw, options: options)
             let cfg = try OlcrtcURI.parse(result.uri)
             let params = OlcrtcConnection(
@@ -605,16 +550,17 @@ struct ServersView: View {
             updated.lastContainerName = result.containerName
             updated.lastConnectionID  = record.id
             serverStore.update(updated, password: nil)
-            readiness[host.id] = .containerRunning("just installed")
-        } catch {
-            alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription)
+            // #258 was: readiness[id] = .containerRunning("just installed") (optimistic).
+            // Confirm the real post-install state with a probe instead.
+            let (rstate, stats) = try await provisioner.probeReadiness(
+                on: host, password: pw, containerName: result.containerName)
+            if let stats { vpsStats[host.id] = stats }
+            return HostBase(rstate)
         }
-        activeHostID = nil
     }
 
     private func uninstall(_ host: ServerHost) async {
-        activeHostID = host.id
-        await withPassword(for: host) { pw in
+        await run(.uninstall, on: host) { pw in
             try await provisioner.uninstall(on: host, password: pw,
                                             containerName: host.lastContainerName)
             var updated = host
@@ -629,65 +575,55 @@ struct ServersView: View {
                 updated.lastConnectionID = nil
             }
             serverStore.update(updated, password: nil)
-            readiness[host.id] = .imageReady  // container gone, image still cached
             if let name = removedConnName {
                 LogStore.shared.log(.provisioning, "Connection «\(name)» also removed from list.")
             }
+            return .imageReady   // container gone, image still cached (deterministic)
         }
-        activeHostID = nil
-    }
-
-    private func fetchLogs(_ host: ServerHost) async {
-        activeHostID = host.id
-        await withPasswordAndContainer(for: host) { pw, cname in
-            let output = try await provisioner.containerLogs(
-                on: host, password: pw, containerName: cname,
-                tail: SettingsStore.shared.containerLogsTailLines)
-            logsPayload = ContainerLogsPayload(containerName: cname, output: output)
-        }
-        activeHostID = nil
     }
 
     private func update(_ host: ServerHost) async {
-        activeHostID = host.id
-        await withPassword(for: host) { pw in
+        await run(.update, on: host) { pw in
             try await provisioner.update(on: host, password: pw,
                                          containerName: host.lastContainerName)
+            guard let cname = host.lastContainerName else { return nil }
+            let (rstate, stats) = try await provisioner.probeReadiness(
+                on: host, password: pw, containerName: cname)
+            if let stats { vpsStats[host.id] = stats }
+            return HostBase(rstate)
         }
-        activeHostID = nil
     }
 
     private func startContainer(_ host: ServerHost) async {
-        activeHostID = host.id
-        // Keep existing readiness; activeHostID shows yellow in-progress overlay.
-        // After success, set optimistic state then confirm with probe.
-        await withPasswordAndContainer(for: host) { pw, cname in
+        await run(.start, on: host) { pw in
+            guard let cname = host.lastContainerName else {
+                throw ProvisionError.parseFailed(L10n.containerNotInstalled.localized())
+            }
+            // #258 was: readiness[id] = .containerRunning("starting…") before the probe.
             try await provisioner.start(on: host, password: pw, containerName: cname)
-            readiness[host.id] = .containerRunning("starting…")
             let (rstate, stats) = try await provisioner.probeReadiness(
                 on: host, password: pw, containerName: cname)
-            readiness[host.id] = rstate
             if let stats { vpsStats[host.id] = stats }
+            return HostBase(rstate)
         }
-        activeHostID = nil
     }
 
     private func stop(_ host: ServerHost) async {
-        activeHostID = host.id
-        await withPasswordAndContainer(for: host) { pw, cname in
+        await run(.stop, on: host) { pw in
+            guard let cname = host.lastContainerName else {
+                throw ProvisionError.parseFailed(L10n.containerNotInstalled.localized())
+            }
+            // #258 was: readiness[id] = .containerStopped("stopping…") before the probe.
             try await provisioner.stop(on: host, password: pw, containerName: cname)
-            readiness[host.id] = .containerStopped("stopping…")
             let (rstate, stats) = try await provisioner.probeReadiness(
                 on: host, password: pw, containerName: cname)
-            readiness[host.id] = rstate
             if let stats { vpsStats[host.id] = stats }
+            return HostBase(rstate)
         }
-        activeHostID = nil
     }
 
     private func deepUninstall(_ host: ServerHost, removeImage: Bool) async {
-        activeHostID = host.id
-        await withPassword(for: host) { pw in
+        await run(.deepUninstall, on: host) { pw in
             try await provisioner.deepUninstall(on: host, password: pw,
                                                 containerName: host.lastContainerName,
                                                 removeImage: removeImage)
@@ -703,28 +639,27 @@ struct ServersView: View {
                 updated.lastConnectionID = nil
             }
             serverStore.update(updated, password: nil)
-            // After deep uninstall, probe to see if podman/image remain
-            let (rstate, _) = try await provisioner.probeReadiness(on: host, password: pw, containerName: nil)
-            readiness[host.id] = rstate
+            let (rstate, _) = try await provisioner.probeReadiness(
+                on: host, password: pw, containerName: nil)
             if let name = removedConnName {
                 LogStore.shared.log(.provisioning, "Connection «\(name)» also removed from list.")
             }
+            return HostBase(rstate)
         }
-        activeHostID = nil
     }
 
     private func reboot(_ host: ServerHost) async {
-        activeHostID = host.id
-        await withPassword(for: host) { pw in
+        await run(.reboot, on: host) { pw in
             try await provisioner.reboot(on: host, password: pw)
+            return nil   // host going down; keep the previous base, user re-checks
         }
-        activeHostID = nil
     }
 
     private func reconfigure(_ host: ServerHost, options: InstallOptions) async {
-        activeHostID = host.id
-        // Keep existing readiness during op; probe after to get confirmed state.
-        await withPasswordAndContainer(for: host) { pw, cname in
+        await run(.reconfigure, on: host) { pw in
+            guard let cname = host.lastContainerName else {
+                throw ProvisionError.parseFailed(L10n.containerNotInstalled.localized())
+            }
             let newURI = try await provisioner.reconfigure(on: host, password: pw,
                                                            containerName: cname, options: options)
             // Update the linked ConnectionRecord with the new room/transport.
@@ -748,26 +683,43 @@ struct ServersView: View {
                 updatedRecord.details = .olcrtc(updated)
                 connections.update(updatedRecord)
             }
-            // Probe actual state — reconfigure stops+recreates container, it may
-            // be running (if room is valid) or stopped (if it exited immediately).
             let (rstate, stats) = try await provisioner.probeReadiness(
                 on: host, password: pw, containerName: cname)
-            readiness[host.id] = rstate
             if let stats { vpsStats[host.id] = stats }
+            return HostBase(rstate)
         }
-        activeHostID = nil
     }
 
-    // MARK: Scan for existing containers
+    // MARK: Container logs / scan (no base change → outside `run`)
+
+    private func fetchLogs(_ host: ServerHost) async {
+        guard let pw = password(for: host) else {
+            alertText = L10n.alertPasswordMissingShort.localized(); return
+        }
+        guard let cname = host.lastContainerName else {
+            alertText = L10n.containerNotInstalled.localized(); return
+        }
+        do {
+            let output = try await provisioner.containerLogs(
+                on: host, password: pw, containerName: cname,
+                tail: SettingsStore.shared.containerLogsTailLines)
+            logsPayload = ContainerLogsPayload(containerName: cname, output: output)
+        } catch {
+            alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription)
+        }
+    }
 
     private func scanContainers(_ host: ServerHost) async {
-        activeHostID = host.id
-        await withPassword(for: host) { pw in
+        guard let pw = password(for: host) else {
+            alertText = L10n.alertPasswordMissingShort.localized(); return
+        }
+        do {
             let found = try await provisioner.scanContainers(on: host, password: pw)
             foundContainers = found
             scanFor = host
+        } catch {
+            alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription)
         }
-        activeHostID = nil
     }
 
     @ViewBuilder
@@ -832,18 +784,7 @@ struct ServersView: View {
         var updated = host
         updated.lastContainerName = container.name
         serverStore.update(updated, password: nil)
+        display[host.id] = .base(.stopped)   // container present; Check confirms run-state
         alertText = "Restored: \(container.name)"
-    }
-}
-
-// MARK: - VPSReadinessState helpers
-
-private extension VPSReadinessState {
-    /// The container label string for .containerRunning / .containerStopped, empty otherwise.
-    var containerLabel: String {
-        switch self {
-        case .containerRunning(let s), .containerStopped(let s): return s
-        default: return ""
-        }
     }
 }

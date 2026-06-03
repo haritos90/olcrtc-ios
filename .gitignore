@@ -33,3 +33,6 @@ olcrtc-ios.xcodeproj/
 
 # gomobile binary — too large for plain git, use git-lfs or rebuild locally
 App/Mobile.xcframework/
+
+# Design handoff export (Claude design — local reference only, not part of the app)
+design_handoff_ui_redesign/

@@ -131,20 +131,13 @@ struct SettingsView: View {
 
     private var dnsSection: some View {
         Section {
-            // Global resolvers
-            HStack(spacing: 6) {
-                ForEach(AppConstants.dnsPresets, id: \.value) { preset in
-                    dnsPresetButton(label: preset.label, value: preset.value)
-                }
-                Spacer()
-            }
-            // Russian carrier-internal resolvers
-            HStack(spacing: 6) {
-                ForEach(AppConstants.ruCarrierDnsPresets, id: \.value) { preset in
-                    dnsPresetButton(label: preset.label.localized(), value: preset.value)
-                }
-                Spacer()
-            }
+            // #258: one OlcChipPicker over all DNS presets (global + RU-carrier),
+            // replacing two rows of differently-styled .mini buttons.
+            OlcChipPicker(
+                selection: $settings.dnsServer,
+                options: AppConstants.dnsPresets.map { ($0.value, $0.label) }
+                       + AppConstants.ruCarrierDnsPresets.map { ($0.value, $0.label.localized()) }
+            )
             // Free-form field
             TextField(L10n.dnsFreeFormPlaceholder.localized(), text: $settings.dnsServer)
                 .autocorrectionDisabled()
@@ -156,14 +149,6 @@ struct SettingsView: View {
             Text(L10n.dnsFooter.localized())
                 .font(.caption2)
         }
-    }
-
-    @ViewBuilder
-    private func dnsPresetButton(label: String, value: String) -> some View {
-        Button(label) { settings.dnsServer = value }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .tint(settings.dnsServer == value ? .accentColor : .secondary)
     }
 
     // MARK: Numeric field helper
@@ -190,15 +175,8 @@ struct SettingsView: View {
                 .frame(width: 80)
             if let unit { Text(unit).foregroundStyle(.secondary) }
         }
-        HStack(spacing: 6) {
-            ForEach(presets, id: \.value) { p in
-                Button(p.label) { value.wrappedValue = p.value }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                    .tint(value.wrappedValue == p.value ? .accentColor : .secondary)
-            }
-            Spacer()
-        }
+        // #258: design-system chip picker (was a row of .mini bordered buttons).
+        OlcChipPicker(selection: value, options: presets.map { ($0.value, $0.label) })
     }
 
     // MARK: Transport tuning
@@ -303,10 +281,10 @@ struct SettingsView: View {
         }
 
         Section {
-            Button(role: .destructive) {
+            // #258: danger design-system button (was a plain destructive row).
+            OlcButton(L10n.clearAllLogsAction.localized(), systemImage: "trash",
+                      role: .danger, fillWidth: true) {
                 LogStore.shared.clearAll()
-            } label: {
-                Label(L10n.clearAllLogsAction.localized(), systemImage: "trash")
             }
         }
     }
@@ -323,6 +301,12 @@ struct SettingsView: View {
                 ForEach(AppLocale.allCases) { locale in
                     Text(locale.displayName).tag(locale)
                 }
+            }
+
+            // #267: design-direction picker (Refined / Console).
+            Picker(L10n.themeLabel.localized(), selection: $settings.designConsole) {
+                Text(L10n.themeRefined.localized()).tag(false)
+                Text(L10n.themeConsole.localized()).tag(true)
             }
 
             HStack {

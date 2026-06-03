@@ -39,6 +39,9 @@ struct MainTabView: View {
     @State private var didAutoConnect = false
 
     var body: some View {
+        // #258 shell pass: every tab uses a large title + a single trailing slot
+        // (Connections / VPS: +, Logs: ⋯ overflow, Settings: none). Dark-only is
+        // enforced via Info.plist `UIUserInterfaceStyle=Dark` (project.yml).
         TabView {
             ConnectionsView(store: store, tunnel: tunnel,
                             ipCheck: ipCheck, speed: speed)

@@ -1,9 +1,12 @@
 import SwiftUI
 
+// #258: design-system pass. The three trailing toolbar icons (share / copy /
+// trash) collapse into one OlcOverflowMenu (the single trailing slot, matching
+// every other tab); the category picker is an OlcSegmented; the title is large.
+
 struct LogsView: View {
     @ObservedObject private var store = LogStore.shared
     @State private var selected: LogCategory = .connection
-    @State private var copied = false
     @State private var searchText = ""
     @State private var cachedFullText: String = ""
 
@@ -17,14 +20,10 @@ struct LogsView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker("", selection: $selected) {
-                    ForEach(LogCategory.allCases) { cat in
-                        Label(cat.title, systemImage: cat.systemImage).tag(cat)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .padding(.top, 8)
+                OlcSegmented(selection: $selected,
+                             options: LogCategory.allCases.map { ($0, $0.title) })
+                    .padding(.horizontal)
+                    .padding(.top, 8)
 
                 if let url = store.fileURLs[selected] {
                     HStack {
@@ -45,66 +44,45 @@ struct LogsView: View {
                 logContent
             }
             .navigationTitle(L10n.logsTitle.localized())
-            .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText,
                         placement: .navigationBarDrawer(displayMode: .always),
                         prompt: L10n.logsSearchPlaceholder.localized())
             .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    // Share opens native sheet (AirDrop, copy, notes, etc.)
-                    if !filteredItems.isEmpty {
-                        ShareLink(item: cachedFullText) {
-                            Image(systemName: "square.and.arrow.up")
-                        }
-                    }
-                    // Quick-copy keeps the old single-tap path
-                    Button {
-                        UIPasteboard.general.string = cachedFullText
-                        copied = true
-                        Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
-                    } label: {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    }
-                    .disabled(filteredItems.isEmpty)
-                    // Clear only the currently selected category (#166)
-                    Button(role: .destructive) {
-                        LogStore.shared.clear(category: selected)
-                    } label: {
-                        Image(systemName: "trash")
-                    }
+                ToolbarItem(placement: .primaryAction) {
+                    OlcOverflowMenu(items: [
+                        .share(L10n.shareAction.localized(), systemImage: "square.and.arrow.up", item: cachedFullText),
+                        .action(L10n.copyAllAction.localized(), systemImage: "doc.on.doc") {
+                            UIPasteboard.general.string = cachedFullText
+                        },
+                        .divider,
+                        .action(L10n.clearCategoryAction.localized(), systemImage: "trash", role: .destructive) {
+                            LogStore.shared.clear(category: selected)
+                        },
+                    ])
                     .disabled(filteredItems.isEmpty)
                 }
             }
-            .onAppear {
-                cachedFullText = filteredItems.reversed().map(\.text).joined(separator: "\n")
-            }
-            .onChange(of: filteredItems.count) {
-                cachedFullText = filteredItems.reversed().map(\.text).joined(separator: "\n")
-            }
-            .onChange(of: selected) {
-                cachedFullText = filteredItems.reversed().map(\.text).joined(separator: "\n")
-            }
+            .onAppear { refreshCache() }
+            .onChange(of: filteredItems.count) { refreshCache() }
+            .onChange(of: selected) { refreshCache() }
         }
+    }
+
+    private func refreshCache() {
+        cachedFullText = filteredItems.reversed().map(\.text).joined(separator: "\n")
     }
 
     @ViewBuilder
     private var logContent: some View {
         if filteredItems.isEmpty {
             let isSearching = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            VStack(spacing: 8) {
-                Image(systemName: isSearching ? "magnifyingglass" : selected.systemImage)
-                    .font(.system(size: 40))
-                    .foregroundStyle(.tertiary)
-                Text(isSearching ? L10n.noSearchResults.localized() : L10n.emptyLogsGeneric.localized())
-                    .foregroundStyle(.secondary)
-                Text(isSearching
-                     ? L10n.noSearchResultsHint_fmt.formatted(searchText)
-                     : L10n.emptyLogsGenericHint.localized())
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-            }
+            OlcEmptyState(
+                systemImage: isSearching ? "magnifyingglass" : selected.systemImage,
+                title: isSearching ? L10n.noSearchResults.localized() : L10n.emptyLogsGeneric.localized(),
+                hint: isSearching
+                      ? L10n.noSearchResultsHint_fmt.formatted(searchText)
+                      : L10n.emptyLogsGenericHint.localized()
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollViewReader { proxy in
