@@ -46,13 +46,13 @@ enum L10nTable {
         .stateDisconnected: "Disconnected",
         .stateConnecting:   "Connecting…",
         .stateConnected:    "Connected",
+        .stateConnectFailed: "Connection failed",
         .stateErrorPrefix_fmt: "Error: %@",
 
         // ConnectionsView
         .emptyNoConnections:         "No connections yet",
         .emptyNoConnectionsHint:     "Tap + to add a connection manually. If you have a VPS, go to the Servers tab to install and link automatically.",
         .actionConnect:              "Connect",
-        .actionDisconnect:           "Disconnect",
         .actionRetry:                "Retry",
         .shareAction:                "Share",
         .copyURIAction:              "Copy URI",
@@ -69,11 +69,10 @@ enum L10nTable {
         .namePlaceholder:            "My server",
         .groupField:                 "Group",
         .groupDefault:               "Servers",
-        .typeField:                  "Type",
         .importByURI:                "Import from URI",
-        .parseURIAction:             "Parse URI",
+        .scanQRAction:               "Scan QR",
+        .pasteURIAction:             "Paste URI",
         .importHint:                 "If you have a URI from the server — paste it here and tap «Parse». The fields below will be filled in automatically.",
-        .uriPlaceholder:             "olcrtc://wbstream?datachannel@<roomID>#<key>%<clientID>$<description>",
         .clientIDFooter:             "Your device identifier in the room. 'default' works for single-device setups. Use a unique value when multiple devices share the same room.",
         .keyPlaceholder:             "64-char hex key",
         .roomIDLabel:                "Room ID",
@@ -103,9 +102,7 @@ enum L10nTable {
         .actionUninstall:            "Remove container from server",
         .actionUpdate:               "Update binary (git pull + rebuild)",
         .actionReboot:               "Reboot",
-        .actionPing:                 "Ping",
         .actionChangeRoomTransport:  "Change Room / Transport",
-        .actionStatus:               "Status",
         .actionLogs:                 "Logs",
         .actionDone:                 "Done",
         .actionRemoveFromList:       "Remove host from list",
@@ -116,7 +113,6 @@ enum L10nTable {
         .deepUninstallConfirmBody:   "Removes container, Go cache (~300 MB), and encryption key. Podman and image stay.",
         .rebootConfirmTitle:         "Reboot server?",
         .rebootConfirmBody:          "This will reboot the entire VPS. The olcrtc container will restart automatically once the server is back online.",
-        .connectionLine_fmt:         "Linked connection: %@",
         .carrierTransportMatrix:     "Carrier × Transport",
 
         // Container status
@@ -130,6 +126,32 @@ enum L10nTable {
         .readinessImageReady:            "Image cached — reinstall takes ~1–2 min",
         .readinessContainerStopped_fmt:  "Stopped: %@",
         .readinessContainerRunning_fmt:  "Running: %@",
+
+        // VPS status card (#258/#261)
+        .vpsTitleUnknown:         "Status unknown",
+        .vpsTitleReady:           "Ready to install",
+        .vpsTitlePodmanReady:     "Podman ready",
+        .vpsTitleStopped:         "Stopped",
+        .vpsTitleRunning:         "Running",
+        .vpsSubUnknown:           "Tap Check to probe",
+        .vpsSubNoPodman:          "Full setup ~5–7 min",
+        .vpsSubNoImage:           "First install pulls image (~300 MB)",
+        .vpsSubImageReady:        "Image cached — fast reinstall",
+        .vpsSubStopped:           "Container present, not running",
+        .vpsSubRunning:           "Container up and running",
+        .vpsVerbChecking:         "Checking",
+        .vpsVerbInstalling:       "Installing",
+        .vpsVerbStarting:         "Starting",
+        .vpsVerbStopping:         "Stopping",
+        .vpsVerbReconfiguring:    "Reconfiguring",
+        .vpsVerbUpdating:         "Updating",
+        .vpsVerbUninstalling:     "Uninstalling",
+        .vpsVerbDeepUninstalling: "Deep uninstalling",
+        .vpsVerbRebooting:        "Rebooting",
+        .vpsConnecting:           "Connecting…",
+        .vpsCheckServer:          "Check server",
+        .vpsWorking:              "Working…",
+        .vpsOpFailed_fmt:         "%@ failed",
 
         // ContainerLogsView
         .emptyLogsTitle:             "Logs are empty",
@@ -157,7 +179,6 @@ enum L10nTable {
         .sectionConnection:          "Connection",
         .sectionLogs:                "Logs",
         .sectionFont:                "Font",
-        .sectionInfo:                "Info",
         .settingsPortLabel:          "Port",
         .checkPortAction:            "Check port",
         .randomPortAction:           "Random",
@@ -189,10 +210,15 @@ enum L10nTable {
         .logBufferLabel:             "Log buffer",
         .containerLogsTailLabel:     "Container logs (tail)",
         .clearAllLogsAction:         "Clear all logs",
+        .copyAllAction:              "Copy all",
+        .clearCategoryAction:        "Clear this category",
         .fontSizeLabel:              "Font size",
         .fontPreviewText:            "Preview text — this is how labels and headings will look across the app.",
         .fontFooter:                 "Applied app-wide (via SwiftUI dynamicTypeSize). Smaller = denser, larger = easier to read.",
         .languageLabel:              "Language",
+        .themeLabel:                 "Theme",
+        .themeRefined:               "Refined",
+        .themeConsole:               "Console",
 
         // InstallOptionsView
         .installTitle:               "Install olcrtc",
@@ -220,9 +246,6 @@ enum L10nTable {
         .actionQR:                   "QR",
 
         // Status banner
-        .statusRunningTitle:         "Running",
-        .statusDoneTitle:            "Done",
-        .statusErrorTitle:           "Error",
 
         // TunnelManager log lines
         .mobileStartOK:              "✓ MobileStart OK, waiting for WaitReady…",
@@ -277,7 +300,6 @@ enum L10nTable {
         .installFailedNoURI_fmt:     "Script finished without URI. Last lines:\n%@",
         .installTimeout25min:        "Install timed out (25 minutes)",
         .installResultSuccess_fmt:   "olcrtc server installed (%@/%@)",
-        .installResultSuccessNotice: "Installed! Connection added to the Connections tab. Go there and tap the toggle to connect.",
         .uninstallResultSuccess:     "Server cleaned up",
         .updateResultSuccess:        "Binary updated",
         .provisioningStarting:       "Starting server…",
@@ -290,13 +312,10 @@ enum L10nTable {
         .actionScanVPS:              "Scan for installed olcrtc",
         .scanNoContainers:           "No olcrtc containers found on this server.",
         .scanRestoreAction:          "Restore",
-        .scanContainerRow_fmt:       "%@ · %@",
         .actionDeepUninstall:        "Wipe all olcrtc data from server",
         .deepUninstallResultSuccess:          "All olcrtc data removed",
-        .uninstallConnectionAlsoRemoved_fmt:  "Connection «%@» also removed from list.",
         .reconfigureResultSuccess_fmt: "Parameters updated (%@/%@)",
         .rebootResultSuccess:        "Reboot command sent",
-        .rebootingInProgress:        "Server is rebooting",
         .logsBytesReceived_fmt:      "Logs received (%d bytes)",
         .provisionPasswordMissing:   "Password not found in Keychain",
         .provisionSSHPrefix_fmt:     "SSH: %@",
@@ -322,7 +341,6 @@ enum L10nTable {
         .checkReadyA11y:             "Check time-to-ready",
 
         // ServersView alerts
-        .alertPasswordMissingDetail: "Password for this server not found in Keychain. Delete it and add it again.",
         .alertPasswordMissingShort:  "Password not found",
 
         // AddServerHostView
@@ -331,9 +349,9 @@ enum L10nTable {
         .testSSHAction:              "Test SSH",
 
         // ConnectionsView misc
+        .diagnosticsTitle:           "Diagnostics",
         .ipCheckTitle:               "IP check",
         .ipCheckRun:                 "Check IP",
-        .speedTestTitle:             "Speed test",
         .speedTestRun:               "Run test",
 
         // #236/#237 — UI strings localized after the i18n pass
@@ -341,10 +359,8 @@ enum L10nTable {
         .ipNotChecked:               "Not checked yet",
         .ipDnsLeak:                  "IPs differ — possible DNS leak",
         .ipSourcesAgree_fmt:         "✓ %@ (%d sources)",
-        .ipLastCheck_fmt:            "Last check: %@",
         .socksProxyAddr_fmt:         "SOCKS5 proxy: 127.0.0.1:%@",
         .portInUseByTunnel:          "in use by tunnel",
-        .statusUnreachable:          "unreachable",
         .roomPrefix_fmt:             "room: %@",
         .qrCodeURIA11y:              "Connection URI QR Code",
         .qrCodeHintA11y:             "Scan this code to import the connection on another device",
@@ -396,13 +412,13 @@ enum L10nTable {
         .stateDisconnected: "Отключено",
         .stateConnecting:   "Подключение…",
         .stateConnected:    "Подключено",
+        .stateConnectFailed: "Сбой подключения",
         .stateErrorPrefix_fmt: "Ошибка: %@",
 
         // ConnectionsView
         .emptyNoConnections:         "Нет подключений",
         .emptyNoConnectionsHint:     "Нажми + чтобы добавить подключение вручную. Если есть VPS — перейди во вкладку Управление VPS для автоматической установки.",
         .actionConnect:              "Подключить",
-        .actionDisconnect:           "Отключить",
         .actionRetry:                "Повторить",
         .shareAction:                "Поделиться",
         .copyURIAction:              "Скопировать URI",
@@ -419,11 +435,10 @@ enum L10nTable {
         .namePlaceholder:            "Мой сервер",
         .groupField:                 "Группа",
         .groupDefault:               "Основная",
-        .typeField:                  "Тип",
         .importByURI:                "Импорт по ссылке",
-        .parseURIAction:             "Распознать URI",
+        .scanQRAction:               "Сканировать QR",
+        .pasteURIAction:             "Вставить URI",
         .importHint:                 "Если у тебя есть URI с сервера — вставь сюда и нажми «Распознать». Поля ниже заполнятся автоматически.",
-        .uriPlaceholder:             "olcrtc://wbstream?datachannel@<roomID>#<key>%<clientID>$<описание>",
         .clientIDFooter:             "Идентификатор устройства в комнате. «default» подходит для одного устройства. Используй уникальное значение если несколько устройств подключаются к одной комнате.",
         .keyPlaceholder:             "64-символьный hex-ключ",
         .roomIDLabel:                "Идентификатор комнаты",
@@ -453,9 +468,7 @@ enum L10nTable {
         .actionUninstall:            "Удалить контейнер с сервера",
         .actionUpdate:               "Обновить бинарник (git pull + rebuild)",
         .actionReboot:               "Reboot",
-        .actionPing:                 "Ping",
         .actionChangeRoomTransport:  "Изменить Room / Transport",
-        .actionStatus:               "Статус",
         .actionLogs:                 "Логи",
         .actionDone:                 "Готово",
         .actionRemoveFromList:       "Удалить из списка",
@@ -466,7 +479,6 @@ enum L10nTable {
         .deepUninstallConfirmBody:   "Удаляет контейнер, кеш Go (~300 МБ) и ключ шифрования. Podman и образ остаются.",
         .rebootConfirmTitle:         "Перезагрузить сервер?",
         .rebootConfirmBody:          "Будет выполнена перезагрузка всего VPS. Контейнер olcrtc запустится автоматически после того, как сервер поднимется.",
-        .connectionLine_fmt:         "Связанное подключение: %@",
         .carrierTransportMatrix:     "Carrier × Transport",
 
         // Container status
@@ -480,6 +492,32 @@ enum L10nTable {
         .readinessImageReady:            "Образ в кеше — переустановка займёт ~1–2 мин",
         .readinessContainerStopped_fmt:  "Остановлен: %@",
         .readinessContainerRunning_fmt:  "Работает: %@",
+
+        // VPS status card (#258/#261)
+        .vpsTitleUnknown:         "Статус неизвестен",
+        .vpsTitleReady:           "Готов к установке",
+        .vpsTitlePodmanReady:     "Podman готов",
+        .vpsTitleStopped:         "Остановлен",
+        .vpsTitleRunning:         "Работает",
+        .vpsSubUnknown:           "Нажмите «Проверить»",
+        .vpsSubNoPodman:          "Полная установка ~5–7 мин",
+        .vpsSubNoImage:           "Первая установка тянет образ (~300 МБ)",
+        .vpsSubImageReady:        "Образ в кэше — быстрая переустановка",
+        .vpsSubStopped:           "Контейнер есть, не запущен",
+        .vpsSubRunning:           "Контейнер запущен",
+        .vpsVerbChecking:         "Проверка",
+        .vpsVerbInstalling:       "Установка",
+        .vpsVerbStarting:         "Запуск",
+        .vpsVerbStopping:         "Остановка",
+        .vpsVerbReconfiguring:    "Переконфигурация",
+        .vpsVerbUpdating:         "Обновление",
+        .vpsVerbUninstalling:     "Удаление",
+        .vpsVerbDeepUninstalling: "Полное удаление",
+        .vpsVerbRebooting:        "Перезагрузка",
+        .vpsConnecting:           "Подключение…",
+        .vpsCheckServer:          "Проверить сервер",
+        .vpsWorking:              "Выполняется…",
+        .vpsOpFailed_fmt:         "Сбой: %@",
 
         // ContainerLogsView
         .emptyLogsTitle:             "Логи пусты",
@@ -507,7 +545,6 @@ enum L10nTable {
         .sectionConnection:          "Подключение",
         .sectionLogs:                "Логи",
         .sectionFont:                "Шрифт",
-        .sectionInfo:                "Инфо",
         .settingsPortLabel:          "Порт",
         .checkPortAction:            "Проверить порт",
         .randomPortAction:           "Случайный",
@@ -539,10 +576,15 @@ enum L10nTable {
         .logBufferLabel:             "Буфер логов",
         .containerLogsTailLabel:     "Логи контейнера (tail)",
         .clearAllLogsAction:         "Очистить все логи",
+        .copyAllAction:              "Копировать всё",
+        .clearCategoryAction:        "Очистить категорию",
         .fontSizeLabel:              "Размер шрифта",
         .fontPreviewText:            "Превью текста — так будут выглядеть подписи и заголовки в приложении.",
         .fontFooter:                 "Применяется ко всему приложению (через SwiftUI dynamicTypeSize). Меньше = плотнее, больше = удобнее читать.",
         .languageLabel:              "Язык",
+        .themeLabel:                 "Тема",
+        .themeRefined:               "Refined",
+        .themeConsole:               "Console",
 
         // InstallOptionsView
         .installTitle:               "Установка olcrtc",
@@ -570,9 +612,6 @@ enum L10nTable {
         .actionQR:                   "QR",
 
         // Status banner
-        .statusRunningTitle:         "Выполнение",
-        .statusDoneTitle:            "Готово",
-        .statusErrorTitle:           "Ошибка",
 
         // TunnelManager log lines
         .mobileStartOK:              "✓ MobileStart OK, ожидаем WaitReady…",
@@ -627,7 +666,6 @@ enum L10nTable {
         .installFailedNoURI_fmt:     "Скрипт завершился без URI. Последние строки:\n%@",
         .installTimeout25min:        "Таймаут установки (25 минут)",
         .installResultSuccess_fmt:   "Сервер olcrtc установлен (%@/%@)",
-        .installResultSuccessNotice: "Установлено! Подключение добавлено во вкладку Подключения. Перейди туда и нажми переключатель.",
         .uninstallResultSuccess:     "Сервер очищен",
         .updateResultSuccess:        "Бинарник обновлён",
         .provisioningStarting:       "Запускаем сервер…",
@@ -640,13 +678,10 @@ enum L10nTable {
         .actionScanVPS:              "Найти установленный olcrtc",
         .scanNoContainers:           "На сервере не найдено olcrtc-контейнеров.",
         .scanRestoreAction:          "Восстановить",
-        .scanContainerRow_fmt:       "%@ · %@",
         .actionDeepUninstall:        "Удалить весь olcrtc с сервера",
         .deepUninstallResultSuccess:          "Все данные olcrtc удалены",
-        .uninstallConnectionAlsoRemoved_fmt:  "Подключение «%@» тоже удалено из списка.",
         .reconfigureResultSuccess_fmt: "Параметры изменены (%@/%@)",
         .rebootResultSuccess:        "Команда reboot отправлена",
-        .rebootingInProgress:        "Сервер перезагружается",
         .logsBytesReceived_fmt:      "Логи получены (%d байт)",
         .provisionPasswordMissing:   "Пароль не найден в Keychain",
         .provisionSSHPrefix_fmt:     "SSH: %@",
@@ -672,7 +707,6 @@ enum L10nTable {
         .checkReadyA11y:             "Проверить время готовности",
 
         // ServersView alerts
-        .alertPasswordMissingDetail: "Пароль для сервера не найден в Keychain. Удали и добавь заново.",
         .alertPasswordMissingShort:  "Пароль не найден",
 
         // AddServerHostView
@@ -681,9 +715,9 @@ enum L10nTable {
         .testSSHAction:              "Тест SSH",
 
         // ConnectionsView misc
+        .diagnosticsTitle:           "Диагностика",
         .ipCheckTitle:               "IP проверка",
         .ipCheckRun:                 "Проверить IP",
-        .speedTestTitle:             "Скорость",
         .speedTestRun:               "Запустить тест",
 
         // #236/#237 — UI strings localized after the i18n pass
@@ -691,10 +725,8 @@ enum L10nTable {
         .ipNotChecked:               "Ещё не проверялось",
         .ipDnsLeak:                  "IP различаются — возможна утечка DNS",
         .ipSourcesAgree_fmt:         "✓ %@ (источников: %d)",
-        .ipLastCheck_fmt:            "Последняя проверка: %@",
         .socksProxyAddr_fmt:         "SOCKS5-прокси: 127.0.0.1:%@",
         .portInUseByTunnel:          "занят туннелем",
-        .statusUnreachable:          "недоступен",
         .roomPrefix_fmt:             "комната: %@",
         .qrCodeURIA11y:              "QR-код URI подключения",
         .qrCodeHintA11y:             "Отсканируйте этот код, чтобы импортировать подключение на другом устройстве",

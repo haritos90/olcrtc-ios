@@ -77,19 +77,15 @@ struct AddServerHostView: View {
                              ? L10n.newServerTitle.localized()
                              : L10n.editServerTitle.localized())
             .navigationBarTitleDisplayMode(.inline)
+            // #262: keep the numeric-field keyboard toolbar; ✕ close + footer
+            // come from the shared `.olcSheet` chrome below.
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.cancel.localized()) { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.save.localized()) { save() }
-                        .disabled(!isValid)
-                }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
                     Button(L10n.actionDone.localized()) { portFocused = false }
                 }
             }
+            .olcSheet(confirm: L10n.save.localized(), disabled: !isValid) { save() }
             .onAppear { prefill() }
             .onDisappear {
                 testTask?.cancel()

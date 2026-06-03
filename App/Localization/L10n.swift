@@ -50,12 +50,13 @@ enum L10n: String, CaseIterable {
 
     // MARK: Connection state
     case stateDisconnected, stateConnecting, stateConnected
+    case stateConnectFailed                // "Connection failed" (#258 hero)
     case stateErrorPrefix_fmt              // "Error: %@"
 
     // MARK: ConnectionsView
     case emptyNoConnections                 // "No connections yet"
     case emptyNoConnectionsHint             // "Tap + to add a connection manually. If you have a VPS, go to the Servers tab to install and link automatically."
-    case actionConnect, actionDisconnect, actionRetry
+    case actionConnect, actionRetry
     case shareAction, copyURIAction
     case shareConnectionTitle, shareConnectionExplanation, shareConnectionURIHeader
     case primaryRoleMain                    // "primary"
@@ -65,11 +66,10 @@ enum L10n: String, CaseIterable {
     case newConnectionTitle, editConnectionTitle
     case nameField, namePlaceholder         // "Label" / "My server"
     case groupField, groupDefault           // "Group" / "Servers"
-    case typeField                          // "Type"
     case importByURI                        // "Import from URI"
-    case parseURIAction                     // "Parse URI"
+    case scanQRAction                       // "Scan QR" (#258 sheet shortcut)
+    case pasteURIAction                     // "Paste URI" (#258 sheet shortcut)
     case importHint
-    case uriPlaceholder
     case clientIDFooter                     // explanation of client ID field
     case keyPlaceholder
     case roomIDLabel
@@ -87,9 +87,9 @@ enum L10n: String, CaseIterable {
     case newServerTitle, editServerTitle
     case sshAccessHeader
     case hostField, portField, loginField, passwordField
-    case actionInstall, actionUninstall, actionUpdate, actionReboot, actionPing
+    case actionInstall, actionUninstall, actionUpdate, actionReboot
     case actionChangeRoomTransport         // "Change Room / Transport"
-    case actionStatus, actionLogs, actionDone
+    case actionLogs, actionDone
     case actionRemoveFromList               // "Remove host from list"
     case removeHostConfirmTitle             // "Remove %@?"
     case removeHostConfirmMessage           // explanation about Keychain/uninstall
@@ -98,7 +98,6 @@ enum L10n: String, CaseIterable {
     case deepUninstallConfirmBody          // explanation for deep uninstall confirmation
     case rebootConfirmTitle               // "Reboot server?"
     case rebootConfirmBody                // explanation that the entire VPS will reboot
-    case connectionLine_fmt                 // "Linked connection: %@"
     case carrierTransportMatrix             // "Carrier × Transport"
 
     // MARK: Container status
@@ -114,6 +113,16 @@ enum L10n: String, CaseIterable {
     case readinessImageReady               // "Image cached — reinstall takes ~1 min"
     case readinessContainerStopped_fmt     // "Stopped: %@"
     case readinessContainerRunning_fmt     // "Running: %@"
+
+    // MARK: VPS status card (#258/#261 — design-system status pill + op driver)
+    case vpsTitleUnknown, vpsTitleReady, vpsTitlePodmanReady, vpsTitleStopped, vpsTitleRunning
+    case vpsSubUnknown, vpsSubNoPodman, vpsSubNoImage, vpsSubImageReady, vpsSubStopped, vpsSubRunning
+    case vpsVerbChecking, vpsVerbInstalling, vpsVerbStarting, vpsVerbStopping, vpsVerbReconfiguring
+    case vpsVerbUpdating, vpsVerbUninstalling, vpsVerbDeepUninstalling, vpsVerbRebooting
+    case vpsConnecting                      // "Connecting…" (initial running note)
+    case vpsCheckServer                     // "Check server"
+    case vpsWorking                         // "Working…"
+    case vpsOpFailed_fmt                    // "%@ failed"
 
     // MARK: ContainerLogsView
     case emptyLogsTitle                     // "Logs are empty"
@@ -137,7 +146,7 @@ enum L10n: String, CaseIterable {
     case settingsTitle
     case sectionSOCKS5, sectionDNS, sectionVP8, sectionConnection
     case sectionKeepAlive
-    case sectionLogs, sectionFont, sectionInfo
+    case sectionLogs, sectionFont
     case settingsPortLabel
     case checkPortAction                    // "Check port"
     case randomPortAction                   // "Random"
@@ -160,9 +169,12 @@ enum L10n: String, CaseIterable {
     case footerLogBuffer, footerContainerTail
     case logBufferLabel, containerLogsTailLabel
     case clearAllLogsAction
+    case copyAllAction                      // "Copy all" (#258 logs overflow)
+    case clearCategoryAction                // "Clear this category" (#258 logs overflow)
     case fontSizeLabel, fontPreviewText
     case fontFooter
     case languageLabel
+    case themeLabel, themeRefined, themeConsole   // #267 design-direction picker
 
     // MARK: InstallOptionsView
     case installTitle                       // "Install olcrtc"
@@ -186,9 +198,6 @@ enum L10n: String, CaseIterable {
     case actionQR
 
     // MARK: Status banner
-    case statusRunningTitle                 // "Running"
-    case statusDoneTitle                    // "Done"
-    case statusErrorTitle                   // "Error"
 
     // MARK: TunnelManager log lines
     case mobileStartOK                      // "✓ MobileStart OK, waiting for WaitReady…"
@@ -236,18 +245,15 @@ enum L10n: String, CaseIterable {
     case installFailedNoURI_fmt             // "Script finished without URI. Last lines:\n%@"
     case installTimeout25min                // "Install timed out (25 minutes)"
     case installResultSuccess_fmt           // "olcrtc server installed (%@/%@)"
-    case installResultSuccessNotice         // "Installed! Connection added to the Connections tab. Go there and tap the toggle to connect."
     case uninstallResultSuccess             // "Server cleaned up"
     case updateResultSuccess                // "Binary updated"
     case provisioningStarting, startResultSuccess, actionStart
     case provisioningStopping, stopResultSuccess, actionStop
     case scanningContainers, actionScanVPS, scanNoContainers
-    case scanRestoreAction, scanContainerRow_fmt
+    case scanRestoreAction
     case actionDeepUninstall, deepUninstallResultSuccess
-    case uninstallConnectionAlsoRemoved_fmt  // "Connection «%@» also removed from list."
     case reconfigureResultSuccess_fmt       // "Parameters updated (%@/%@)"
     case rebootResultSuccess                // "Reboot command sent"
-    case rebootingInProgress                // "Server is rebooting"
     case logsBytesReceived_fmt              // "Logs received (%d bytes)"
     case provisionPasswordMissing           // "Password not found in Keychain"
     case provisionSSHPrefix_fmt             // "SSH: %@"
@@ -273,7 +279,6 @@ enum L10n: String, CaseIterable {
     case checkReadyA11y                     // "Check time-to-ready"  (#242)
 
     // MARK: ServersView alerts
-    case alertPasswordMissingDetail         // "Password for this server not found in Keychain. Delete it and add it again."
     case alertPasswordMissingShort          // "Password not found"
 
     // MARK: AddServerHostView
@@ -282,9 +287,9 @@ enum L10n: String, CaseIterable {
     case testSSHAction                      // "Test SSH"
 
     // MARK: ConnectionsView misc
+    case diagnosticsTitle                   // "Diagnostics" (#258 merged card)
     case ipCheckTitle                       // "IP check"
     case ipCheckRun                         // "Check IP"
-    case speedTestTitle                     // "Speed test"
     case speedTestRun                       // "Run test"
 
     // MARK: #236/#237 — UI strings localized after the i18n pass
@@ -292,10 +297,8 @@ enum L10n: String, CaseIterable {
     case ipNotChecked                       // "Not checked yet"
     case ipDnsLeak                          // "IPs differ — possible DNS leak"
     case ipSourcesAgree_fmt                 // "✓ %@ (%d sources)"
-    case ipLastCheck_fmt                    // "Last check: %@"
     case socksProxyAddr_fmt                 // "SOCKS5 proxy: 127.0.0.1:%@"
     case portInUseByTunnel                  // "in use by tunnel"
-    case statusUnreachable                  // "unreachable"
     case roomPrefix_fmt                     // "room: %@"
     case qrCodeURIA11y                      // "Connection URI QR Code"
     case qrCodeHintA11y                     // "Scan this code to import the connection on another device"

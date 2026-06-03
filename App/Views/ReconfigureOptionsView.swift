@@ -6,6 +6,9 @@ import SwiftUI
 // Identical layout to InstallOptionsView but with a different title and
 // confirm-button label — no apt-get / go build, just stop + restart the
 // existing container with new -carrier/-id/-transport flags.
+//
+// #258: carrier / transport use OlcChipPicker; the confirm action is a single
+// full-width OlcButton(.primary) footer, with one close (✕) control.
 
 struct ReconfigureOptionsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -32,25 +35,9 @@ struct ReconfigureOptionsView: View {
             }
             .navigationTitle(L10n.reconfigureTitle.localized())
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.cancel.localized()) { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.actionChangeRoomTransport.localized()) {
-                        let cleanedRoom = roomID
-                            .components(separatedBy: .whitespacesAndNewlines)
-                            .joined()
-                        onConfirm(InstallOptions(
-                            carrier:   carrier,
-                            transport: transport,
-                            roomID:    requiresRoomID ? cleanedRoom : ""
-                        ))
-                        dismiss()
-                    }
-                    .disabled(!canSubmit)
-                }
-            }
+            // #262: shared sheet chrome (✕ close + full-width primary footer).
+            .olcSheet(confirm: L10n.actionChangeRoomTransport.localized(),
+                      icon: "slider.horizontal.3", disabled: !canSubmit) { submit() }
         }
     }
 
@@ -58,23 +45,18 @@ struct ReconfigureOptionsView: View {
 
     private var carrierSection: some View {
         Section(L10n.sectionCarrier.localized()) {
-            Picker(L10n.sectionCarrier.localized(), selection: $carrier) {
-                ForEach(CarrierTransportMatrix.carriers, id: \.self) { Text($0).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: carrier) { _, c in
-                transport = CarrierTransportMatrix.defaultTransport(for: c)
-            }
+            OlcChipPicker(selection: $carrier,
+                          options: CarrierTransportMatrix.carriers.map { ($0, $0) })
+                .onChange(of: carrier) { _, c in
+                    transport = CarrierTransportMatrix.defaultTransport(for: c)
+                }
         }
     }
 
     private var transportSection: some View {
         Section {
-            Picker(L10n.labelTransport.localized(), selection: $transport) {
-                ForEach(CarrierTransportMatrix.transports, id: \.self) { t in
-                    Text(t).tag(t)
-                }
-            }
+            OlcChipPicker(selection: $transport,
+                          options: CarrierTransportMatrix.transports.map { ($0, $0) })
         } header: {
             Text(L10n.transportSectionHeader.localized())
         } footer: {
@@ -111,6 +93,20 @@ struct ReconfigureOptionsView: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
+    }
+
+    // MARK: Logic
+
+    private func submit() {
+        let cleanedRoom = roomID
+            .components(separatedBy: .whitespacesAndNewlines)
+            .joined()
+        onConfirm(InstallOptions(
+            carrier:   carrier,
+            transport: transport,
+            roomID:    requiresRoomID ? cleanedRoom : ""
+        ))
+        dismiss()
     }
 
     // MARK: Footer helpers

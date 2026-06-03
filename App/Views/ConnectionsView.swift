@@ -2,23 +2,20 @@ import SwiftUI
 
 // MARK: - ConnectionsView
 //
-// Shadowrocket-style layout, top to bottom:
+// Home tab, top to bottom:
+//   1. Hero          — OlcStatusPill (dot + state) + the big connect Toggle, with
+//                      the SOCKS5 line / a failure + Retry under a hairline.
+//   2. Routing       — OlcSegmented (today only "All through tunnel"; the enum
+//                      grows when rules/direct/scene land).
+//   3. Diagnostics   — ONE card: IP-check row + speed-test row, identical
+//                      secondary buttons. (#258 — was two separate sections.)
+//   4. Servers       — grouped rows. Tap a row = set primary (gold star). Each row
+//                      carries a single OlcOverflowMenu with the COMPLETE action set.
 //
-//   1. Global toggle    — big on/off that connects the primary server
-//                         and shows which server is selected.
-//   2. Routing          — picker for how traffic is split (today: only
-//                         "All through tunnel"; future: direct / rules / scene).
-//   3. IP check         — runs direct or via tunnel depending on state.
-//   4. Speed test       — same routing logic as IP check.
-//   5. Server list      — grouped by `groupName`. Tap a row to mark it as
-//                         primary (gold star). Pencil opens the edit sheet.
-//
-// "Primary" semantics:
-//   - One connection at a time can be primary. With a single saved server
-//     it is implicitly primary even if primaryID is nil.
-//   - The global toggle always acts on the primary.
-//   - Tapping a non-primary row switches the primary; toggle then needs
-//     to be flipped to actually connect.
+// #258: the per-row actions used to be split between a long-press gesture
+// (runCheckReady), a standalone pencil button, and a hidden contextMenu. They are
+// now all in the one visible OlcOverflowMenu; the row keeps only tap-to-set-primary
+// and the ping chip.
 
 struct ConnectionsView: View {
     @ObservedObject var store   : ConnectionStore
@@ -33,19 +30,19 @@ struct ConnectionsView: View {
     @State private var qrConn         : ConnectionRecord?
     @State private var shareConn      : ConnectionRecord?
     @State private var pendingQRConn  : ConnectionRecord?
+    /// #264: timestamp of the last IP check, shown as a small caption.
     @State private var ipCheckTime    : Date?
 
     /// Per-row ping state, keyed by connection id. Absent = never pinged.
     @State private var pingState      : [UUID: PingRowState] = [:]
 
-    /// Transient state of the per-row latency probe (#234).
     private enum PingRowState: Equatable {
         case pinging
         case done(PingOutcome)
     }
 
-    /// Per-row time-to-ready check state (#242). When present it overlays the
-    /// ping chip with a stopwatch result; a re-ping (tap) clears it.
+    /// Per-row time-to-ready check state (#242). Overlays the ping chip with a
+    /// stopwatch result; a re-ping (tap) clears it.
     @State private var checkState     : [UUID: CheckRowState] = [:]
 
     private enum CheckRowState: Equatable {
@@ -53,21 +50,39 @@ struct ConnectionsView: View {
         case done(PingOutcome)
     }
 
-    private var routingMode: RoutingMode {
-        RoutingMode(rawValue: routingRaw) ?? .allTunnel
-    }
+    private var routingMode: RoutingMode { RoutingMode(rawValue: routingRaw) ?? .allTunnel }
 
-    private var currentMode: RouteMode {
-        tunnel.state.isConnected ? .tunnel : .direct
-    }
+    private var currentMode: RouteMode { tunnel.state.isConnected ? .tunnel : .direct }
 
     var body: some View {
         NavigationStack {
             List {
-                globalSection
-                routingSection
-                ipSection
-                speedSection
+                Section { heroCard.olcCardRow() }
+
+                Section {
+                    OlcCard {
+                        OlcSegmented(selection: routingBinding,
+                                     options: RoutingMode.allCases.map { ($0, $0.title) })
+                    }
+                    .olcCardRow()
+                } header: {
+                    Text(L10n.routingHeader.localized())
+                }
+
+                Section {
+                    OlcCard(padding: 0) {
+                        VStack(spacing: 0) {
+                            ipRow
+                            Divider().overlay(Theme.Palette.separator)
+                            speedRow
+                        }
+                        .padding(.horizontal, Theme.Metrics.cardPadding)
+                    }
+                    .olcCardRow()
+                } header: {
+                    Text(L10n.diagnosticsTitle.localized())
+                }
+
                 serversSection
             }
             .navigationTitle("OlcRTC")
@@ -95,9 +110,7 @@ struct ConnectionsView: View {
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
-                                Button(L10n.actionDone.localized()) {
-                                    qrConn = nil
-                                }
+                                Button(L10n.actionDone.localized()) { qrConn = nil }
                             }
                         }
                 }
@@ -115,126 +128,79 @@ struct ConnectionsView: View {
         }
     }
 
-    // MARK: Share connection sheet
+    // MARK: 1. Hero
 
-    @ViewBuilder
-    private func shareConnectionSheet(_ conn: ConnectionRecord) -> some View {
-        let uri = Self.uriOf(conn)
-        NavigationStack {
-            List {
-                Section {
-                    Text(L10n.shareConnectionExplanation.localized())
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+    private var heroCard: some View {
+        OlcCard {
+            VStack(alignment: .leading, spacing: 12) {
+                OlcStatusPill(tone: heroTone, title: heroTitle) {
+                    Toggle("", isOn: globalToggleBinding)
+                        .labelsHidden()
+                        .disabled(store.primary == nil || tunnel.state.isConnecting)
                 }
 
-                Section(L10n.shareConnectionURIHeader.localized()) {
-                    Text(uri)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(4)
-                        .textSelection(.enabled)
+                if let p = store.primary {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "server.rack")
+                                .font(.caption2)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                            Text(p.displayName)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.Palette.textPrimary)
+                        }
+                        Text(p.subtitle)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                    }
+                } else {
+                    Text(L10n.emptyNoConnectionsHint.localized())
+                        .font(.caption)
+                        .foregroundStyle(Theme.Palette.textSecondary)
                 }
 
-                Section {
-                    Button {
-                        UIPasteboard.general.string = uri
-                        shareConn = nil
-                        LogStore.shared.log(.connection, L10n.copiedURI_fmt.formatted(conn.displayName))
-                    } label: {
-                        Label(L10n.copyURIAction.localized(), systemImage: "doc.on.doc")
-                    }
-
-                    ShareLink(item: uri, subject: Text(conn.displayName)) {
-                        Label(L10n.shareAction.localized(), systemImage: "square.and.arrow.up")
-                    }
-
-                    Button {
-                        pendingQRConn = conn
-                        shareConn = nil
-                    } label: {
-                        Label(L10n.actionQR.localized(), systemImage: "qrcode")
+                if tunnel.state.isConnected {
+                    Divider().overlay(Theme.Palette.separator)
+                    HStack(spacing: 8) {
+                        Image(systemName: "globe")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                        Text(L10n.socksProxyAddr_fmt.formatted(String(SettingsStore.shared.socksPort)))
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(Theme.Palette.textSecondary)
                     }
                 }
-            }
-            .navigationTitle(L10n.shareConnectionTitle.localized())
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.actionDone.localized()) { shareConn = nil }
+
+                if case .failed(let msg) = tunnel.state {
+                    Divider().overlay(Theme.Palette.separator)
+                    HStack(alignment: .center, spacing: 10) {
+                        Text(msg)
+                            .font(.caption)
+                            .foregroundStyle(Theme.Palette.red)
+                        Spacer(minLength: 4)
+                        if let p = store.primary {
+                            OlcButton(L10n.actionRetry.localized(), systemImage: "arrow.clockwise", role: .danger) {
+                                tunnel.connect(record: p)
+                            }
+                        }
+                    }
                 }
             }
         }
-        .presentationDetents([.medium, .large])
     }
 
-    // MARK: 1. Global toggle
+    private var heroTone: OlcStatusTone {
+        if tunnel.state.isConnected { return .ok }
+        if tunnel.state.isConnecting { return .progress }
+        if case .failed = tunnel.state { return .error }
+        return .unknown
+    }
 
-    private var globalSection: some View {
-        Section {
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(tunnel.state.isConnected
-                         ? L10n.stateConnected.localized()
-                         : L10n.stateDisconnected.localized())
-                        .font(.headline)
-                        .foregroundStyle(tunnel.state.isConnected ? .green : .primary)
-                    if let p = store.primary {
-                        VStack(alignment: .leading, spacing: 1) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "server.rack")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                Text(p.displayName)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(p.subtitle)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    } else {
-                        Text(L10n.emptyNoConnectionsHint.localized())
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-
-                if tunnel.state.isConnecting {
-                    ProgressView()
-                }
-
-                Toggle("", isOn: globalToggleBinding)
-                    .labelsHidden()
-                    .disabled(store.primary == nil || tunnel.state.isConnecting)
-                    .scaleEffect(1.1)
-            }
-            .padding(.vertical, 4)
-
-            if tunnel.state.isConnected {
-                Text(L10n.socksProxyAddr_fmt.formatted(String(SettingsStore.shared.socksPort)))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-
-            if case .failed(let msg) = tunnel.state {
-                HStack(alignment: .top, spacing: 8) {
-                    Text(msg)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                    Spacer(minLength: 4)
-                    if let p = store.primary {
-                        Button(L10n.actionRetry.localized()) {
-                            tunnel.connect(record: p)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                        .tint(.red)
-                    }
-                }
-            }
-        }
+    private var heroTitle: String {
+        if tunnel.state.isConnected { return L10n.stateConnected.localized() }
+        if tunnel.state.isConnecting { return L10n.stateConnecting.localized() }
+        if case .failed = tunnel.state { return L10n.stateConnectFailed.localized() }
+        return L10n.stateDisconnected.localized()
     }
 
     private var globalToggleBinding: Binding<Bool> {
@@ -251,230 +217,146 @@ struct ConnectionsView: View {
     }
 
     // MARK: 2. Routing
-    //
-    // Single-line row: label on the left, current value on the right via
-    // an inline Menu. Keeps the section compact while preserving the
-    // ability to pick between modes once we add more options.
 
-    private var routingSection: some View {
-        Section(L10n.routingHeader.localized()) {
-            HStack {
-                Text(L10n.typeField.localized())
-                Spacer()
-                Menu {
-                    ForEach(RoutingMode.allCases) { mode in
-                        Button(mode.title) {
-                            let prev = routingMode
-                            routingRaw = mode.rawValue
-                            if prev != mode {
-                                LogStore.shared.log(.connection,
-                                    "↻ routing mode: \(prev.title) → \(mode.title)")
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(routingMode.title)
-                            .foregroundStyle(.secondary)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
+    private var routingBinding: Binding<RoutingMode> {
+        Binding(
+            get: { routingMode },
+            set: { newMode in
+                let prev = routingMode
+                routingRaw = newMode.rawValue
+                if prev != newMode {
+                    LogStore.shared.log(.connection,
+                        "↻ routing mode: \(prev.title) → \(newMode.title)")
                 }
             }
+        )
+    }
+
+    // MARK: 3. Diagnostics (merged IP-check + speed-test)
+
+    private var ipRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.ipCheckTitle.localized())
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                ipStatusContent
+                // #264: last-check time (restored — the redesign had dropped it).
+                if let t = ipCheckTime, !ipCheck.isChecking {
+                    Label(t.formatted(date: .omitted, time: .shortened), systemImage: "clock")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+            }
+            Spacer(minLength: 8)
+            OlcButton(L10n.ipCheckRun.localized(), role: .secondary, isBusy: ipCheck.isChecking) {
+                Task { await ipCheck.checkAll(via: currentMode); ipCheckTime = Date() }
+            }
         }
+        .padding(.vertical, 12)
     }
 
-    // MARK: 3. IP check
-    //
-    // Compact: just service → IP rows (no route badge — routing policy is
-    // already visible in the Routing section above).
-    //
-    // Collapsed view: when all sources return the same IP, show a single
-    // green "✓ <ip> (N sources)" row.  When IPs differ, show each row with
-    // a red ⚠️ warning above to alert the user of a possible DNS leak.
-
-    private var ipCheckCollapsed: Bool {
-        let ips = ipCheck.results.compactMap { $0.ip }
-        guard ips.count >= 2 else { return false }
-        return Set(ips).count == 1
-    }
-
-    private var ipCheckSummaryIP: String? {
-        ipCheck.results.compactMap { $0.ip }.first
-    }
-
-    private var ipCheckHasResults: Bool {
-        ipCheck.results.contains { $0.ip != nil || $0.error != nil }
-    }
-
-    private var ipCheckAllDone: Bool {
-        !ipCheck.results.isEmpty && ipCheck.results.allSatisfy { $0.ip != nil || $0.error != nil }
-    }
-
-    private var ipSection: some View {
-        Section {
-            if ipCheck.isChecking {
-                HStack {
-                    ProgressView()
-                        .padding(.trailing, 6)
-                    Text(L10n.ipChecking.localized())
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if !ipCheckHasResults {
-                Text(L10n.ipNotChecked.localized())
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if ipCheckCollapsed, let ip = ipCheckSummaryIP {
-                HStack {
-                    Text(L10n.ipSourcesAgree_fmt.formatted(ip, ipCheck.results.filter { $0.ip != nil }.count))
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.green)
-                    Spacer()
-                }
-            } else {
-                if ipCheckAllDone {
-                    let uniqueIPs = Set(ipCheck.results.compactMap { $0.ip })
-                    if uniqueIPs.count > 1 {
-                        HStack(spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                                .font(.caption)
-                            Text(L10n.ipDnsLeak.localized())
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                        }
+    @ViewBuilder
+    private var ipStatusContent: some View {
+        if ipCheck.isChecking {
+            Text(L10n.ipChecking.localized())
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(Theme.Palette.textSecondary)
+        } else if !ipCheckHasResults {
+            Text(L10n.ipNotChecked.localized())
+                .font(.caption)
+                .foregroundStyle(Theme.Palette.textSecondary)
+        } else if ipCheckCollapsed, let ip = ipCheckSummaryIP {
+            Text(L10n.ipSourcesAgree_fmt.formatted(ip, ipCheck.results.filter { $0.ip != nil }.count))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(Theme.Palette.green)
+        } else {
+            VStack(alignment: .leading, spacing: 3) {
+                // DNS-leak warning: sources returned different IPs.
+                if ipCheckAllDone, Set(ipCheck.results.compactMap { $0.ip }).count > 1 {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.Palette.red)
+                        Text(L10n.ipDnsLeak.localized())
+                            .font(.caption)
+                            .foregroundStyle(Theme.Palette.red)
                     }
                 }
                 ForEach(ipCheck.results) { r in
                     HStack {
                         Text(r.label)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.caption2)
+                            .foregroundStyle(Theme.Palette.textSecondary)
                         Spacer()
                         if let ip = r.ip {
-                            Text(ip).font(.system(.caption, design: .monospaced))
+                            Text(ip).font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(Theme.Palette.textPrimary)
                         } else if let err = r.error {
-                            Text(err).font(.caption2).foregroundStyle(.red)
+                            Text(err).font(.caption2).foregroundStyle(Theme.Palette.red)
                                 .lineLimit(1).truncationMode(.middle)
                         } else {
-                            Text("—").foregroundStyle(.secondary)
+                            Text("—").foregroundStyle(Theme.Palette.textSecondary)
                         }
                     }
                 }
             }
-
-            HStack {
-                Button {
-                    Task {
-                        await ipCheck.checkAll(via: currentMode)
-                        ipCheckTime = Date()
-                    }
-                } label: {
-                    Label(L10n.ipCheckRun.localized(), systemImage: "globe")
-                }
-                .buttonStyle(.bordered)
-                .disabled(ipCheck.isChecking)
-                Spacer()
-                if ipCheck.isChecking { ProgressView() }
-                else if let t = ipCheckTime {
-                    Text(L10n.ipLastCheck_fmt.formatted(Self.shortTimeFormatter.string(from: t)))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        } header: {
-            Text(L10n.ipCheckTitle.localized())
         }
     }
 
-    // MARK: 4. Speed test
-    //
-    // One-line indicators: ping · download · upload with units inline.
-    // Service name lives in a small grey caption below the values so the
-    // user can see which endpoint produced the numbers without taking
-    // multiple rows of vertical space.
-
-    private var speedSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 14) {
-                    let pingStr = speed.lastResult?.pingMs.map { String(format: "%.0f ms", $0) }
-                    let dlStr   = speed.lastResult?.downloadMbps.map { String(format: "%.1f Mbps", $0) }
-                    let ulStr   = speed.lastResult?.uploadMbps.map { String(format: "%.1f Mbps", $0) }
-                    speedMetric("Ping", pingStr, accessibilityLabel: "Ping: \(pingStr ?? "—")")
-                    speedMetric("DL",   dlStr,   accessibilityLabel: "Download: \(dlStr ?? "—")")
-                    speedMetric("UL",   ulStr,   accessibilityLabel: "Upload: \(ulStr ?? "—")")
-                    Spacer()
-                }
-                Text(speed.lastResult?.service ?? "speed.cloudflare.com")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+    private var speedRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: 18) {
+                OlcMetric(label: "Ping", value: speedValue(speed.lastResult?.pingMs, "%.0f ms"))
+                OlcMetric(label: "DL",   value: speedValue(speed.lastResult?.downloadMbps, "%.1f"))
+                OlcMetric(label: "UL",   value: speedValue(speed.lastResult?.uploadMbps, "%.1f"))
             }
-
-            HStack {
-                Button {
-                    Task { await speed.run(via: currentMode) }
-                } label: {
-                    Label(L10n.speedTestRun.localized(), systemImage: "speedometer")
-                }
-                .buttonStyle(.bordered)
-                .disabled(speed.isTesting)
-                Spacer()
-                if speed.isTesting { ProgressView() }
+            Spacer(minLength: 8)
+            OlcButton(L10n.speedTestRun.localized(), role: .secondary, isBusy: speed.isTesting) {
+                Task { await speed.run(via: currentMode) }
             }
-        } header: {
-            Text(L10n.speedTestTitle.localized())
         }
+        .padding(.vertical, 12)
     }
 
-    private static let shortTimeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.timeStyle = .short
-        f.dateStyle = .none
-        return f
-    }()
+    private func speedValue(_ v: Double?, _ format: String) -> String {
+        if speed.isTesting { return "…" }
+        guard let v else { return "—" }
+        return String(format: format, v)
+    }
 
-    /// Reassembles the original `olcrtc://` URI for sharing. The context
-    /// menu on a server row exposes this to the user via Copy + ShareLink.
+    // IP-check display helpers (unchanged logic).
+    private var ipCheckCollapsed: Bool {
+        let ips = ipCheck.results.compactMap { $0.ip }
+        guard ips.count >= 2 else { return false }
+        return Set(ips).count == 1
+    }
+    private var ipCheckSummaryIP: String? { ipCheck.results.compactMap { $0.ip }.first }
+    private var ipCheckHasResults: Bool { ipCheck.results.contains { $0.ip != nil || $0.error != nil } }
+    private var ipCheckAllDone: Bool {
+        !ipCheck.results.isEmpty && ipCheck.results.allSatisfy { $0.ip != nil || $0.error != nil }
+    }
+
+    /// Reassembles the original `olcrtc://` URI for sharing / copy / QR.
     private static func uriOf(_ conn: ConnectionRecord) -> String {
         switch conn.details {
         case .olcrtc(let p): return OlcrtcURI.encode(p)
         }
     }
 
-    private func speedMetric(_ label: String, _ value: String?, accessibilityLabel: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            Text(value ?? "—")
-                .font(.system(.callout, design: .monospaced))
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
-    }
-
-    // MARK: 5. Server list (grouped)
+    // MARK: 4. Server list (grouped)
 
     private var serversSection: some View {
         Group {
             if store.connections.isEmpty {
                 Section {
-                    VStack(spacing: 10) {
-                        Image(systemName: "network")
-                            .font(.system(size: 30))
-                            .foregroundStyle(.secondary)
-                        Text(L10n.emptyNoConnections.localized())
-                            .font(.headline)
-                        Text(L10n.emptyNoConnectionsHint.localized())
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
+                    OlcEmptyState(systemImage: "network",
+                                  title: L10n.emptyNoConnections.localized(),
+                                  hint: L10n.emptyNoConnectionsHint.localized(),
+                                  ctaTitle: L10n.newConnectionTitle.localized()) {
+                        showAdd = true
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
+                    .olcCardRow()
                 }
             } else {
                 ForEach(store.grouped(), id: \.group) { group in
@@ -492,92 +374,45 @@ struct ConnectionsView: View {
         let isPrimary = store.primary?.id == conn.id
 
         return HStack(spacing: 12) {
-            // Primary marker on the left
             ZStack {
                 Circle()
-                    .strokeBorder(isPrimary ? Color.yellow : Color.secondary.opacity(0.3),
+                    .strokeBorder(isPrimary ? Theme.Palette.star : Theme.Palette.textTertiary,
                                   lineWidth: 1.5)
                     .frame(width: 24, height: 24)
                 if isPrimary {
                     Image(systemName: "star.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.yellow)
+                        .foregroundStyle(Theme.Palette.star)
                 }
             }
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(conn.displayName)
+                        .foregroundStyle(Theme.Palette.textPrimary)
                     if isPrimary {
                         Text(L10n.primaryRoleMain.localized())
                             .font(.caption2)
                             .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Color.yellow.opacity(0.2))
+                            .background(Theme.Palette.starWeak)
                             .clipShape(Capsule())
+                            .foregroundStyle(Theme.Palette.star)
                     }
                 }
                 Text(conn.subtitle)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.textSecondary)
             }
 
             Spacer()
 
             pingButton(conn)
-
-            // DO NOT REMOVE — primary quick-edit affordance; also in context menu but less discoverable there.
-            Button { editConn = conn } label: {
-                Image(systemName: "pencil.circle").foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
+            // #258 was: a standalone pencil quick-edit button — removed (Edit is in
+            // the overflow menu and the swipe action).
+            OlcOverflowMenu(items: serverMenuItems(conn))
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            store.setPrimary(conn.id)
-        }
-        .contextMenu {
-            if store.primary?.id != conn.id {
-                Button {
-                    store.setPrimary(conn.id)
-                    tunnel.connect(record: conn)
-                } label: {
-                    Label(L10n.actionConnect.localized(), systemImage: "play.fill")
-                }
-            }
-            Button {
-                runPing(conn)
-            } label: {
-                Label(L10n.pingButtonA11y.localized(), systemImage: "bolt.horizontal.circle")
-            }
-            Button {
-                runCheckReady(conn)
-            } label: {
-                Label(L10n.checkReadyA11y.localized(), systemImage: "stopwatch")
-            }
-            Button {
-                shareConn = conn
-            } label: {
-                Label(L10n.shareConnectionTitle.localized(), systemImage: "square.and.arrow.up")
-            }
-            Button {
-                let uri = Self.uriOf(conn)
-                UIPasteboard.general.string = uri
-                LogStore.shared.log(.connection, L10n.copiedURI_fmt.formatted(conn.displayName))
-            } label: {
-                Label(L10n.copyURIAction.localized(), systemImage: "doc.on.doc")
-            }
-            Button {
-                qrConn = conn
-            } label: {
-                Label(L10n.actionQR.localized(), systemImage: "qrcode")
-            }
-            Divider()
-            Button {
-                editConn = conn
-            } label: {
-                Label(L10n.edit.localized(), systemImage: "pencil")
-            }
-        }
+        .onTapGesture { store.setPrimary(conn.id) }
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) {
                 if let i = store.connections.firstIndex(where: { $0.id == conn.id }) {
@@ -593,57 +428,91 @@ struct ConnectionsView: View {
         }
     }
 
-    // MARK: Per-connection ping (#234)
+    /// #258: the single COMPLETE action set for a row — what was previously split
+    /// across a long-press gesture, a pencil button, and a contextMenu.
+    private func serverMenuItems(_ conn: ConnectionRecord) -> [OlcMenuItem] {
+        var items: [OlcMenuItem] = []
+        if store.primary?.id != conn.id {
+            items.append(.action(L10n.actionConnect.localized(), systemImage: "play.fill") {
+                store.setPrimary(conn.id)
+                tunnel.connect(record: conn)
+            })
+        }
+        items.append(.action(L10n.pingButtonA11y.localized(), systemImage: "bolt.horizontal.circle") {
+            runPing(conn)
+        })
+        // #258: time-to-ready check is now a normal menu item (was long-press only).
+        items.append(.action(L10n.checkReadyA11y.localized(), systemImage: "stopwatch") {
+            runCheckReady(conn)
+        })
+        items.append(.divider)
+        items.append(.action(L10n.shareConnectionTitle.localized(), systemImage: "square.and.arrow.up") {
+            shareConn = conn
+        })
+        items.append(.action(L10n.copyURIAction.localized(), systemImage: "doc.on.doc") {
+            UIPasteboard.general.string = Self.uriOf(conn)
+            LogStore.shared.log(.connection, L10n.copiedURI_fmt.formatted(conn.displayName))
+        })
+        items.append(.action(L10n.actionQR.localized(), systemImage: "qrcode") {
+            qrConn = conn
+        })
+        items.append(.divider)
+        items.append(.action(L10n.edit.localized(), systemImage: "pencil") { editConn = conn })
+        items.append(.action(L10n.actionRemoveFromList.localized(), systemImage: "trash", role: .destructive) {
+            if let i = store.connections.firstIndex(where: { $0.id == conn.id }) {
+                store.remove(at: IndexSet([i]))
+            }
+        })
+        return items
+    }
 
-    /// Trailing-edge latency affordance: a bolt icon that becomes a spinner
-    /// while probing, then a colored "<n> ms" chip (or a red bolt on failure).
-    /// Tapping re-runs the probe. Measures latency via an isolated MobilePing
-    /// client, so it works whether or not the main tunnel is connected.
+    // MARK: Per-connection ping (#234) + time-to-ready (#242)
+
+    /// Trailing ping chip: a bolt that becomes a spinner while probing, then a
+    /// coloured "<n> ms" pill (or a stopwatch result from #242). Tapping re-pings.
     @ViewBuilder
     private func pingButton(_ conn: ConnectionRecord) -> some View {
         Button {
             runPing(conn)
         } label: {
             pingChipLabel(conn)
+                .font(.caption2.monospacedDigit())
+                .frame(minWidth: 28, minHeight: 28)
+                .padding(.horizontal, 10)
+                .background(Theme.Palette.fill, in: Capsule())
         }
         .buttonStyle(.plain)
         .disabled(pingState[conn.id] == .pinging || checkState[conn.id] == .checking)
         .accessibilityLabel(L10n.pingButtonA11y.localized())
-        .accessibilityHint(L10n.checkReadyA11y.localized())
-        // #242: long-press runs the time-to-ready check (also in the context menu).
-        .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.4).onEnded { _ in runCheckReady(conn) }
-        )
+        // #258 was: .simultaneousGesture(LongPressGesture(...) { runCheckReady(conn) })
+        // — removed; "Check time-to-ready" is a visible item in the overflow menu.
     }
 
-    /// Chip content: a #242 time-to-ready result (stopwatch) takes precedence
-    /// over the #234 latency state when present; otherwise the bolt ping chip.
+    /// Chip content: a #242 time-to-ready result (stopwatch) takes precedence over
+    /// the #234 latency state; otherwise the bolt ping chip.
     @ViewBuilder
     private func pingChipLabel(_ conn: ConnectionRecord) -> some View {
         switch checkState[conn.id] {
         case .checking:
             ProgressView().controlSize(.mini)
         case .done(.success(let ms)):
-            HStack(spacing: 2) {
+            HStack(spacing: 3) {
                 Image(systemName: "stopwatch")
                 Text("\(ms) ms").monospacedDigit()
             }
-            .font(.caption2)
-            .foregroundStyle(.blue)
+            .foregroundStyle(Theme.Palette.accent)
         case .done(.failure):
-            Image(systemName: "stopwatch").foregroundStyle(.red)
+            Image(systemName: "stopwatch").foregroundStyle(Theme.Palette.red)
         case nil:
             switch pingState[conn.id] {
             case .pinging:
                 ProgressView().controlSize(.mini)
             case .done(.success(let ms)):
-                Text("\(ms) ms")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(Self.latencyColor(ms))
+                Text("\(ms) ms").foregroundStyle(Self.latencyColor(ms))
             case .done(.failure):
-                Image(systemName: "bolt.horizontal.circle").foregroundStyle(.red)
+                Image(systemName: "bolt.horizontal.circle").foregroundStyle(Theme.Palette.red)
             case nil:
-                Image(systemName: "bolt.horizontal.circle").foregroundStyle(.secondary)
+                Image(systemName: "bolt.horizontal.circle").foregroundStyle(Theme.Palette.textSecondary)
             }
         }
     }
@@ -665,7 +534,7 @@ struct ConnectionsView: View {
     }
 
     /// #242: isolated time-to-ready (WebRTC startup) check; result overlays the
-    /// ping chip with a stopwatch. Triggered by long-press or the context menu.
+    /// ping chip with a stopwatch. Triggered from the overflow menu.
     private func runCheckReady(_ conn: ConnectionRecord) {
         guard checkState[conn.id] != .checking else { return }
         checkState[conn.id] = .checking
@@ -682,13 +551,79 @@ struct ConnectionsView: View {
     }
 
     /// Green / orange / red thresholds for a SOCKS round-trip in milliseconds.
-    /// A WebRTC-tunnelled proxy adds latency over a raw link, so the bands are
-    /// deliberately looser than a bare-TCP ping would use.
     private static func latencyColor(_ ms: Int) -> Color {
         switch ms {
-        case ..<150:  return .green
-        case ..<400:  return .orange
-        default:      return .red
+        case ..<150:  return Theme.Palette.green
+        case ..<400:  return Theme.Palette.orange
+        default:      return Theme.Palette.red
         }
     }
+
+    // MARK: Share connection sheet
+
+    // #258: explanation + mono URI block (OlcCard) + three equal secondary actions.
+    @ViewBuilder
+    private func shareConnectionSheet(_ conn: ConnectionRecord) -> some View {
+        let uri = Self.uriOf(conn)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(L10n.shareConnectionExplanation.localized())
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(L10n.shareConnectionURIHeader.localized())
+                            .tracking(0.6)
+                            .font(Theme.Typography.sectionHeader)
+                            .textCase(.uppercase)
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                        OlcCard {
+                            Text(uri)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+
+                    VStack(spacing: 8) {
+                        OlcButton(L10n.copyURIAction.localized(), systemImage: "doc.on.doc",
+                                  role: .secondary, fillWidth: true) {
+                            UIPasteboard.general.string = uri
+                            shareConn = nil
+                            LogStore.shared.log(.connection, L10n.copiedURI_fmt.formatted(conn.displayName))
+                        }
+                        // ShareLink styled to match OlcButton(.secondary).
+                        ShareLink(item: uri, subject: Text(conn.displayName)) {
+                            Label(L10n.shareAction.localized(), systemImage: "square.and.arrow.up")
+                                .font(Theme.Typography.button)
+                                .foregroundStyle(Theme.Palette.accent)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: Theme.Metrics.controlHeight)
+                                .background(Theme.Palette.fill,
+                                            in: RoundedRectangle(cornerRadius: Theme.Metrics.controlRadius, style: .continuous))
+                        }
+                        OlcButton(L10n.actionQR.localized(), systemImage: "qrcode",
+                                  role: .secondary, fillWidth: true) {
+                            pendingQRConn = conn
+                            shareConn = nil
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle(L10n.shareConnectionTitle.localized())
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { shareConn = nil } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel(L10n.closeAction.localized())
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
 }
+
+// #262: `olcCardRow()` now lives in DesignSystem.swift (shared with ServersView).
