@@ -1,6 +1,11 @@
-# #253: Publish a prebuilt Mobile.xcframework so cloners can download it
-# (./scripts/fetch-framework.sh) instead of building from source. Runs when a
-# version tag (v*) is pushed, or manually against an existing tag.
+# #253: Publish, per version tag (v*), a prebuilt Mobile.xcframework (cloners
+# download it with ./scripts/fetch-framework.sh instead of building from source)
+# AND an unsigned olcrtc-ios-unsigned.ipa for sideloaders. Also runnable manually
+# against an existing tag.
+#
+# The framework is cached by the pinned upstream commit, so it is built once per
+# core version and reused (byte-identical) across releases. The release notes are
+# the (annotated) tag's own message — write it with `git tag -a vX -m "notes"`.
 name: Release framework
 
 on:
@@ -13,26 +18,43 @@ on:
         required: true
 
 permissions:
-  contents: write # create/update the GitHub Release and upload the asset
+  contents: write # create/update the GitHub Release and upload the assets
 
 jobs:
   framework:
-    name: Build & attach Mobile.xcframework
+    name: Build & attach Mobile.xcframework + unsigned .ipa
     runs-on: macos-15
     steps:
-      - name: Checkout (with olcrtc-upstream submodule)
+      - name: Checkout (tag + olcrtc-upstream submodule)
         uses: actions/checkout@v4
         with:
           submodules: recursive
           ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0 # full history + tag objects, so we can read the tag's message
+
+      # The framework is a pure function of the upstream commit — build it once per
+      # core version and reuse it across releases (a cache hit skips Go entirely and
+      # keeps the published bytes identical until the submodule pin moves).
+      - name: Resolve pinned upstream commit (cache key)
+        id: upstream
+        run: echo "sha=$(git -C olcrtc-upstream rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Mobile.xcframework
+        id: fwcache
+        uses: actions/cache@v4
+        with:
+          path: App/Mobile.xcframework
+          key: mobile-xcframework-${{ runner.os }}-${{ steps.upstream.outputs.sha }}
 
       - name: Set up Go (version from the submodule's go.mod)
+        if: steps.fwcache.outputs.cache-hit != 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: olcrtc-upstream/go.mod
           cache-dependency-path: olcrtc-upstream/go.sum
 
       - name: Build Mobile.xcframework
+        if: steps.fwcache.outputs.cache-hit != 'true'
         run: bash scripts/build-framework.sh
 
       # Archive root is Mobile.xcframework/ so fetch-framework.sh unzips straight
@@ -42,13 +64,44 @@ jobs:
           cd App
           zip -r -y ../Mobile.xcframework.zip Mobile.xcframework
 
-      - name: Attach to the release
+      # Release body = the annotated tag's message + an asset footer. A lightweight
+      # tag (no message) falls back to a one-line default.
+      - name: Build release notes
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if [ "$(git cat-file -t "$TAG" 2>/dev/null)" = "tag" ]; then
+            git tag -l --format='%(contents)' "$TAG" > notes.md
+          else
+            echo "Release $TAG." > notes.md
+          fi
+          {
+            echo
+            echo "---"
+            echo "**Assets**"
+            echo "- \`Mobile.xcframework.zip\` — prebuilt olcrtc core (device + simulator). Download: \`./scripts/fetch-framework.sh $TAG\`."
+            echo "- \`olcrtc-ios-unsigned.ipa\` — unsigned build for sideloading (AltStore / Sideloadly)."
+          } >> notes.md
+
+      - name: Create the release with the framework
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes "Prebuilt \`Mobile.xcframework\` for $TAG (device + simulator slices). Download with \`./scripts/fetch-framework.sh $TAG\` — see README -> Mobile.xcframework." \
-            Mobile.xcframework.zip \
-          || gh release upload "$TAG" Mobile.xcframework.zip --clobber
+          gh release create "$TAG" --title "$TAG" --notes-file notes.md Mobile.xcframework.zip \
+            || { gh release edit "$TAG" --notes-file notes.md; \
+                 gh release upload "$TAG" Mobile.xcframework.zip --clobber; }
+
+      # The unsigned .ipa depends on the Swift code (changes per tag), so it is
+      # always rebuilt — against the framework restored/built above.
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build the unsigned .ipa
+        run: bash scripts/package-ipa.sh
+
+      - name: Attach the unsigned .ipa
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" olcrtc-ios-unsigned.ipa --clobber

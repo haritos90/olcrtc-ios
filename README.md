@@ -45,101 +45,92 @@ The app manages the full lifecycle end to end:
 
 ## Requirements
 
-| Tool | Version | Install | Needed for |
-|------|---------|---------|------------|
-| **Xcode** — the full app, not just the Command Line Tools | 15+ | Mac App Store | building the app (iOS 17 target) — and the framework, since gomobile needs the iOS SDK |
-| [XcodeGen](https://github.com/yonaskolb/XcodeGen) | any | `brew install xcodegen` | generating `olcrtc-ios.xcodeproj` |
-| [gh CLI](https://cli.github.com) | any | `brew install gh` | downloading a prebuilt `Mobile.xcframework` |
-| Go | per `olcrtc-upstream/go.mod` | `brew install go` | only if you build `Mobile.xcframework` yourself |
+| Dependency | Needed for | Install |
+|------------|------------|---------|
+| **Xcode** — the full app, not just the Command Line Tools | Building the app, and the framework if you build it yourself (gomobile needs the iOS SDK) | Mac App Store |
+| **XcodeGen** | Generating `olcrtc-ios.xcodeproj` from `project.yml` | `brew install xcodegen` |
+| **GitHub CLI** (`gh`) | Downloading the prebuilt `Mobile.xcframework` | `brew install gh` |
+| **Go** | Only if you build `Mobile.xcframework` from source | `brew install go` |
 
-`Mobile.xcframework` — the gomobile-built olcrtc core (~228 MB) — is **not tracked in git**. Download a prebuilt copy or build it from source; see [Mobile.xcframework](#mobilexcframework).
+`Mobile.xcframework` — the gomobile-built olcrtc core (~228 MB) — is **not tracked in git**; you fetch or build it once, in step 3 below.
+
+<details>
+<summary><b>First-time toolchain setup</b> — Homebrew, and pointing at the full Xcode</summary>
+
+Install [Homebrew](https://brew.sh) if you don't have it, then the tools above — `brew install xcodegen gh` (add `go` if you'll build the framework yourself).
+
+The command line must point at the **full Xcode**, not the standalone Command Line Tools, or gomobile can't find the iOS SDK. Check with `xcode-select -p`; if it prints `CommandLineTools`, switch it and accept the licence:
+
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
+```
+</details>
 
 ---
 
-## Quick start
+## Build and run
 
 ```bash
-# 1. Prerequisites (Homebrew + full Xcode from the App Store assumed).
-#    `xcode-select -p` should print /Applications/Xcode.app/... — if it prints
-#    CommandLineTools, run:
-#    sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-brew install xcodegen gh                   # add `go` too if you'll build the framework yourself
-
-# 2. Clone the app and the olcrtc core submodule.
 git clone https://github.com/haritos90/olcrtc-ios.git
 cd olcrtc-ios
-git submodule update --init --recursive    # pulls olcrtc core into olcrtc-upstream/
+git submodule update --init --recursive     # fetches the olcrtc core into olcrtc-upstream/
 
-# 3. Get App/Mobile.xcframework (not in git). Download the prebuilt…
-gh auth login                              # one-time GitHub login (needed for the download)
-./scripts/fetch-framework.sh               # grabs the latest release's framework
-#    …or build it from source — see "Mobile.xcframework" below:
-# ./scripts/build-framework.sh
-
-# 4. Generate the Xcode project and open it.
-xcodegen generate --spec project.yml
+./scripts/fetch-framework.sh                 # downloads the prebuilt Mobile.xcframework
+xcodegen generate --spec project.yml         # writes olcrtc-ios.xcodeproj
 open olcrtc-ios.xcodeproj
 ```
 
-Set your development team in Xcode (or in `project.yml` → `DEVELOPMENT_TEAM`), then build and run.
+Set your signing team in Xcode (or `project.yml` → `DEVELOPMENT_TEAM`), then build and run.
 
-> Seeing `release not found` from `fetch-framework.sh`? There's no published [release](../../releases) to download yet — or the one for a just-pushed tag is still building and appears a minute or two later. [Build from source](#build-from-source) in the meantime.
+<details>
+<summary><b>Logging in to <code>gh</code></b> — once, for the framework download</summary>
 
----
-
-## Mobile.xcframework
-
-The olcrtc core ships inside the app as `App/Mobile.xcframework`, compiled from
-`olcrtc-upstream/mobile/mobile.go` with gomobile. It is **not tracked in git**
-(~228 MB) — get it one of two ways.
-
-### Download a prebuilt (recommended)
-
-Each [GitHub Release](../../releases) has the framework attached as `Mobile.xcframework.zip`,
-built automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml) when a
-`v*` tag is pushed. Once a release exists:
+`fetch-framework.sh` pulls `Mobile.xcframework` from a GitHub Release, so you sign in once:
 
 ```bash
-gh auth login                           # one-time, if you haven't logged in yet
-./scripts/fetch-framework.sh            # latest release
-./scripts/fetch-framework.sh v1.2.211   # a specific tag
+gh auth login
 ```
 
-`release not found` means there is no published release yet — or a tag's release is still
-building (it appears a minute or two after the tag is pushed). Wait for it, or build from source.
+`release not found` means no Release has been published for that tag yet — a freshly pushed tag's Release is built by CI and appears shortly after. Build the framework from source in the meantime ↓.
+</details>
 
-### Build from source
+<details>
+<summary><b>Building <code>Mobile.xcframework</code> from source</b> — instead of downloading it</summary>
 
-This compiles an iOS framework, so you need the **full Xcode** (not just the Command Line
-Tools — gomobile needs the iOS SDK), plus Go.
+Needs the full Xcode (gomobile uses the iOS SDK) and Go; the script installs gomobile if it's missing:
 
 ```bash
-# 1. Point the toolchain at full Xcode and accept its licence (once per machine).
-#    Skip if `xcode-select -p` already prints /Applications/Xcode.app/...
-sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-sudo xcodebuild -license accept
-
-# 2. Install Go (the version pinned in olcrtc-upstream/go.mod).
-brew install go
-
-# 3. Build — the script installs gomobile if needed, then binds the framework.
 ./scripts/build-framework.sh
 ```
 
-Under the hood, step 3 just runs this from the `olcrtc-upstream/` submodule:
+Under the hood it runs this from the `olcrtc-upstream/` submodule:
 
 ```bash
 gomobile bind -target=ios -o ../App/Mobile.xcframework ./mobile
 ```
 
-It takes ~5 minutes on the first run (mostly Go module downloads); `-target=ios` produces both
-the device and simulator slices.
+`-target=ios` produces both the device and simulator slices. `gomobile: -target="ios" requires Xcode` means the toolchain is still on the Command Line Tools — see *First-time toolchain setup*.
+</details>
 
-> **`gomobile: -target="ios" requires Xcode`** means you're still on the Command Line Tools.
-> Run the `xcode-select` line from step 1, then retry.
+---
 
-Either way — download or build — run `xcodegen generate --spec project.yml` afterwards so Xcode
-picks up the framework (`xcodegen` doesn't watch the filesystem).
+## Updating
+
+Pull the latest app and core, then regenerate the project:
+
+```bash
+git pull
+git submodule update --init --recursive     # advances the olcrtc core if its pin moved
+xcodegen generate --spec project.yml
+```
+
+`Mobile.xcframework` is gitignored, so `git pull` never changes it — your local copy carries over, and ordinary Swift edits don't need it rebuilt. Refresh it **only when the olcrtc core changed** (the `olcrtc-upstream` submodule pin moved) and you want that new core compiled in:
+
+```bash
+./scripts/fetch-framework.sh                 # download the rebuilt one, or
+./scripts/build-framework.sh                 # build it yourself
+```
 
 ---
 
@@ -165,21 +156,16 @@ app needs no paid-only entitlements, so a free Apple ID is enough.
 ### Build the .ipa yourself
 
 Needs the **full Xcode** (same iOS SDK requirement as the framework build) and an existing
-`App/Mobile.xcframework`.
+`App/Mobile.xcframework`. One script builds the unsigned `.ipa` (compile for device without
+signing, then wrap into `Payload/`):
 
 ```bash
-# Build the app for a device without signing, then wrap it into an .ipa.
-xcodebuild -project olcrtc-ios.xcodeproj -scheme olcrtc-ios -configuration Release \
-  -sdk iphoneos -derivedDataPath build \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
-
-cd build/Build/Products/Release-iphoneos
-rm -rf Payload && mkdir Payload && cp -R olcrtc-ios.app Payload/
-zip -qr ../../../../olcrtc-ios-unsigned.ipa Payload
-cd -
+./scripts/package-ipa.sh                 # → olcrtc-ios-unsigned.ipa
 ```
 
-Attach the result to a release with `gh release upload <tag> olcrtc-ios-unsigned.ipa`.
+You normally don't need to — every `v*` tag's [release workflow](.github/workflows/release.yml)
+builds and attaches `olcrtc-ios-unsigned.ipa` to the Release automatically, next to the framework.
+To attach one by hand: `gh release upload <tag> olcrtc-ios-unsigned.ipa`.
 
 ---
 
@@ -342,8 +328,8 @@ The framework is not in git — download or build it:
 ./scripts/build-framework.sh     # build from source (needs full Xcode + Go)
 ```
 
-See [Mobile.xcframework](#mobilexcframework) for the full prerequisites — including the
-full-Xcode requirement and the `gomobile … requires Xcode` fix.
+See [Build and run](#build-and-run) for the full prerequisites — including the full-Xcode
+requirement and the `gomobile … requires Xcode` fix.
 
 ---
 
