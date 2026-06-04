@@ -644,7 +644,7 @@ enum SSHRunner {
         podman image exists docker.io/library/golang:1.26-alpine3.22 2>/dev/null && echo 'IMAGE=yes' || echo 'IMAGE=no'
         printf 'CONTAINER='
         \(containerCmd)
-        df -h / 2>/dev/null | awk 'NR==2{printf "DISK=%s/%s\\n",$4,$2}'
+        df -h / 2>/dev/null | awk 'NR==2{printf "DISK=%s/%s\\n",$3,$2}'
         free -m 2>/dev/null | awk 'NR==2{printf "RAM=%sM/%sM\\n",$3,$2}'
         uptime 2>/dev/null | sed 's/.*up *//;s/,.*load.*//' | awk '{printf "UPTIME=%s\\n",$0}'
         """
