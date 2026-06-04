@@ -64,9 +64,20 @@ jobs:
       - name: Generate olcrtc-ios.xcodeproj
         run: xcodegen generate --spec project.yml
 
-      - name: Build & run tests (iPhone 16 simulator)
+      # The runner image's simulator set drifts between Xcode versions, so a
+      # hardcoded `name=iPhone 16` resolves to "OS:latest, name:iPhone 16" and
+      # fails when that exact device isn't installed (the current failure). Unit
+      # tests are model-agnostic — pick whatever iPhone the runner actually ships.
+      - name: Build & run tests
         run: |
+          UDID=$(xcrun simctl list devices available | grep -m1 'iPhone' | grep -oE '[0-9A-Fa-f-]{36}' || true)
+          if [ -z "$UDID" ]; then
+            echo "::error::No iPhone simulator available on this runner"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Testing on: $(xcrun simctl list devices available | grep -m1 'iPhone')"
           xcodebuild test \
             -project olcrtc-ios.xcodeproj \
             -scheme olcrtc-ios-tests \
-            -destination 'platform=iOS Simulator,name=iPhone 16'
+            -destination "id=$UDID"
