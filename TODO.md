@@ -43,9 +43,7 @@ in **ascending ID** order.
 
 Current, actionable work.
 
-| ID | Pri | Eff | Theme | Title |
-|---|---|---|---|---|
-| 268 | P2 | XS | ux | Manage VPS card shows **free** disk (df `$4`) as if used — show used (`$3`) to match RAM |
+_Nothing in progress right now — next candidates are in Backlog._
 
 ---
 
@@ -62,8 +60,8 @@ Future / blocked / someday. Promote to Open when picked up.
 | 114 | P3 | L | features | New protocols — vless / xray / reality / rprx-vision / awg 2.0 |
 | 115 | P2 | M | build | TestFlight: App Store Connect record + internal-testing build |
 | 135 | P3 | M | features | Share connection (full access: SSH creds + URI, for co-admin) |
-| 235 | P3 | L | features | Failover profiles — multi-profile install (BLOCKED on #247: client binding has no failover) |
-| 247 | P3 | L | build | Expose failover/profiles in the gomobile binding + rebuild xcframework (unblocks #235) |
+| 235 | P3 | L | features | Failover profiles — multi-profile install (BLOCKED on #247) |
+| 247 | P3 | L | build | Failover/profiles in the gomobile binding — **UPSTREAM-only** (rebuild xcframework; unblocks #235) |
 | 254 | P3 | XS | docs | CODE_OF_CONDUCT.md (Contributor Covenant) |
 | 255 | P3 | S | build | SwiftLint config + CI lint step |
 | 256 | P3 | S | reliability | Default Jitsi server: all users point at one public instance (`meet1.arbitr.ru`) |
@@ -136,6 +134,19 @@ exist yet) plus a `Mobile.xcframework` rebuild. Until this lands, end-to-end fai
 on iOS is only achievable via an app-level Swift loop whose client/server convergence
 is best-effort (they can sit on different profiles during the detection-skew window).
 
+**Decision (2026-06-04): UPSTREAM-only — do not fork or patch the submodule locally.**
+CI (`ci.yml`), `release.yml`, and every cloner's `fetch-framework.sh` build the framework
+from the *pinned* upstream commit, so a local edit to `olcrtc-upstream/mobile/mobile.go`
+would build on the maintainer's machine but break CI and every clone (the published
+framework wouldn't carry the new symbol, and the Swift calling it wouldn't link). The
+client entry point — sketch `StartWithProfiles(profilesSpec, clientID, keyHex, socksPort,
+socksUser, socksPass, retryDelayMillis, maxCycles)`: cycle an ordered carrier/room/transport
+list in the existing singleton slot, reusing `client.RunWithReady` with a per-profile
+handshake-timeout advance, mirroring `internal/supervisor`'s `retry_delay`/`max_cycles` —
+must therefore land in **upstream** `mobile/mobile.go`. Re-check on each `olcrtc-upstream`
+pull (the #260-style integration); **close when upstream ships it**, after which the iOS
+side is only an `OlcrtcEngine` wiring + a framework rebuild.
+
 ### 254 — CODE_OF_CONDUCT.md
 
 Adopt the standard Contributor Covenant. The only decision is the enforcement-contact
@@ -164,16 +175,6 @@ Write a short policy ("no personal data collected or transmitted; the encryption
 SSH credentials never leave the device / Keychain") and host it (GitHub Pages or a gist),
 then link it from App Store Connect and the README. Distinct from the in-bundle privacy
 manifest (#249).
-
-### 268 — Manage VPS card shows free disk, not used
-
-`SSHRunner.readinessScript` emits the disk stat with `df -h / | awk '…printf "DISK=%s/%s",$4,$2'`
-— `$4` is **Available** (free), `$2` is total. So a host with 3.3 GB used of 40 GB shows
-`36G / 40G`, which reads on the card as "used / total" and looks almost full (this is what made
-a healthy server look "full"). RAM right below it uses `$3` (used) / `$2` (total) and reads
-correctly. Fix: change the disk `awk` field `$4` → `$3` so it shows `used / total` consistently.
-Pure Swift in `SSHRunner.readinessScript` — not `scripts/srv.sh`, so no parity impact. Re-check
-the card after a probe.
 
 ---
 
@@ -435,3 +436,4 @@ title-only.
 | 265 | ux | AddConnectionView — manual URI entry | added a 1–3-line monospaced `TextField` (literal `olcrtc://…` placeholder) under the Scan/Paste buttons that auto-parses into the fields on change; restores typing / paste-and-edit that the redesign had dropped |
 | 266 | l10n | Remove L10n keys orphaned by the redesign | removed 19 unused keys (uriPlaceholder, parseURIAction, typeField, ipLastCheck_fmt, speedTestTitle, statusUnreachable, connectionLine_fmt, alertPasswordMissingDetail, status{Running,Done,Error}Title, actionDisconnect/Ping/Status, sectionInfo, installResultSuccessNotice, rebootingInProgress, scanContainerRow_fmt, uninstallConnectionAlsoRemoved_fmt) from the enum + both dicts; verified zero code refs; L10nTests per-locale count stays balanced |
 | 267 | ux | Runtime design-direction toggle (Refined/Console) in Settings | `SettingsStore.designConsole` (persisted @Published) drives the 6 direction-dependent Theme tokens (now `static var`: bg/card/segActive + control/card radii + card border); Settings «Theme» picker (Refined/Console); app reskins live via MainTabView's SettingsStore observation. Added L10n themeLabel/themeRefined/themeConsole |
+| 268 | ux | Manage VPS card shows free disk as if used | disk `awk` field `$4` (Available/free) → `$3` (Used) in `SSHRunner.readinessScript` so the card shows `used/total`, consistent with the RAM line right below it; pure Swift, no `srv.sh`/parity impact |
