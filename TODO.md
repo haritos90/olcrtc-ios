@@ -35,7 +35,7 @@ in **ascending ID** order.
 **Layout** — Open and Backlog come first, then their **Details** blocks, then the
 **Closed** history last, so the active work and its descriptions stay at the top.
 
-**Next free ID:** 268
+**Next free ID:** 269
 
 ---
 
@@ -45,6 +45,7 @@ Current, actionable work.
 
 | ID | Pri | Eff | Theme | Title |
 |---|---|---|---|---|
+| 268 | P2 | XS | ux | Manage VPS card shows **free** disk (df `$4`) as if used — show used (`$3`) to match RAM |
 
 ---
 
@@ -163,6 +164,16 @@ Write a short policy ("no personal data collected or transmitted; the encryption
 SSH credentials never leave the device / Keychain") and host it (GitHub Pages or a gist),
 then link it from App Store Connect and the README. Distinct from the in-bundle privacy
 manifest (#249).
+
+### 268 — Manage VPS card shows free disk, not used
+
+`SSHRunner.readinessScript` emits the disk stat with `df -h / | awk '…printf "DISK=%s/%s",$4,$2'`
+— `$4` is **Available** (free), `$2` is total. So a host with 3.3 GB used of 40 GB shows
+`36G / 40G`, which reads on the card as "used / total" and looks almost full (this is what made
+a healthy server look "full"). RAM right below it uses `$3` (used) / `$2` (total) and reads
+correctly. Fix: change the disk `awk` field `$4` → `$3` so it shows `used / total` consistently.
+Pure Swift in `SSHRunner.readinessScript` — not `scripts/srv.sh`, so no parity impact. Re-check
+the card after a probe.
 
 ---
 
