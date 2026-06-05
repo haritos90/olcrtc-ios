@@ -1,0 +1,43 @@
+# SwiftLint configuration (#255)
+#
+# Deliberately lenient starting point: keep the clearly-useful default rules, but
+# match the existing (already tidy) house style and never fail the build on a
+# style nit. Tighten over time — restore the length rules, enable opt-in rules,
+# and move CI to `--strict` once the codebase is annotated clean.
+#
+# Run locally: `swiftlint`  (CI runs it on every push/PR — see ci.yml).
+
+excluded:
+  - olcrtc-upstream          # vendored Go core (not ours)
+  - App/Mobile.xcframework   # generated gomobile binary
+  - .build
+  - build
+
+# House style deviates from a few defaults on purpose — disable those rather than
+# churn the codebase:
+disabled_rules:
+  - identifier_name          # short names are idiomatic here (s, e, t, p, ms, id)
+  - type_name                # a few intentional names (L10n, …)
+  - todo                     # work is tracked in TODO.md, not inline // TODO / FIXME
+  - line_length              # long doc-comments are intentional
+  - function_body_length
+  - type_body_length
+  - file_length
+  - cyclomatic_complexity
+  - function_parameter_count
+  - large_tuple              # e.g. preflight() returns a labelled 5-tuple by design
+  # The codebase deliberately *aligns* declarations into columns; these rules
+  # fight that style, so disable them (revisit if the alignment style is dropped):
+  - colon                    # `dns:        String` — aligned, not single-space
+  - comma                    # `a,    b` — aligned arguments
+  - trailing_comma           # trailing commas used in multi-line literals
+  - vertical_parameter_alignment
+  - opening_brace            # `var x: Bool  { … }` — aligned brace column
+  - implicit_optional_initialization  # explicit `= nil` is used for clarity
+
+opt_in_rules: []
+
+# Keep these enabled but only as warnings, so a first CI run (non-strict) can
+# never break on them; promote back to error when we tighten.
+force_cast: warning
+force_try: warning

@@ -35,13 +35,16 @@ in **ascending ID** order.
 **Layout** — Open and Backlog come first, then their **Details** blocks, then the
 **Closed** history last, so the active work and its descriptions stay at the top.
 
-**Next free ID:** 269
+**Next free ID:** 274
 
 ---
 
 ## Open
 
 Current, actionable work.
+
+| ID | Pri | Eff | Theme | Title |
+|---|---|---|---|---|
 
 _Nothing in progress right now — next candidates are in Backlog._
 
@@ -63,9 +66,8 @@ Future / blocked / someday. Promote to Open when picked up.
 | 235 | P3 | L | features | Failover profiles — multi-profile install (BLOCKED on #247) |
 | 247 | P3 | L | build | Failover/profiles in the gomobile binding — **UPSTREAM-only** (rebuild xcframework; unblocks #235) |
 | 254 | P3 | XS | docs | CODE_OF_CONDUCT.md (Contributor Covenant) |
-| 255 | P3 | S | build | SwiftLint config + CI lint step |
-| 256 | P3 | S | reliability | Default Jitsi server: all users point at one public instance (`meet1.arbitr.ru`) |
 | 257 | P3 | S | docs | Privacy-policy document (App Store needs a hosted URL) |
+| 273 | P3 | M | features | Release the "Direct" routing mode (`.allDirect`) — bypass the tunnel while staying connected |
 
 ---
 
@@ -77,6 +79,17 @@ Server reads `OLCRTC_VIDEO_*` and `OLCRTC_SEI_*`; the client never sets them. Ei
 expose them in `SettingsStore` + `InstallOptionsView` (~14 sliders), or commit to a
 "VP8-only client" and drop the dead branches from `scripts/srv.sh`. The UI hint from
 #087 buys time but is a placeholder.
+
+### 112 — NetworkExtension packet tunnel
+
+Full-device VPN (route every app, not just SOCKS-aware ones) needs a NetworkExtension
+Packet Tunnel provider + the `packet-tunnel-provider` entitlement, which requires a paid
+($99/yr) Apple Developer account. The standard pattern — confirmed by olcbox, a 5-platform
+olcrtc client — is to keep running the olcrtc core as a local SOCKS5 and bridge TUN↔SOCKS5
+with [`hev-socks5-tunnel`](https://github.com/heiher/hev-socks5-tunnel) inside the
+`PacketTunnelProvider`. Worth noting even olcbox skipped iOS TUN (its iOS target is
+SOCKS5-only — "a Swift shell"), so this is high-effort / low-ROI and gated on the paid
+account.
 
 ### 115 — TestFlight
 
@@ -153,21 +166,6 @@ Adopt the standard Contributor Covenant. The only decision is the enforcement-co
 method (a maintainer email, or "via GitHub private report") to fill the template
 placeholder. Community-health hygiene; not blocking the first push.
 
-### 255 — SwiftLint
-
-Add `.swiftlint.yml` + a lint step (locally and in CI #250) so outside contributors get
-consistent style automatically. Start lenient to match the existing house style (the
-codebase is already tidy) and tighten over time.
-
-### 256 — Default Jitsi server
-
-`AppConstants.defaultJitsiBaseURL = "https://meet1.arbitr.ru"` points every user who
-doesn't override it at one public Jitsi instance. At any real user count that overloads
-a third party and is a single point of failure (it mirrors `srv.sh`'s default, so a real
-fix touches both sides). Options: ship without a default (force an explicit choice in the
-install sheet), rotate a small pool, or keep it but make the override prominent and
-document the implication.
-
 ### 257 — Privacy-policy document
 
 App Store submission requires a privacy-policy URL even when the app collects nothing.
@@ -175,6 +173,20 @@ Write a short policy ("no personal data collected or transmitted; the encryption
 SSH credentials never leave the device / Keychain") and host it (GitHub Pages or a gist),
 then link it from App Store Connect and the README. Distinct from the in-bundle privacy
 manifest (#249).
+
+### 273 — Release the "Direct" routing mode (`.allDirect`)
+
+`RoutingMode` ships only `.allTunnel` today (`App/Models/RoutingMode.swift`), so the routing
+segmented control in ConnectionsView is a pointless single option. Add the planned `.allDirect`
+"Direct" mode — a global kill switch that bypasses the tunnel even while the session stays
+connected. Wiring: add the case + `title`/L10n; make ConnectionsView's `currentMode` honour it
+(`routingMode == .allDirect ? .direct : (connected ? .tunnel : .direct)`) so the app's own
+diagnostics (IP check / speed test) and any in-app `SOCKSSession` go direct; persists via the
+existing `@AppStorage("olcrtc_routing_mode")`. **Settle first:** scope — `.allDirect` cleanly
+controls the *app's own* URLSession routing, but it can't force *external* apps off the local
+SOCKS port, so decide whether "Direct" means "app-diagnostics bypass" only or also "tear the
+proxy down but keep the config" (a truer kill switch). Mirrors Shadowrocket's global-route
+toggle; framing groundwork for the later `.rules` / `.scene` modes noted in `RoutingMode`.
 
 ---
 
@@ -426,6 +438,8 @@ title-only.
 | 250 | build | CI: build + test (+ `srv.sh` parity) on a macOS runner | `.github/workflows/ci.yml` on push/PR/dispatch (macos-15): parity check → gomobile-build `Mobile.xcframework` (cached by upstream commit) → `xcodegen` → `xcodebuild test` on iPhone 16 sim |
 | 252 | docs | README publication pass — public framing, screenshots, disclaimer | restructured for a serious-project layout (badges, Features, Screenshots placeholder, Contributing, neutral Disclaimer); corrected stale architecture docs (connect→start→runEngine per #243, ATS/`NWConnection` attribution, test coverage); set `haritos90/olcrtc-ios` links; dropped censorship/RU framing |
 | 253 | build | `Mobile.xcframework` distribution for public cloners | GitHub Releases channel (vs git-lfs): `release.yml` builds/zips/attaches `Mobile.xcframework.zip` per `v*` tag; `scripts/fetch-framework.sh` one-line-downloads it via `gh`, `scripts/build-framework.sh` is the shared from-source fallback (also used by `ci.yml`); README rewritten download-first |
+| 255 | build | SwiftLint config + CI lint step | lenient `.swiftlint.yml` (excludes the vendored core + generated framework; disables the house-style-divergent rules — identifier_name/type_name/todo/line_length + length/complexity/param-count/`large_tuple`; `force_cast`/`force_try`→warning) + a parallel `lint` job in `ci.yml` (source-only, installs swiftlint if the runner image lacks it, non-strict so warnings annotate but don't fail). Lenient start; tighten to `--strict` over time |
+| 256 | reliability | Default Jitsi server: all users point at one public instance (`meet1.arbitr.ru`) | exposed the Jitsi base URL as an editable, pre-filled field in the install sheet (shown for the jitsi carrier) + a "shared public instance — point at your own" footer (en+ru), so users aren't silently funnelled onto one third party; `InstallOptions.jitsiBaseURL` (defaults to `AppConstants.defaultJitsiBaseURL`, never sent empty) → `SSHRunner` sends the user's value as `OLCRTC_JITSI_URL`; `srv.sh` untouched (still reads the var; its `:-` default stays the server-side fallback), parity tests green |
 | 258 | ux | UI redesign — adopt unified design system across all screens | builds 212–216: `App/UI/Theme.swift` + `DesignSystem.swift` (8 components + OlcStatusDot/FlowLayout/OlcEmptyState, dark previews); ServersView (single-source `HostDisplay` model — kills the VPS status-jump), ConnectionsView, all sheets, LogsView, SettingsView restyled; app forced dark via `UIUserInterfaceStyle=Dark`. One button system / one overflow menu / one status vocabulary / one large-title header. Follow-ups split out: #259 (state-machine tests), #261–267 (polish/architecture) |
 | 259 | tests | Tests for the VPS `HostDisplay` state machine (#258) | extracted the #258 transition rules into a pure reducer on `HostBase`/`HostDisplay` (`seed`/`start`/`advanced`/`terminalBase`/`failed`/`retryBase`) that `ServersView` now drives; `Tests/HostDisplayTests.swift` (16 tests → 182 total) covers readiness→base mapping, op `target`/`phases`, no-optimistic-base-while-running, monotonic+capped phases, probe-authoritative terminal assignment, and failure→Retry `previousBase` restore. Reducer still lives in ServersView.swift → moving it to Models is #263 |
 | 260 | reliability | Integrate upstream olcrtc (587c13e → e2c4b1e) | bumped submodule pin (jitsi reconnect #82/#88/#89, vp8channel byte-rate pacer, videochannel ffmpeg→`gocodec`; nested `gr` submodule removed — now a go.mod dep `gr v0.1.5`); rebuilt `Mobile.xcframework` via `build-framework.sh` (Mobile* API unchanged → engine compiles), `parity_check.py` clean (srv.sh unchanged), app builds + 182 tests green. No doc churn — our docs never named the `gr` submodule and `--recursive` stays valid. Hijacked doc commit only touches upstream `readme.md`/`westand.svg`, not propagated. PENDING USER: on-device jitsi+vp8 smoke-test; commit+push the pin bump; cut a new `v*` tag so `release.yml` republishes the framework |
@@ -437,3 +451,7 @@ title-only.
 | 266 | l10n | Remove L10n keys orphaned by the redesign | removed 19 unused keys (uriPlaceholder, parseURIAction, typeField, ipLastCheck_fmt, speedTestTitle, statusUnreachable, connectionLine_fmt, alertPasswordMissingDetail, status{Running,Done,Error}Title, actionDisconnect/Ping/Status, sectionInfo, installResultSuccessNotice, rebootingInProgress, scanContainerRow_fmt, uninstallConnectionAlsoRemoved_fmt) from the enum + both dicts; verified zero code refs; L10nTests per-locale count stays balanced |
 | 267 | ux | Runtime design-direction toggle (Refined/Console) in Settings | `SettingsStore.designConsole` (persisted @Published) drives the 6 direction-dependent Theme tokens (now `static var`: bg/card/segActive + control/card radii + card border); Settings «Theme» picker (Refined/Console); app reskins live via MainTabView's SettingsStore observation. Added L10n themeLabel/themeRefined/themeConsole |
 | 268 | ux | Manage VPS card shows free disk as if used | disk `awk` field `$4` (Available/free) → `$3` (Used) in `SSHRunner.readinessScript` so the card shows `used/total`, consistent with the RAM line right below it; pure Swift, no `srv.sh`/parity impact |
+| 269 | reliability | Reconnect on network-path change (`NWPathMonitor`) — Wi-Fi↔cellular handoff | always-on `NWPathMonitor` on `TunnelManager` (lazy-started first connect, never torn down); new `.waitingForNetwork` holding state — hero shows «Waiting for network…», global toggle stays on+enabled (flip off to give up); pure `nonisolated static pathDecision` maps loss→hold, regain→`reconnect(.restored)`, Wi-Fi↔cellular swap→`reconnect(.interfaceChanged)`, debounced 1.5 s and coalesced; `.disconnected`/`.failed` (down server ≠ path problem) + first-update baseline ignored; `bgKeeper` kept running while waiting so a backgrounded app self-recovers; reconnect funnels through `scheduleNetworkReconnect`→`start()` (the seam #270's backoff sink will absorb, #271 the room-settle, #272 the generation guard); `Tests/NetworkPathDecisionTests.swift` (14-case matrix) + `.waitingForNetwork` round-trip |
+| 270 | reliability | Bounded exponential-backoff auto-reconnect (replace the one-shot retry) | replaced one-shot `scheduleAutoRetry` with `requestReconnect` — a single recovery sink both keep-alive loss and #269 (network regain/interface swap) feed; capped exponential backoff `backoffDelaySeconds` (2→4→8→16→32→60 s, base·2ⁿ clamped) over `maxReconnectAttempts`=6, then terminal `.failed` («tap Retry»), preserving the deliberate battery cap; idempotent (one loop at a time), a verified connect ends the loop so backoff resets, a network loss cancels it (resets on the round-trip), a manual connect/disconnect supersedes it; extracted `preflight` shared by fire-and-forget `start` + awaitable `connectAndAwait`, `runEngine` now returns `Bool` so the loop sees the *verified* outcome; `Tests/ReconnectBackoffTests.swift` (schedule + cap + overflow/negative guards); removed orphaned `autoReconnect_fmt`, added `reconnectAttempt_fmt`/`reconnectGaveUp` (en+ru) |
+| 271 | reliability | Settle delay before reconnecting into the same room (ghost MUC presence) | carrier-aware room-settle on the auto-reconnect path: `EngineStartSettings.isReconnect` (true only via #270's `connectAndAwait`, false on user `start`) → `OlcrtcEngine.start` waits `rejoinSettleMs(carrier:)` after its `MobileStop()` before re-joining, so the prior session's MUC `presence-unavailable` clears first (jitsi/telemost 3 s, others 1.5 s — XMPP-MUC propagation lag, per the upstream `server.go` ghost-participant note); logged via `rejoinSettle_fmt` (en+ru); fresh connects skip it; `Tests/RejoinSettleTests.swift` pins the mapping + case-insensitivity |
+| 272 | reliability | Epoch/generation guard in TunnelManager (discard superseded connect/retry results) | monotonic `connectEpoch` bumped in `preflight` per attempt + captured into each detached `runEngine`; new `isLiveAttempt(epoch)` (epoch matches **and** `state == .connecting`) replaces the bare `state == .connecting` guard at all four `runEngine` MainActor hops, so a fast disconnect→reconnect can't alias the new attempt's `.connecting` and post a result for the wrong session; `connectEpoch` is `private(set)` (test-observable); +2 tests (epoch advances per launched attempt; invalid connect consumes none) |

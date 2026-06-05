@@ -192,6 +192,7 @@ struct ConnectionsView: View {
     private var heroTone: OlcStatusTone {
         if tunnel.state.isConnected { return .ok }
         if tunnel.state.isConnecting { return .progress }
+        if tunnel.state == .waitingForNetwork { return .progress }
         if case .failed = tunnel.state { return .error }
         return .unknown
     }
@@ -199,13 +200,18 @@ struct ConnectionsView: View {
     private var heroTitle: String {
         if tunnel.state.isConnected { return L10n.stateConnected.localized() }
         if tunnel.state.isConnecting { return L10n.stateConnecting.localized() }
+        if tunnel.state == .waitingForNetwork { return L10n.stateWaitingForNetwork.localized() }
         if case .failed = tunnel.state { return L10n.stateConnectFailed.localized() }
         return L10n.stateDisconnected.localized()
     }
 
     private var globalToggleBinding: Binding<Bool> {
         Binding(
-            get: { tunnel.state.isConnected || tunnel.state.isConnecting },
+            // `.waitingForNetwork` keeps the toggle ON (we're actively holding
+            // the session, not disconnected) while staying enabled so the user
+            // can flip it off to give up — see `.disabled` on the toggle (#269).
+            get: { tunnel.state.isConnected || tunnel.state.isConnecting
+                || tunnel.state == .waitingForNetwork },
             set: { on in
                 if on, let p = store.primary {
                     tunnel.connect(record: p)

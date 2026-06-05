@@ -47,6 +47,7 @@ enum L10nTable {
         .stateConnecting:   "Connecting…",
         .stateConnected:    "Connected",
         .stateConnectFailed: "Connection failed",
+        .stateWaitingForNetwork: "Waiting for network…",
         .stateErrorPrefix_fmt: "Error: %@",
 
         // ConnectionsView
@@ -241,6 +242,8 @@ enum L10nTable {
         .matrixStatusUnknown:        "no data",
         .transportSectionHeader:     "Transport",
         .roomIDSectionHeader:        "Room ID",
+        .jitsiServerHeader:          "Jitsi server",
+        .jitsiServerFooter:          "Shared public instance — point at your own Jitsi for reliability and to avoid overloading it.",
         .seiSettingsHeader:          "SEI Settings",
         .seiSettingsFooter:          "SEI params sent to srv.sh for seichannel.",
         .actionQR:                   "QR",
@@ -261,7 +264,13 @@ enum L10nTable {
         .serverConnectionLost:       "Connection to server lost",
         .serverNotResponding:        "Server not responding",
         .disconnectingArrow:         "→ Disconnecting",
-        .autoReconnect_fmt:          "↻ Auto-reconnect → %@",
+        .netPathLost:                "⚠ Network lost — waiting for connectivity",
+        .netPathRestored:            "network restored",
+        .netPathChanged:             "network path changed",
+        .reconnecting_fmt:           "↻ Reconnecting (%@)",
+        .reconnectAttempt_fmt:       "↻ attempt %d/%d in %ds",
+        .reconnectGaveUp:            "✗ Reconnect failed — tap Retry",
+        .rejoinSettle_fmt:           "⏳ Room settle: %.1fs before re-join",
         .connectingOlcrtc_fmt:       "→ olcrtc carrier=%@ transport=%@ clientID=%@",
         .portChangedAuto_fmt:        "↪ Port %d is busy, using %d (updated in Settings)",
 
@@ -369,6 +378,7 @@ enum L10nTable {
         .sectionCarrier:             "Carrier",
         .labelTransport:             "Transport",
         .fieldRoomID:                "Room ID",
+        .fieldJitsiURL:              "https://meet.example.org",
 
         // DNS carrier labels
         .dnsLabelMts:                "MTS",
@@ -413,6 +423,7 @@ enum L10nTable {
         .stateConnecting:   "Подключение…",
         .stateConnected:    "Подключено",
         .stateConnectFailed: "Сбой подключения",
+        .stateWaitingForNetwork: "Ожидание сети…",
         .stateErrorPrefix_fmt: "Ошибка: %@",
 
         // ConnectionsView
@@ -607,6 +618,8 @@ enum L10nTable {
         .matrixStatusUnknown:        "нет данных",
         .transportSectionHeader:     "Транспорт",
         .roomIDSectionHeader:        "Room ID",
+        .jitsiServerHeader:          "Сервер Jitsi",
+        .jitsiServerFooter:          "Общий публичный сервер — укажите свой Jitsi для надёжности, чтобы не перегружать чужой.",
         .seiSettingsHeader:          "SEI-настройки",
         .seiSettingsFooter:          "SEI-параметры передаются в srv.sh для seichannel.",
         .actionQR:                   "QR",
@@ -627,7 +640,13 @@ enum L10nTable {
         .serverConnectionLost:       "Связь с сервером потеряна",
         .serverNotResponding:        "Сервер не отвечает",
         .disconnectingArrow:         "→ Отключение",
-        .autoReconnect_fmt:          "↻ Авто-переподключение → %@",
+        .netPathLost:                "⚠ Сеть потеряна — ожидание подключения",
+        .netPathRestored:            "сеть восстановлена",
+        .netPathChanged:             "сеть изменилась",
+        .reconnecting_fmt:           "↻ Переподключение (%@)",
+        .reconnectAttempt_fmt:       "↻ попытка %d/%d через %d с",
+        .reconnectGaveUp:            "✗ Не удалось переподключиться — нажмите «Повторить»",
+        .rejoinSettle_fmt:           "⏳ Очистка комнаты: %.1f с до повторного входа",
         .connectingOlcrtc_fmt:       "→ olcrtc carrier=%@ transport=%@ clientID=%@",
         .portChangedAuto_fmt:        "↪ Порт %d занят, используем %d (обновлено в Настройках)",
 
@@ -735,6 +754,7 @@ enum L10nTable {
         .sectionCarrier:             "Оператор",
         .labelTransport:             "Транспорт",
         .fieldRoomID:                "ID комнаты",
+        .fieldJitsiURL:              "https://meet.example.org",
 
         // DNS carrier labels
         .dnsLabelMts:                "МТС",

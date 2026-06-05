@@ -51,6 +51,7 @@ enum L10n: String, CaseIterable {
     // MARK: Connection state
     case stateDisconnected, stateConnecting, stateConnected
     case stateConnectFailed                // "Connection failed" (#258 hero)
+    case stateWaitingForNetwork            // "Waiting for network…" (#269 hero)
     case stateErrorPrefix_fmt              // "Error: %@"
 
     // MARK: ConnectionsView
@@ -195,6 +196,7 @@ enum L10n: String, CaseIterable {
     case matrixStatusFail, matrixStatusUnknown
     case transportSectionHeader, roomIDSectionHeader
     case seiSettingsHeader, seiSettingsFooter
+    case jitsiServerHeader, jitsiServerFooter   // #256: Jitsi base-URL field
     case actionQR
 
     // MARK: Status banner
@@ -212,7 +214,13 @@ enum L10n: String, CaseIterable {
     case serverConnectionLost               // "Connection to server lost"
     case serverNotResponding                // "Server not responding"
     case disconnectingArrow                 // "→ Disconnecting"
-    case autoReconnect_fmt                  // "↻ Auto-reconnect → %@"
+    case netPathLost                        // "⚠ Network lost — waiting for connectivity" (#269)
+    case netPathRestored                    // "network restored" (#269 reconnect reason)
+    case netPathChanged                     // "network path changed" (#269 reconnect reason)
+    case reconnecting_fmt                   // "↻ Reconnecting (%@)" (#269/#270 sink entry)
+    case reconnectAttempt_fmt               // "↻ attempt %d/%d in %ds" (#270 backoff)
+    case reconnectGaveUp                    // "✗ Reconnect failed — tap Retry" (#270 give-up)
+    case rejoinSettle_fmt                   // "⏳ Room settle: %.1fs before re-join" (#271)
     case connectingOlcrtc_fmt               // "→ olcrtc carrier=%@..."
     case portChangedAuto_fmt                // "↪ Port %d is busy, using %d (updated in Settings)"
 
@@ -307,6 +315,7 @@ enum L10n: String, CaseIterable {
     case sectionCarrier                     // "Carrier"
     case labelTransport                     // "Transport"
     case fieldRoomID                        // "Room ID"
+    case fieldJitsiURL                      // "https://meet.example.org" (#256)
 
     // MARK: DNS carrier labels (RU operator names — localizable)
     case dnsLabelMts, dnsLabelBeeline, dnsLabelMegafon

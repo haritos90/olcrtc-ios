@@ -1,13 +1,15 @@
 import Foundation
+import Network
 // No `import Mobile`: the gomobile runtime is reached only through the engine
-// (OlcrtcEngine) now — TunnelManager is protocol-agnostic (#243).
+// (OlcrtcEngine) now — TunnelManager is protocol-agnostic (#243). `Network` is
+// used for the NWPathMonitor that drives reconnect-on-path-change (#269).
 
 // MARK: - TunnelManager
 //
 // Drives a tunnel through a pluggable `TunnelEngine` (#243). The protocol's
 // native runtime lives in the engine — for olcrtc, `OlcrtcEngine` wraps the
 // gomobile singleton from Mobile.xcframework. This type owns only the generic
-// orchestration: the connection state machine, keep-alive, one-shot auto-retry,
+// orchestration: the connection state machine, keep-alive, backoff auto-reconnect,
 // end-to-end SOCKS verification, and background-audio keep-alive.
 //
 // Lifecycle:
@@ -40,6 +42,10 @@ enum ConnectionState: Equatable, CustomStringConvertible {
     case disconnected
     case connecting
     case connected
+    /// Holding state (#269): the network path went away under a live session.
+    /// We tear the dead session down but keep the app alive, waiting for the
+    /// path to return rather than burning reconnect attempts with no route.
+    case waitingForNetwork
     case failed(String)
 
     var isConnected: Bool  { self == .connected }
@@ -47,10 +53,11 @@ enum ConnectionState: Equatable, CustomStringConvertible {
 
     var label: String {
         switch self {
-        case .disconnected:  return L10n.stateDisconnected.localized()
-        case .connecting:    return L10n.stateConnecting.localized()
-        case .connected:     return L10n.stateConnected.localized()
-        case .failed(let m): return L10n.stateErrorPrefix_fmt.formatted(m)
+        case .disconnected:      return L10n.stateDisconnected.localized()
+        case .connecting:        return L10n.stateConnecting.localized()
+        case .connected:         return L10n.stateConnected.localized()
+        case .waitingForNetwork: return L10n.stateWaitingForNetwork.localized()
+        case .failed(let m):     return L10n.stateErrorPrefix_fmt.formatted(m)
         }
     }
 
@@ -59,10 +66,11 @@ enum ConnectionState: Equatable, CustomStringConvertible {
     /// `.failed(reason)` on one line lets you see the cause inline.
     var description: String {
         switch self {
-        case .disconnected:  return "disconnected"
-        case .connecting:    return "connecting"
-        case .connected:     return "connected"
-        case .failed(let m): return "failed(\(m))"
+        case .disconnected:      return "disconnected"
+        case .connecting:        return "connecting"
+        case .connected:         return "connected"
+        case .waitingForNetwork: return "waitingForNetwork"
+        case .failed(let m):     return "failed(\(m))"
         }
     }
 }
@@ -73,9 +81,24 @@ enum PingOutcome: Equatable, Sendable {
     case failure(String)
 }
 
+/// Outcome of evaluating a network-path change (#269). A pure value so the
+/// decision in `TunnelManager.pathDecision` is unit-testable without
+/// constructing an `NWPath`, which has no public initializer.
+enum NetworkPathAction: Equatable, Sendable {
+    case none              // baseline-only / nothing actionable
+    case waitForNetwork    // path lost under a live session → hold and wait
+    case reconnect(NetworkReconnectReason)
+}
+
+/// Why a network-driven reconnect (#269) was requested — selects the log line.
+enum NetworkReconnectReason: Equatable, Sendable {
+    case restored          // path returned after an `unsatisfied` gap
+    case interfaceChanged  // primary interface switched (e.g. Wi-Fi → cellular)
+}
+
 /// Drives the connection state machine
 /// (disconnected → connecting → connected | failed), manages keep-alive probes,
-/// one-shot auto-retry, and background audio keep-alive. See file header for
+/// backoff auto-reconnect, and background audio keep-alive. See file header for
 /// concurrency and ICE-connected-but-no-data caveats.
 @MainActor
 final class TunnelManager: ObservableObject {
@@ -107,13 +130,18 @@ final class TunnelManager: ObservableObject {
                             L10n.bgKeeperFailed_fmt.formatted(error.localizedDescription))
                     }
                 }
-            case .connecting:
+            case .connecting, .waitingForNetwork:
                 // cancel-then-nil-synchronously: Task.cancel() is cooperative,
                 // so dropping the handle immediately prevents any later branch
-                // (or a re-entrant didSet on rapid oscillation) from observing
-                // a stale-but-still-running task in `keepAliveTask` / `retryTask`.
+                // (or a re-entrant didSet on rapid oscillation) from observing a
+                // stale-but-still-running `keepAliveTask`. NOT `recoveryTask` —
+                // the recovery loop itself drives these `.connecting` attempts, so
+                // it must survive its own transitions (it's cancelled only by
+                // disconnect()/connect(), or a network loss).
+                // `.waitingForNetwork` deliberately leaves `bgKeeper` running so
+                // a backgrounded app isn't suspended while it waits for the path
+                // to return (#269) — it must stay alive to reconnect on its own.
                 keepAliveTask?.cancel(); keepAliveTask = nil
-                retryTask?.cancel();     retryTask = nil
             case .disconnected, .failed:
                 keepAliveTask?.cancel(); keepAliveTask = nil
                 bgKeeper.stop()
@@ -122,9 +150,37 @@ final class TunnelManager: ObservableObject {
     }
 
     private var lastRecord: ConnectionRecord?
-    private var retryTask: Task<Void, Never>?
     private var keepAliveTask: Task<Void, Never>?
     private let bgKeeper = BackgroundRuntimeKeeper()
+
+    // MARK: Recovery (#270) — capped exponential-backoff auto-reconnect
+    //
+    // Both keep-alive loss and #269's network events feed `requestReconnect`, the
+    // single recovery sink. It retries with capped exponential backoff
+    // (base·2^attempt, clamped) and gives up after `maxReconnectAttempts`, then
+    // waits for the user — the deliberate battery cap the old one-shot protected.
+    // A verified connect ends the loop, so the backoff resets for the next drop.
+    private var recoveryTask: Task<Void, Never>?
+    // `nonisolated` so the pure `backoffDelaySeconds` (also nonisolated, for
+    // testing off the MainActor) can read them without a Swift 6 isolation error.
+    private nonisolated static let reconnectBaseDelaySeconds: Double = 2
+    private nonisolated static let maxReconnectDelaySeconds: Double = 60
+    private nonisolated static let maxReconnectAttempts = 6   // 2+4+8+16+32+60 ≈ 122 s, then wait for user
+
+    // MARK: Network-path monitoring (#269)
+    //
+    // The gomobile session is bound to whatever network path it started on, so
+    // a Wi-Fi↔cellular handoff (or a drop-then-regain) silently kills it — we'd
+    // otherwise only notice ~90 s later when keep-alive gives up. An always-on
+    // `NWPathMonitor` (started lazily on the first connect, never torn down —
+    // it's cheap) watches for that. The reaction is decided by the pure
+    // `pathDecision`; this layer tracks the last-seen path and feeds a regain or
+    // interface swap into the shared recovery sink (`requestReconnect`, #270).
+    private let pathMonitor = NWPathMonitor()
+    private let pathMonitorQueue = DispatchQueue(label: "com.alexk.olcrtc.pathmonitor")
+    private var pathMonitorStarted = false
+    private var lastPathSatisfied: Bool?                  // nil until the first update (baseline)
+    private var lastPrimaryInterface: NWInterface.InterfaceType?
 
     /// Updated whenever data successfully flows through the tunnel.
     /// `nonisolated` so SOCKSSession / SpeedTest can write from background tasks.
@@ -144,6 +200,14 @@ final class TunnelManager: ObservableObject {
     /// has no engine to stop, which is harmless.
     private var activeEngine: (any TunnelEngine)?
 
+    /// Monotonic connect-attempt counter (#272). `preflight` bumps it at the start
+    /// of every attempt; each detached `runEngine` captures the value and only
+    /// posts a result while it is still current. Without it, a fast
+    /// disconnect→reconnect can alias `state == .connecting` and let a stale
+    /// `runEngine` (resuming after `verifyTunnel`) post `.connected` for the wrong
+    /// session. `private(set)` so a test can observe that attempts advance it.
+    private(set) var connectEpoch = 0
+
     // No init: engine runtimes initialise lazily on first use via
     // `ConnectionDetails.engine`, so there's nothing protocol-specific to wire
     // up at construction anymore (#243).
@@ -158,17 +222,25 @@ final class TunnelManager: ObservableObject {
     func connect(record: ConnectionRecord) {
         switch state {
         case .disconnected, .failed: break
-        case .connecting, .connected: return
+        // `.waitingForNetwork` is an active session the path monitor will
+        // reconnect on its own once connectivity returns — a manual connect now
+        // (no route) would only fail, so treat it like .connecting/.connected.
+        case .connecting, .connected, .waitingForNetwork: return
         }
+        // A manual connect supersedes any in-flight auto-recovery loop (#270).
+        recoveryTask?.cancel(); recoveryTask = nil
         lastRecord = record
         start(record: record)
     }
 
     func disconnect() {
         LogStore.shared.log(.connection, L10n.disconnectingArrow.localized())
-        // Cancel both tasks before mutating state so neither task can observe
-        // an intermediate state and schedule a spurious auto-retry.
-        retryTask?.cancel();     retryTask = nil
+        // Cancel every background task before mutating state so none can observe
+        // an intermediate state and schedule a spurious auto-retry / reconnect.
+        // The path monitor itself keeps running, but with `lastRecord == nil`
+        // its handler is a no-op (see `pathDecision`), so the next connect starts
+        // from a clean baseline.
+        recoveryTask?.cancel();  recoveryTask = nil
         keepAliveTask?.cancel(); keepAliveTask = nil
         bgKeeper.stop()
         activeEngine?.stop()
@@ -184,11 +256,9 @@ final class TunnelManager: ObservableObject {
     // backgrounded, so this Task naturally pauses then — no special
     // background handling needed.
     //
-    // The auto-retry is one-shot per session: keep-alive failing schedules
-    // one connect attempt 2 seconds later. If that retry fails (or any
-    // initial-connect failure happens), we stop and wait for the user.
-    // Without this guard, a server that consistently refuses traffic would
-    // loop us forever and burn battery.
+    // On sustained failure (3 consecutive misses ≈ 90 s) the keep-alive loop
+    // hands off to the shared recovery sink (`requestReconnect`, #270) rather
+    // than just dropping — see the Recovery section for the backoff policy.
 
     private func startKeepAliveIfEnabled() {
         keepAliveTask?.cancel(); keepAliveTask = nil
@@ -232,7 +302,7 @@ final class TunnelManager: ObservableObject {
                         LogStore.shared.log(.connection, L10n.keepAliveLost.localized())
                         self.activeEngine?.stop()
                         self.state = .failed(L10n.serverConnectionLost.localized())
-                        self.scheduleAutoRetry()
+                        self.requestReconnect(reason: self.lastRecord?.displayName ?? "")
                         return
                     }
                 }
@@ -240,53 +310,208 @@ final class TunnelManager: ObservableObject {
         }
     }
 
-    private func scheduleAutoRetry() {
-        // Drop the previous handle synchronously (cooperative cancel + nil)
-        // before assigning the new one, matching the discipline in
-        // `state.didSet`'s `.connecting` branch and `startKeepAliveIfEnabled`.
-        retryTask?.cancel(); retryTask = nil
-        guard let record = lastRecord else { return }
-        retryTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled, let self else { return }
-            // Only fire if we're still in .failed — user may have manually
-            // disconnected or already retried during the 2s window.
-            if case .failed = self.state {
+    /// Single recovery sink (#270). Both keep-alive loss and #269's network
+    /// events call this. Runs capped exponential-backoff reconnects until one
+    /// connects *and* verifies (loop ends → backoff resets), or the attempt
+    /// budget is spent (→ `.failed`, wait for the user). Idempotent: while a loop
+    /// is live, further requests are no-ops so triggers can't stack.
+    private func requestReconnect(reason: String) {
+        guard lastRecord != nil, recoveryTask == nil else { return }
+        LogStore.shared.log(.connection, L10n.reconnecting_fmt.formatted(reason))
+        recoveryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.recoveryTask = nil }
+            var attempt = 0
+            while !Task.isCancelled {
+                let delay = Self.backoffDelaySeconds(attempt: attempt)
                 LogStore.shared.log(.connection,
-                    L10n.autoReconnect_fmt.formatted(record.displayName))
-                self.connect(record: record)
+                    L10n.reconnectAttempt_fmt.formatted(attempt + 1, Self.maxReconnectAttempts, Int(delay)))
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled, let record = self.lastRecord else { return }
+                // Tear down whatever is bound to the old/dead path, then attempt a
+                // fresh connect and await its verified outcome.
+                self.activeEngine?.stop()
+                let ok = await self.connectAndAwait(record)
+                if Task.isCancelled || ok { return }   // superseded, or connected → done
+                attempt += 1
+                if attempt >= Self.maxReconnectAttempts {
+                    LogStore.shared.log(.connection, L10n.reconnectGaveUp.localized())
+                    self.state = .failed(L10n.reconnectGaveUp.localized())
+                    return
+                }
             }
         }
     }
 
+    /// Capped exponential backoff before reconnect attempt `n` (#270):
+    /// base·2^n clamped to `maxReconnectDelaySeconds`. n=0 → base. Pure → tested.
+    nonisolated static func backoffDelaySeconds(attempt: Int) -> Double {
+        let shift = min(max(attempt, 0), 20)            // clamp so 1<<shift can't overflow
+        let delay = reconnectBaseDelaySeconds * Double(1 << shift)
+        return min(delay, maxReconnectDelaySeconds)
+    }
+
+    // MARK: Network-path reconnect (#269)
+    //
+    // While we hold an active session, react to the network path changing:
+    //   • path lost     → cancel recovery, hold `.waitingForNetwork` (don't burn
+    //                     retries with no route), wait for the path to return;
+    //   • path regained → reconnect;
+    //   • interface swap while still satisfied (Wi-Fi↔cellular) → reconnect onto
+    //                     the new path.
+    // Regain/swap feed the shared backoff sink (`requestReconnect`, #270), so a
+    // network round-trip resets the backoff. Follow-ups: #271 adds a room-settle
+    // delay, #272 a generation guard for the in-flight-reconnect race.
+
+    private func startPathMonitorIfNeeded() {
+        guard !pathMonitorStarted else { return }
+        pathMonitorStarted = true
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            // Snapshot the two facts we need off the monitor's queue, then hop
+            // to MainActor for every state decision.
+            let satisfied = path.status == .satisfied
+            let primary   = Self.primaryInterface(of: path)
+            Task { @MainActor in self?.handlePathUpdate(satisfied: satisfied, primary: primary) }
+        }
+        pathMonitor.start(queue: pathMonitorQueue)
+    }
+
+    /// Translates a path update into a side-effect via the pure `pathDecision`,
+    /// then refreshes the last-seen baseline.
+    private func handlePathUpdate(satisfied: Bool, primary: NWInterface.InterfaceType?) {
+        let action = Self.pathDecision(
+            satisfied: satisfied, primary: primary,
+            wasSatisfied: lastPathSatisfied, lastPrimary: lastPrimaryInterface,
+            state: state, hasActiveRecord: lastRecord != nil)
+        // Update the baseline regardless of what we do with this transition.
+        lastPathSatisfied    = satisfied
+        lastPrimaryInterface = primary
+
+        switch action {
+        case .none:
+            break
+        case .waitForNetwork:
+            // Stop spending reconnect attempts with no route; cancel any live
+            // recovery loop — a fresh one starts (below) when the path returns.
+            recoveryTask?.cancel(); recoveryTask = nil
+            LogStore.shared.log(.connection, L10n.netPathLost.localized())
+            activeEngine?.stop()
+            state = .waitingForNetwork
+        case .reconnect(let reason):
+            let text = reason == .restored
+                ? L10n.netPathRestored.localized()
+                : L10n.netPathChanged.localized()
+            requestReconnect(reason: text)
+        }
+    }
+
+    /// The primary interface a path routes over, by priority; nil for an
+    /// unsatisfied path. `nonisolated` because it runs on the monitor queue.
+    nonisolated private static func primaryInterface(of path: NWPath) -> NWInterface.InterfaceType? {
+        for type in [NWInterface.InterfaceType.wifi, .cellular, .wiredEthernet, .other]
+            where path.usesInterfaceType(type) {
+            return type
+        }
+        return nil
+    }
+
+    /// Pure decision for a network-path update (#269) — factored out of
+    /// `handlePathUpdate` so it's unit-testable without an `NWPath`.
+    ///
+    /// - `wasSatisfied == nil` means no baseline yet (first update) → `.none`.
+    /// - Only an active session reacts; `.disconnected` and `.failed` (a down
+    ///   server isn't a path problem) are ignored.
+    /// - `.connecting` reacts only to a *loss* (→ wait); a mid-connect interface
+    ///   wobble is left for the in-flight attempt to resolve, avoiding thrash.
+    nonisolated static func pathDecision(satisfied: Bool,
+                                         primary: NWInterface.InterfaceType?,
+                                         wasSatisfied: Bool?,
+                                         lastPrimary: NWInterface.InterfaceType?,
+                                         state: ConnectionState,
+                                         hasActiveRecord: Bool) -> NetworkPathAction {
+        guard wasSatisfied != nil, hasActiveRecord else { return .none }
+        switch state {
+        case .disconnected, .failed: return .none
+        case .connected, .connecting, .waitingForNetwork: break
+        }
+        guard satisfied else {
+            // Already holding → nothing new to do.
+            return state == .waitingForNetwork ? .none : .waitForNetwork
+        }
+        if wasSatisfied == false || state == .waitingForNetwork {
+            return .reconnect(.restored)
+        }
+        if state == .connected, primary != lastPrimary {
+            return .reconnect(.interfaceChanged)
+        }
+        return .none
+    }
+
     // MARK: Generic engine start (#243)
 
-    /// Generic connect path. Selects the engine for the record's protocol, runs
-    /// the engine's structural validation + reserves a local SOCKS port (both
-    /// synchronously on MainActor), flips to `.connecting`, then hands off to a
-    /// detached task. The detached `runEngine` does the blocking native work.
-    private func start(record: ConnectionRecord) {
+    /// Synchronous preflight on MainActor: select the engine, run structural
+    /// validation, reserve a free SOCKS port + snapshot settings, and flip to
+    /// `.connecting`. Returns the launch params, or nil if it already set
+    /// `.failed` (validation) / couldn't reserve a port. Shared by the
+    /// fire-and-forget `start` (`isReconnect: false`) and the awaitable
+    /// `connectAndAwait` (`isReconnect: true`, #270) — the flag rides into
+    /// `EngineStartSettings` to drive the engine's room-settle delay (#271).
+    private func preflight(_ record: ConnectionRecord, isReconnect: Bool)
+        -> (engine: any TunnelEngine, details: ConnectionDetails, port: Int, settings: EngineStartSettings, epoch: Int)? {
+        startPathMonitorIfNeeded()
         let engine = record.details.engine
         activeEngine = engine
         LogStore.shared.startSession(.connection)
         if let problem = engine.validate(record.details) {
             LogStore.shared.log(.connection, "✗ \(problem)")
             state = .failed(problem)
-            return
+            return nil
         }
-        guard let (port, settings) = reservePortAndSettings() else { return }
+        guard let (port, settings) = reservePortAndSettings(isReconnect: isReconnect) else { return nil }
+        // New attempt → new epoch (bumped before `.connecting` so the value
+        // `runEngine` captures is the one live for this attempt, #272).
+        connectEpoch &+= 1
         state = .connecting
-        let details = record.details
+        return (engine, record.details, port, settings, connectEpoch)
+    }
+
+    /// True iff `epoch` is still the current attempt *and* we're mid-connect — the
+    /// guard every `runEngine` MainActor hop uses before mutating state (#272).
+    /// The `state == .connecting` half catches user-disconnect / network-loss
+    /// supersession; the epoch half catches a disconnect→reconnect that returns
+    /// to `.connecting` under a *different* attempt.
+    private func isLiveAttempt(_ epoch: Int) -> Bool {
+        connectEpoch == epoch && state == .connecting
+    }
+
+    /// User-initiated connect: preflight, then hand the blocking native work to a
+    /// detached task (fire-and-forget — a failure lands in `.failed` and waits
+    /// for the user, it does NOT enter the recovery loop, so a bad manual connect
+    /// can't spin a backoff).
+    private func start(record: ConnectionRecord) {
+        guard let (engine, details, port, settings, epoch) = preflight(record, isReconnect: false) else { return }
         Task.detached { [weak self] in
             await Self.runEngine(engine: engine, details: details,
-                                 port: port, settings: settings, manager: self)
+                                 port: port, settings: settings, epoch: epoch, manager: self)
         }
+    }
+
+    /// Awaitable single connect attempt for the recovery loop (#270): the same
+    /// preflight + engine path as `start`, but returns whether it connected *and*
+    /// verified, so the loop can stop (success) or back off (failure).
+    @discardableResult
+    private func connectAndAwait(_ record: ConnectionRecord) async -> Bool {
+        guard let (engine, details, port, settings, epoch) = preflight(record, isReconnect: true) else { return false }
+        return await Task.detached {
+            await Self.runEngine(engine: engine, details: details,
+                                 port: port, settings: settings, epoch: epoch, manager: self)
+        }.value
     }
 
     /// Reserves a free local SOCKS port and snapshots the `SettingsStore` values
     /// the engine needs — both on MainActor. Returns nil (and sets `.failed`) if
     /// no port is free in the auto-retry window.
-    private func reservePortAndSettings() -> (port: Int, settings: EngineStartSettings)? {
+    private func reservePortAndSettings(isReconnect: Bool) -> (port: Int, settings: EngineStartSettings)? {
         let s = SettingsStore.shared
         let preferred = UInt16(s.socksPort)
         guard let freePort = PortAvailability.nextFreePort(startingAt: preferred) else {
@@ -308,7 +533,8 @@ final class TunnelManager: ObservableObject {
             vp8Batch:              s.vp8BatchSize,
             localSocksAuthEnabled: s.localSocksAuthEnabled,
             localSocksUser:        s.localSocksUser,
-            localSocksPass:        s.localSocksPass)
+            localSocksPass:        s.localSocksPass,
+            isReconnect:           isReconnect)
         return (Int(freePort), settings)
     }
 
@@ -317,44 +543,50 @@ final class TunnelManager: ObservableObject {
     /// to MainActor via `manager`. The engine logs its own protocol-specific
     /// milestones and failures and tears down its runtime on failure; this layer
     /// owns only the generic state machine + SOCKS verification.
+    @discardableResult
     private static func runEngine(engine: any TunnelEngine,
                                   details: ConnectionDetails,
                                   port: Int,
                                   settings: EngineStartSettings,
-                                  manager: TunnelManager?) async {
+                                  epoch: Int,
+                                  manager: TunnelManager?) async -> Bool {
         do {
             try await engine.start(details, port: port, settings: settings)
         } catch let e as TunnelEngineError {
             await MainActor.run {
-                guard manager?.state == .connecting else { return }
+                guard manager?.isLiveAttempt(epoch) == true else { return }
                 manager?.state = .failed(e.message)
             }
-            return
+            return false
         } catch {
             await MainActor.run {
-                guard manager?.state == .connecting else { return }
+                guard manager?.isLiveAttempt(epoch) == true else { return }
                 manager?.state = .failed(error.localizedDescription)
             }
-            return
+            return false
         }
-        // Guard: user may have disconnected while the engine was starting.
-        let stillConnecting = await MainActor.run { manager?.state == .connecting }
-        guard stillConnecting else { engine.stop(); return }
+        // Guard: a disconnect or a newer attempt (#272) may have superseded us
+        // while the engine was starting.
+        let stillLive = await MainActor.run { manager?.isLiveAttempt(epoch) == true }
+        guard stillLive else { engine.stop(); return false }
 
         let tunnelOK = await verifyTunnel()
-        await MainActor.run {
-            // Guard again: disconnect() may have been called during verifyTunnel().
-            guard manager?.state == .connecting else {
+        return await MainActor.run {
+            // Guard again: disconnect() / a newer attempt may have intervened
+            // during verifyTunnel() — only the still-current attempt posts a result.
+            guard manager?.isLiveAttempt(epoch) == true else {
                 engine.stop()
-                return
+                return false
             }
             if tunnelOK {
                 LogStore.shared.log(.connection, L10n.tunnelOK.localized())
                 manager?.state = .connected
+                return true
             } else {
                 LogStore.shared.log(.connection, L10n.tunnelFailed.localized())
                 engine.stop()
                 manager?.state = .failed(L10n.serverNotResponding.localized())
+                return false
             }
         }
     }
