@@ -17,7 +17,7 @@ import XCTest
 //
 // What this file deliberately does NOT cover, and why:
 //
-//   - keepAliveTask / retryTask / lastRecord / bgKeeper are `private`.
+//   - keepAliveTask / recoveryTask / lastRecord / bgKeeper are `private`.
 //     The didSet side-effects (start keep-alive, cancel retry, stop bg
 //     keeper) are not observable from a test target — we can confirm that
 //     setting state doesn't crash and that the published value is what we
@@ -26,8 +26,10 @@ import XCTest
 //     race scenario from Group 4 — currently untestable without exposing
 //     internal state or extracting an FSM.
 //
-//   - startKeepAliveIfEnabled() and scheduleAutoRetry() are `private`,
-//     so Group 3 (retry scheduling) is also out of reach.
+//   - startKeepAliveIfEnabled() and requestReconnect() are `private`,
+//     so Group 3 (retry scheduling) is also out of reach — but the backoff
+//     *delay* policy is a pure static (`backoffDelaySeconds`) covered in
+//     ReconnectBackoffTests.
 //
 //   - The full connect flow with VALID params calls `Task.detached { ... }`
 //     which invokes MobileStartWithTransport / MobileWaitReady from
@@ -130,6 +132,22 @@ final class TunnelManagerStateTests: XCTestCase {
         let manager = makeManager()
         manager.state = .failed("boom")
         XCTAssertEqual(manager.state, .failed("boom"))
+    }
+
+    // The `.waitingForNetwork` holding state (#269) must round-trip through the
+    // @Published setter and be distinct from connected/connecting: ConnectionsView
+    // renders it via `== .waitingForNetwork` (not isConnected/isConnecting), and
+    // the global toggle stays ON for it. The `description` feeds LogStore.
+    func testWaitingForNetworkStateRoundTrips() {
+        let manager = makeManager()
+        manager.state = .waitingForNetwork
+        XCTAssertEqual(manager.state, .waitingForNetwork)
+        XCTAssertFalse(manager.state.isConnected)
+        XCTAssertFalse(manager.state.isConnecting)
+        XCTAssertEqual(manager.state.description, "waitingForNetwork")
+        // Tidy up: `.waitingForNetwork` keeps bgKeeper running by design, so
+        // drive back to .disconnected to release it (didSet's cleanup branch).
+        manager.state = .disconnected
     }
 
     // didSet has a `guard state != oldValue else { return }` so that
@@ -253,7 +271,7 @@ final class TunnelManagerStateTests: XCTestCase {
         // Synchronously observable: preflight succeeded → state = .connecting
         // was set before Task.detached was enqueued.
         XCTAssertEqual(manager.state, .connecting)
-        // Tidy up: cancel any lingering retryTask / keepAliveTask by driving
+        // Tidy up: cancel any lingering recoveryTask / keepAliveTask by driving
         // state to .disconnected. The private tasks are not observable but
         // the cancellation code path in didSet runs.
         manager.state = .disconnected
@@ -277,5 +295,36 @@ final class TunnelManagerStateTests: XCTestCase {
         XCTAssertEqual(manager.state, .connecting, "third call must not change state")
         // Tidy up.
         manager.state = .disconnected
+    }
+
+    // MARK: Connect epoch (#272)
+
+    // Each launched connect attempt must advance the monotonic `connectEpoch`, so
+    // a detached `runEngine` from a superseded attempt can tell it is stale and
+    // bail instead of aliasing a newer attempt's `.connecting`. The aliasing race
+    // itself needs the full async engine flow (not unit-testable here), but the
+    // counter it relies on is observable.
+    func testEachConnectAttemptAdvancesTheEpoch() {
+        let manager = makeManager()
+        let e0 = manager.connectEpoch
+        manager.connect(record: record(with: validParams()))
+        let e1 = manager.connectEpoch
+        XCTAssertGreaterThan(e1, e0, "a launched attempt must bump the epoch")
+        // Back to .disconnected so a second connect is allowed, then verify the
+        // epoch advances again (strictly monotonic across attempts).
+        manager.state = .disconnected
+        manager.connect(record: record(with: validParams()))
+        XCTAssertGreaterThan(manager.connectEpoch, e1)
+        manager.state = .disconnected
+    }
+
+    // An invalid connect fails in preflight *before* an attempt is launched, so
+    // it must NOT consume an epoch — there is no detached runEngine to guard.
+    func testInvalidConnectDoesNotAdvanceTheEpoch() {
+        let manager = makeManager()
+        let e0 = manager.connectEpoch
+        manager.connect(record: record(with: invalidParams()))
+        XCTAssertEqual(manager.state, .failed(L10n.validateClientIDEmpty.localized()))
+        XCTAssertEqual(manager.connectEpoch, e0, "validation failure must not bump the epoch")
     }
 }

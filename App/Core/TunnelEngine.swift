@@ -6,7 +6,7 @@ import Mobile
 // The iOS multi-protocol seam. A `TunnelEngine` is a pluggable tunnel backend —
 // one conformer per protocol: `OlcrtcEngine` today, vless / xray / reality / awg
 // later (#114). `TunnelManager` owns everything generic (the connection state
-// machine, keep-alive, one-shot auto-retry, end-to-end SOCKS verification, and
+// machine, keep-alive, backoff auto-reconnect, end-to-end SOCKS verification, and
 // background-audio keep-alive); the engine owns the protocol's native runtime —
 // for olcrtc, the gomobile singleton exposed by `Mobile.xcframework`.
 //
@@ -39,6 +39,11 @@ struct EngineStartSettings: Sendable {
     let localSocksAuthEnabled: Bool
     let localSocksUser:        String
     let localSocksPass:        String
+    /// True only on an auto-reconnect attempt (#270 recovery loop), false on a
+    /// user-initiated connect. Drives the engine's room-settle delay (#271): on a
+    /// reconnect into the same room we wait after Stop before Start so the prior
+    /// session's MUC presence clears first.
+    let isReconnect:           Bool
 }
 
 /// Runtime values for the isolated per-connection probes (`ping` / `checkReady`),
@@ -128,6 +133,19 @@ final class OlcrtcEngine: TunnelEngine, @unchecked Sendable {
 
     func stop() { MobileStop() }
 
+    /// Carrier-aware room-settle (#271): milliseconds to wait after `MobileStop()`
+    /// before re-joining the *same* room on an auto-reconnect, so the previous
+    /// session's MUC presence clears first. Jitsi/Telemost (XMPP-MUC) propagate
+    /// `presence-unavailable` with a lag and reject a too-fast re-join into the
+    /// "ghost"; others settle less. Fresh connects skip it. `internal` so
+    /// `RejoinSettleTests` can pin the mapping.
+    static func rejoinSettleMs(carrier: String) -> Int {
+        switch carrier.lowercased() {
+        case "jitsi", "telemost": return 3000   // XMPP-MUC presence cleanup lag
+        default:                  return 1500   // wbstream + anything new
+        }
+    }
+
     func start(_ details: ConnectionDetails, port: Int, settings s: EngineStartSettings) async throws {
         guard case .olcrtc(let params) = details else {
             throw TunnelEngineError("internal: OlcrtcEngine received non-olcrtc details")
@@ -148,6 +166,22 @@ final class OlcrtcEngine: TunnelEngine, @unchecked Sendable {
         //   No iOS-side serialisation is needed. If upstream drops these locks,
         //   wrap each call on a dedicated `.sync` DispatchQueue.
         MobileStop()
+        // #271: on an auto-reconnect into the same room, the session we just
+        // stopped sends MUC presence-unavailable, but Jitsi/Telemost clear the old
+        // participant with a lag — re-joining too fast collides with that "ghost"
+        // and the join fails (see the ghost-participant note in upstream
+        // server.go). Wait a short, carrier-aware settle after Stop before Start;
+        // a fresh connect (`isReconnect == false`) has no prior presence, so skips it.
+        if s.isReconnect {
+            let settleMs = Self.rejoinSettleMs(carrier: params.carrier)
+            if settleMs > 0 {
+                await MainActor.run {
+                    LogStore.shared.log(.connection,
+                        L10n.rejoinSettle_fmt.formatted(Double(settleMs) / 1000.0))
+                }
+                try? await Task.sleep(for: .milliseconds(settleMs))
+            }
+        }
         MobileSetDebug(s.debugEnabled)
         MobileSetDNS(s.dns)
         let vp8FPS   = params.vp8FPS       ?? s.vp8FPS

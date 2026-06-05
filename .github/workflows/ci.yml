@@ -1,7 +1,8 @@
 # #250: CI — build + test the iOS app and verify srv.sh<->upstream parity on
-# every push/PR. The gomobile core (App/Mobile.xcframework, ~228 MB) is gitignored,
-# so CI rebuilds it from the olcrtc-upstream submodule and caches it by the pinned
-# upstream commit (the build is ~5 min; a cache hit skips Go entirely).
+# every push/PR, plus a SwiftLint pass (#255, lenient — see .swiftlint.yml). The
+# gomobile core (App/Mobile.xcframework, ~228 MB) is gitignored, so CI rebuilds it
+# from the olcrtc-upstream submodule and caches it by the pinned upstream commit
+# (the build is ~5 min; a cache hit skips Go entirely).
 name: CI
 
 on:
@@ -81,3 +82,17 @@ jobs:
             -project olcrtc-ios.xcodeproj \
             -scheme olcrtc-ios-tests \
             -destination "id=$UDID"
+
+  # SwiftLint (#255). Source-only, so it skips the submodule + framework and runs
+  # in parallel with build-test. Lenient config (.swiftlint.yml) + non-strict, so
+  # warnings annotate but don't fail; tighten to `--strict` once the tree is clean.
+  lint:
+    name: SwiftLint
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: SwiftLint
+        run: |
+          which swiftlint || brew install swiftlint
+          swiftlint version
+          swiftlint lint --reporter github-actions-logging

@@ -19,6 +19,30 @@ The app manages the full lifecycle end to end:
 
 ---
 
+## Legal Notice
+
+This software is intended for development, testing, and research purposes only.
+
+The author does not provide any guarantees regarding:
+
+- availability of network access
+- compatibility with specific services
+- compliance with any external restrictions
+
+Users are solely responsible for how they use this software and must comply with applicable laws.
+
+## Usage Restrictions
+
+This software is not intended to be used for bypassing access restrictions or violating applicable laws. The author does not support or encourage such use.
+
+---
+
+## Status
+
+Alpha software — not intended for production use. The author sells nothing: not the app, access, configurations, subscriptions, or support; anything given is a voluntary donation.
+
+---
+
 ## Features
 
 - One-tap VPS provisioning over SSH (non-interactive install of the olcrtc server).
@@ -42,6 +66,7 @@ The app manages the full lifecycle end to end:
 
 
 ---
+
 
 ## Requirements
 
@@ -285,11 +310,16 @@ xcodebuild test \
   -destination 'platform=iOS Simulator,name=iPhone 16'
 ```
 
-166 unit tests cover URI round-trips, carrier/transport rules, connection persistence, Keychain round-trips, the tunnel state machine and parameter validation, settings clamping, log secret-redaction, port selection, SSH output parsing, and `installEnv()` ↔ `srv.sh` env-var parity. They also run on every push and PR in [CI](.github/workflows/ci.yml).
+206 unit tests cover URI round-trips, carrier/transport rules, connection persistence, Keychain round-trips, the tunnel state machine and parameter validation, settings clamping, log secret-redaction, port selection, SSH output parsing, and `installEnv()` ↔ `srv.sh` env-var parity. They also run on every push and PR in [CI](.github/workflows/ci.yml).
 
 ---
 
 ## Troubleshooting
+
+<details>
+<summary><b>Build &amp; connection issues</b> — Xcode mismatch, parity failure, missing framework, SSH errors</summary>
+
+<br>
 
 ### Xcode version mismatch
 
@@ -343,6 +373,8 @@ requirement and the `gomobile … requires Xcode` fix.
 
 The app retries the connection twice (2 × 30 s) before surfacing the error. If it fails consistently, reproduce manually with `ssh user@host` to isolate whether the issue is network-side or credential-side.
 
+</details>
+
 ---
 
 ## Contributing
@@ -360,9 +392,3 @@ Bug reports and feature requests use the [issue templates](.github/ISSUE_TEMPLAT
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
----
-
-## Disclaimer
-
-This is alpha-quality software, provided as-is and without warranty of any kind. You are responsible for any servers you provision with it, and for using it in accordance with the terms of the conferencing services involved and any laws that apply to you.

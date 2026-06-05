@@ -427,10 +427,12 @@ enum SSHRunner {
             vars.append("OLCRTC_ROOM_ID=\(shellSafe(options.roomID))")
         }
         if options.carrier == "jitsi" {
-            // Base Jitsi server. srv.sh prefixes a short room name with this,
-            // or uses it for the auto-generated room. A full http(s) URL in
-            // OLCRTC_ROOM_ID is used verbatim and this base is ignored.
-            vars.append("OLCRTC_JITSI_URL=\(shellSafe(AppConstants.defaultJitsiBaseURL))")
+            // Base Jitsi server (#256): user-chosen in the install sheet, pre-filled
+            // from AppConstants.defaultJitsiBaseURL and guaranteed non-empty there.
+            // srv.sh prefixes a short room name with this, or uses it for the
+            // auto-generated room; a full http(s) URL in OLCRTC_ROOM_ID is used
+            // verbatim and this base is ignored.
+            vars.append("OLCRTC_JITSI_URL=\(shellSafe(options.jitsiBaseURL))")
         }
         if options.transport == "vp8channel" {
             vars.append("OLCRTC_VP8_FPS=\(SettingsStore.shared.vp8FPS)")

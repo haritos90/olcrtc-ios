@@ -15,6 +15,9 @@ struct InstallOptionsView: View {
     @State private var carrier   = "telemost"
     @State private var transport = CarrierTransportMatrix.defaultTransport(for: "telemost")
     @State private var roomID    = ""
+    // #256: Jitsi rendezvous base URL — editable, pre-filled with the shared
+    // default so users can point at their own instance. Only sent for jitsi.
+    @State private var jitsiBaseURL = AppConstants.defaultJitsiBaseURL
 
     // SEI channel params — visible only when transport == "seichannel"
     @State private var seiFPS  : Int = 30
@@ -36,6 +39,7 @@ struct InstallOptionsView: View {
                 carrierSection
                 transportSection
                 roomIDSection
+                jitsiSection
                 seiSection
                 defaultsInfoSection
             }
@@ -98,6 +102,26 @@ struct InstallOptionsView: View {
         }
     }
 
+    // #256: only Jitsi has a user-pickable rendezvous instance (Telemost/WBStream
+    // use fixed backends). Shown for jitsi so users aren't silently funnelled onto
+    // the shared public default.
+    @ViewBuilder
+    private var jitsiSection: some View {
+        if carrier == "jitsi" {
+            Section {
+                TextField(L10n.fieldJitsiURL.localized(), text: $jitsiBaseURL)
+                    .font(.system(.body, design: .monospaced))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+            } header: {
+                Text(L10n.jitsiServerHeader.localized())
+            } footer: {
+                Text(L10n.jitsiServerFooter.localized()).font(.caption2)
+            }
+        }
+    }
+
     @ViewBuilder
     private var seiSection: some View {
         if transport == "seichannel" {
@@ -130,14 +154,18 @@ struct InstallOptionsView: View {
         let cleanedRoom = roomID
             .components(separatedBy: .whitespacesAndNewlines)
             .joined()
+        // Never send an empty OLCRTC_JITSI_URL (srv.sh's `:-` default only fills
+        // an *unset* var, not an empty one) — fall back to the shared default.
+        let cleanedJitsi = jitsiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         onConfirm(InstallOptions(
-            carrier:   carrier,
-            transport: transport,
-            roomID:    requiresRoomID ? cleanedRoom : "",
-            seiFPS:    seiFPS,
-            seiBatch:  seiBatch,
-            seiFrag:   seiFrag,
-            seiACK:    seiACK
+            carrier:      carrier,
+            transport:    transport,
+            roomID:       requiresRoomID ? cleanedRoom : "",
+            jitsiBaseURL: cleanedJitsi.isEmpty ? AppConstants.defaultJitsiBaseURL : cleanedJitsi,
+            seiFPS:       seiFPS,
+            seiBatch:     seiBatch,
+            seiFrag:      seiFrag,
+            seiACK:       seiACK
         ))
         dismiss()
     }

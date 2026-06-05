@@ -62,6 +62,13 @@ struct InstallOptions: Sendable, Equatable {
     var transport: String       // "datachannel" | "vp8channel" | "seichannel" | "videochannel"
     var roomID:    String       // required; the server needs an explicit room ID
 
+    /// Jitsi rendezvous base URL, sent as `OLCRTC_JITSI_URL` only when
+    /// `carrier == "jitsi"` (#256). Pre-filled from `AppConstants.defaultJitsiBaseURL`
+    /// but user-overridable in the install sheet, so users can point at their own
+    /// instance instead of the shared public default. Never empty (the sheet falls
+    /// back to the default if cleared).
+    var jitsiBaseURL: String = AppConstants.defaultJitsiBaseURL
+
     // SEI channel tunables — only consumed by installEnv() when transport == "seichannel".
     var seiFPS  : Int = 30
     var seiBatch: Int = 10
