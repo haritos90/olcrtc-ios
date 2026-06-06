@@ -13,9 +13,9 @@ import SwiftUI
 //                      carries a single OlcOverflowMenu with the COMPLETE action set.
 //
 // #258: the per-row actions used to be split between a long-press gesture
-// (runCheckReady), a standalone pencil button, and a hidden contextMenu. They are
+// (time-to-ready), a standalone pencil button, and a hidden contextMenu. They are
 // now all in the one visible OlcOverflowMenu; the row keeps only tap-to-set-primary
-// and the ping chip.
+// and a single health-check chip (#274 — one action runs RTT + time-to-ready).
 
 struct ConnectionsView: View {
     @ObservedObject var store   : ConnectionStore
@@ -33,26 +33,24 @@ struct ConnectionsView: View {
     /// #264: timestamp of the last IP check, shown as a small caption.
     @State private var ipCheckTime    : Date?
 
-    /// Per-row ping state, keyed by connection id. Absent = never pinged.
-    @State private var pingState      : [UUID: PingRowState] = [:]
+    /// #274: per-row health-check state, keyed by connection id. Absent = never
+    /// run. One action runs both probes — time-to-ready (#242) + RTT (#234) — and
+    /// shows one combined result, replacing the old dual ping/ready chips.
+    @State private var healthState    : [UUID: HealthRowState] = [:]
 
-    private enum PingRowState: Equatable {
-        case pinging
-        case done(PingOutcome)
-    }
-
-    /// Per-row time-to-ready check state (#242). Overlays the ping chip with a
-    /// stopwatch result; a re-ping (tap) clears it.
-    @State private var checkState     : [UUID: CheckRowState] = [:]
-
-    private enum CheckRowState: Equatable {
+    private enum HealthRowState: Equatable {
         case checking
-        case done(PingOutcome)
+        case done(ready: PingOutcome, rtt: PingOutcome)
     }
 
     private var routingMode: RoutingMode { RoutingMode(rawValue: routingRaw) ?? .allTunnel }
 
-    private var currentMode: RouteMode { tunnel.state.isConnected ? .tunnel : .direct }
+    // #273: `.allDirect` forces the app's own traffic (IP check / speed test /
+    // in-app SOCKSSession) off the tunnel even while connected — a global kill
+    // switch; otherwise route through the tunnel only when it's actually up.
+    private var currentMode: RouteMode {
+        routingMode == .allDirect ? .direct : (tunnel.state.isConnected ? .tunnel : .direct)
+    }
 
     var body: some View {
         NavigationStack {
@@ -319,7 +317,7 @@ struct ConnectionsView: View {
             }
             Spacer(minLength: 8)
             OlcButton(L10n.speedTestRun.localized(), role: .secondary, isBusy: speed.isTesting) {
-                Task { await speed.run(via: currentMode) }
+                runSpeedTest()
             }
         }
         .padding(.vertical, 12)
@@ -366,7 +364,7 @@ struct ConnectionsView: View {
                 }
             } else {
                 ForEach(store.grouped(), id: \.group) { group in
-                    Section(group.group) {
+                    Section(ConnectionRecord.displayGroupName(group.group)) {
                         ForEach(group.items) { conn in
                             serverRow(conn)
                         }
@@ -412,7 +410,7 @@ struct ConnectionsView: View {
 
             Spacer()
 
-            pingButton(conn)
+            healthButton(conn)
             // #258 was: a standalone pencil quick-edit button — removed (Edit is in
             // the overflow menu and the swipe action).
             OlcOverflowMenu(items: serverMenuItems(conn))
@@ -444,12 +442,9 @@ struct ConnectionsView: View {
                 tunnel.connect(record: conn)
             })
         }
-        items.append(.action(L10n.pingButtonA11y.localized(), systemImage: "bolt.horizontal.circle") {
-            runPing(conn)
-        })
-        // #258: time-to-ready check is now a normal menu item (was long-press only).
-        items.append(.action(L10n.checkReadyA11y.localized(), systemImage: "stopwatch") {
-            runCheckReady(conn)
+        // #274: one "Health check" item runs both probes (RTT + time-to-ready).
+        items.append(.action(L10n.healthCheckAction.localized(), systemImage: "waveform.path.ecg") {
+            runHealthCheck(conn)
         })
         items.append(.divider)
         items.append(.action(L10n.shareConnectionTitle.localized(), systemImage: "square.and.arrow.up") {
@@ -472,88 +467,88 @@ struct ConnectionsView: View {
         return items
     }
 
-    // MARK: Per-connection ping (#234) + time-to-ready (#242)
+    // MARK: Per-connection health check (#274 — merges #234 RTT + #242 time-to-ready)
 
-    /// Trailing ping chip: a bolt that becomes a spinner while probing, then a
-    /// coloured "<n> ms" pill (or a stopwatch result from #242). Tapping re-pings.
+    /// Trailing health chip: a heartbeat glyph that becomes a spinner while
+    /// probing, then the measured RTT (or the ready time if RTT failed, or a red
+    /// marker if both failed). One tap runs both probes; the full combined result
+    /// lands in the log + the accessibility label.
     @ViewBuilder
-    private func pingButton(_ conn: ConnectionRecord) -> some View {
+    private func healthButton(_ conn: ConnectionRecord) -> some View {
         Button {
-            runPing(conn)
+            runHealthCheck(conn)
         } label: {
-            pingChipLabel(conn)
+            healthChipLabel(conn)
                 .font(.caption2.monospacedDigit())
                 .frame(minWidth: 28, minHeight: 28)
                 .padding(.horizontal, 10)
                 .background(Theme.Palette.fill, in: Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(pingState[conn.id] == .pinging || checkState[conn.id] == .checking)
-        .accessibilityLabel(L10n.pingButtonA11y.localized())
-        // #258 was: .simultaneousGesture(LongPressGesture(...) { runCheckReady(conn) })
-        // — removed; "Check time-to-ready" is a visible item in the overflow menu.
+        .disabled(healthState[conn.id] == .checking)
+        .accessibilityLabel(L10n.healthCheckAction.localized())
     }
 
-    /// Chip content: a #242 time-to-ready result (stopwatch) takes precedence over
-    /// the #234 latency state; otherwise the bolt ping chip.
     @ViewBuilder
-    private func pingChipLabel(_ conn: ConnectionRecord) -> some View {
-        switch checkState[conn.id] {
+    private func healthChipLabel(_ conn: ConnectionRecord) -> some View {
+        switch healthState[conn.id] {
         case .checking:
             ProgressView().controlSize(.mini)
-        case .done(.success(let ms)):
-            HStack(spacing: 3) {
-                Image(systemName: "stopwatch")
-                Text("\(ms) ms").monospacedDigit()
-            }
-            .foregroundStyle(Theme.Palette.accent)
-        case .done(.failure):
-            Image(systemName: "stopwatch").foregroundStyle(Theme.Palette.red)
-        case nil:
-            switch pingState[conn.id] {
-            case .pinging:
-                ProgressView().controlSize(.mini)
-            case .done(.success(let ms)):
+        case .done(let ready, let rtt):
+            if case .success(let ms) = rtt {
+                // Healthy: show RTT (familiar latency pill), coloured by threshold.
                 Text("\(ms) ms").foregroundStyle(Self.latencyColor(ms))
-            case .done(.failure):
-                Image(systemName: "bolt.horizontal.circle").foregroundStyle(Theme.Palette.red)
-            case nil:
-                Image(systemName: "bolt.horizontal.circle").foregroundStyle(Theme.Palette.textSecondary)
+            } else if case .success(let ms) = ready {
+                // Transport reached ready but the RTT probe failed — show ready, amber.
+                HStack(spacing: 3) {
+                    Image(systemName: "stopwatch")
+                    Text("\(ms) ms").monospacedDigit()
+                }
+                .foregroundStyle(Theme.Palette.orange)
+            } else {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Theme.Palette.red)
             }
+        case nil:
+            Image(systemName: "waveform.path.ecg")
+                .foregroundStyle(Theme.Palette.textSecondary)
         }
     }
 
-    private func runPing(_ conn: ConnectionRecord) {
-        guard pingState[conn.id] != .pinging else { return }
-        checkState[conn.id] = nil   // #242: a fresh ping clears any ready-check overlay
-        pingState[conn.id] = .pinging
+    /// Runs both isolated probes — time-to-ready (#242) then RTT (#234) — and logs
+    /// one combined line. The underlying `TunnelManager`/engine probes are
+    /// unchanged; only the row UI collapses (#274).
+    private func runHealthCheck(_ conn: ConnectionRecord) {
+        guard healthState[conn.id] != .checking else { return }
+        healthState[conn.id] = .checking
         Task {
-            let outcome = await tunnel.ping(conn.details)
-            pingState[conn.id] = .done(outcome)
-            switch outcome {
-            case .success(let ms):
-                LogStore.shared.log(.connection, L10n.pingResult_fmt.formatted(conn.displayName, ms))
-            case .failure(let msg):
-                LogStore.shared.log(.connection, L10n.pingFailedLog_fmt.formatted(conn.displayName, msg))
-            }
+            let ready = await tunnel.checkReady(conn.details)
+            let rtt   = await tunnel.ping(conn.details)
+            healthState[conn.id] = .done(ready: ready, rtt: rtt)
+            LogStore.shared.log(.connection, L10n.healthResult_fmt.formatted(
+                conn.displayName, Self.healthValue(ready), Self.healthValue(rtt)))
         }
     }
 
-    /// #242: isolated time-to-ready (WebRTC startup) check; result overlays the
-    /// ping chip with a stopwatch. Triggered from the overflow menu.
-    private func runCheckReady(_ conn: ConnectionRecord) {
-        guard checkState[conn.id] != .checking else { return }
-        checkState[conn.id] = .checking
-        Task {
-            let outcome = await tunnel.checkReady(conn.details)
-            checkState[conn.id] = .done(outcome)
-            switch outcome {
-            case .success(let ms):
-                LogStore.shared.log(.connection, L10n.checkReadyResult_fmt.formatted(conn.displayName, ms))
-            case .failure(let msg):
-                LogStore.shared.log(.connection, L10n.checkReadyFailedLog_fmt.formatted(conn.displayName, msg))
-            }
+    /// Formats one probe outcome for the combined health log line.
+    private static func healthValue(_ outcome: PingOutcome) -> String {
+        switch outcome {
+        case .success(let ms):  return "\(ms) ms"
+        case .failure(let msg): return "n/a (\(msg))"
         }
+    }
+
+    /// #285: passes the active carrier/transport into the speed test (when
+    /// tunnelled) so the header logs the connection type and the datachannel
+    /// hint can fire for slow video transports.
+    private func runSpeedTest() {
+        var carrier: String?
+        var transport: String?
+        if currentMode == .tunnel, case .olcrtc(let p)? = store.primary?.details {
+            carrier = p.carrier
+            transport = p.transport
+        }
+        Task { await speed.run(via: currentMode, carrier: carrier, transport: transport) }
     }
 
     /// Green / orange / red thresholds for a SOCKS round-trip in milliseconds.

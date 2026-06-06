@@ -3,12 +3,22 @@ import SwiftUI
 // MARK: - CarrierTransportMatrix
 //
 // Carrier × Transport compatibility reference, shown in the Servers tab.
-// Based on upstream e2e test results and observed behaviour in the field.
-// Update the `matrix` dict as new data arrives — see TODO.md for details.
 //
-// Sources:
-//   - wbstream datachannel: was disabled by the carrier at some point
-//   - telemost vp8channel: confirmed recommended by OpenWRT panel and plumbicon
+// #284: re-derived from the upstream authoritative matrix in
+// `olcrtc-upstream/docs/settings.md` ("Матрица совместимости", from the E2E
+// suite). Legend mapping: `+` (pass) → .ok, the per-carrier best/default → .recommended,
+// `~` (unstable, may work) → .question, `-` (fail / unsupported) → .fail.
+//
+//   | transport    | telemost | wbstream | jitsi |
+//   | datachannel  |    -     |    ~     |   +   |
+//   | vp8channel   |    +     |    +     |   ~   |
+//   | seichannel   |    -     |    +     |   ~   |
+//   | videochannel |    +     |    +     |   ~   |
+//
+// Upstream notes: Telemost dropped DataChannel (fail) and never supported sei;
+// videochannel works but is slow. WBStream runs everything except datachannel
+// (guest tokens set canPublishData=false → unstable). Jitsi's datachannel is the
+// one stable, recommended combo; its video transports flap (Jicofo routing).
 
 /// Compatibility level between a carrier and a transport, based on observed test results.
 enum Compat {
@@ -42,24 +52,46 @@ enum CarrierTransportMatrix {
     static let carriers:   [String] = ["telemost", "wbstream", "jitsi"]
     static let transports: [String] = ["datachannel", "vp8channel", "seichannel", "videochannel"]
 
+    /// Friendly, localised display names for the raw carrier / transport IDs
+    /// (#283) — the pickers and matrix used to show bare IDs (`telemost`,
+    /// `vp8channel`). The selection *value* stays the raw ID; only the label
+    /// changes. Unknown IDs pass through so a future backend still renders.
+    static func carrierLabel(_ id: String) -> String {
+        switch id {
+        case "telemost": return L10n.carrierTelemost.localized()
+        case "wbstream": return L10n.carrierWbstream.localized()
+        case "jitsi":    return L10n.carrierJitsi.localized()
+        default:         return id
+        }
+    }
+    static func transportLabel(_ id: String) -> String {
+        switch id {
+        case "datachannel":  return L10n.transportDatachannel.localized()
+        case "vp8channel":   return L10n.transportVp8channel.localized()
+        case "seichannel":   return L10n.transportSeichannel.localized()
+        case "videochannel": return L10n.transportVideochannel.localized()
+        default:             return id
+        }
+    }
+
     static let matrix: [String: [String: Compat]] = [
         "telemost": [
-            "datachannel":  .ok,
-            "vp8channel":   .recommended,
-            "seichannel":   .unknown,
-            "videochannel": .unknown,
+            "datachannel":  .fail,         // DataChannel removed from Telemost (upstream)
+            "vp8channel":   .recommended,  // only stable transport for telemost; the default
+            "seichannel":   .fail,         // not supported
+            "videochannel": .ok,           // works but slow
         ],
         "wbstream": [
-            "datachannel":  .fail,       // broken since upstream dropped room auto-generation
-            "vp8channel":   .ok,
-            "seichannel":   .unknown,
-            "videochannel": .unknown,
+            "datachannel":  .question,     // guest tokens canPublishData=false → unstable
+            "vp8channel":   .recommended,  // stable for commercial flows; the default
+            "seichannel":   .ok,
+            "videochannel": .ok,
         ],
         "jitsi": [
-            "datachannel":  .ok,         // confirmed working (SCTP fallback + RTCP keepalive)
-            "vp8channel":   .question,   // marked unstable by upstream e2e
-            "seichannel":   .question,   // marked unstable by upstream e2e
-            "videochannel": .question,   // needs ffmpeg, unstable
+            "datachannel":  .recommended,  // the one stable combo upstream recommends everywhere
+            "vp8channel":   .question,     // Jicofo video routing flaps (unstable)
+            "seichannel":   .question,     // SEI passenger frames flap on self-hosted Jicofo
+            "videochannel": .question,     // needs extra Jingle steps; unstable
         ],
     ]
 
@@ -129,7 +161,7 @@ struct MatrixView: View {
             // Rows
             ForEach(CarrierTransportMatrix.carriers, id: \.self) { c in
                 HStack(spacing: 0) {
-                    Text(c)
+                    Text(CarrierTransportMatrix.carrierLabel(c))
                         .font(.system(.caption, design: .monospaced))
                         .frame(width: 72, alignment: .leading)
                         .foregroundStyle(c == highlightCarrier ? .primary : .secondary)

@@ -32,4 +32,25 @@ final class CarrierTransportMatrixTests: XCTestCase {
         // auto-generation, add "jitsi" here and match it in scripts/srv.sh.
         XCTAssertTrue(CarrierTransportMatrix.autoGeneratesRoomID.isEmpty)
     }
+
+    // #284: cells re-derived from upstream docs/settings.md. Pin the ones the
+    // user picks by — and the cells that were previously *wrong* (telemost
+    // dropped DataChannel; telemost seichannel is unsupported).
+    func testMatrixMatchesUpstream() {
+        XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "jitsi",    transport: "datachannel"), .recommended)
+        XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "telemost", transport: "vp8channel"),  .recommended)
+        XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "wbstream", transport: "vp8channel"),  .recommended)
+        XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "telemost", transport: "datachannel"), .fail)
+        XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "telemost", transport: "seichannel"),  .fail)
+        XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "wbstream", transport: "datachannel"), .question)
+    }
+
+    // The pre-selected transport for each carrier must be its recommended cell.
+    func testDefaultTransportIsTheRecommendedCell() {
+        for carrier in CarrierTransportMatrix.carriers {
+            let t = CarrierTransportMatrix.defaultTransport(for: carrier)
+            XCTAssertEqual(CarrierTransportMatrix.compat(carrier: carrier, transport: t), .recommended,
+                           "default transport for \(carrier) should be its recommended cell")
+        }
+    }
 }

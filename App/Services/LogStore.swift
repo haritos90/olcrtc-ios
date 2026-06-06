@@ -46,11 +46,43 @@ enum LogCategory: String, CaseIterable, Identifiable {
     }
 }
 
-/// A single timestamped line in the in-memory log buffer for a given category.
+/// Per-line severity for colour-coding the merged Logs stream (#276). Distinct
+/// from `LogLevel` (a global *verbosity threshold* with no "warning" rung): this
+/// classifies one line's importance, inferred from its text when not given
+/// explicitly. Order matters — `.debug < .info < .warn < .error`.
+enum LogLineLevel: Int, Comparable, CaseIterable {
+    case debug, info, warn, error
+    static func < (a: LogLineLevel, b: LogLineLevel) -> Bool { a.rawValue < b.rawValue }
+}
+
+/// Host + container of the most recent `podman logs` fetch (#278), so the Logs
+/// tab can offer an in-place "Refresh from server" without re-selecting a host.
+struct ContainerLogTarget: Equatable {
+    let hostID: UUID
+    let containerName: String
+}
+
+/// A single line in the in-memory log buffer. `text` is the *message only* — the
+/// timestamp lives in `date` (formatted at display time, #277) and the origin in
+/// `category` (so the merged stream can tag each line, #276). `seq` is a
+/// monotonic tiebreaker for stable ordering when timestamps collide (e.g.
+/// container lines whose Go timestamps share the same whole second).
 struct LogEntry: Identifiable, Equatable {
     let id   = UUID()
-    let date = Date()
+    let date : Date
+    let category : LogCategory
+    let level : LogLineLevel
     let text : String
+    let seq  : Int
+
+    init(date: Date = Date(), category: LogCategory, level: LogLineLevel = .info,
+         text: String, seq: Int = 0) {
+        self.date = date
+        self.category = category
+        self.level = level
+        self.text = text
+        self.seq = seq
+    }
 }
 
 // Writes plain text lines to a per-category rotating file.
@@ -76,7 +108,7 @@ final class LogFileWriter {
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }
         handle = try? FileHandle(forWritingTo: url)
-        try? handle?.seekToEnd()
+        _ = try? handle?.seekToEnd()
         fileURL = url
 
         #if targetEnvironment(simulator)
@@ -88,7 +120,7 @@ final class LogFileWriter {
             FileManager.default.createFile(atPath: mirrorPath, contents: nil)
         }
         mirrorHandle = try? FileHandle(forWritingTo: URL(fileURLWithPath: mirrorPath))
-        try? mirrorHandle?.seekToEnd()
+        _ = try? mirrorHandle?.seekToEnd()
         #endif
     }
 
@@ -120,7 +152,19 @@ final class LogStore: ObservableObject {
 
     @Published var fileURLs: [LogCategory: URL] = [:]
 
+    // Bumped on every appended line so views can cheaply observe "something
+    // changed" — the merged stream (#276) collapses the per-category counts, so a
+    // count-diff alone misses same-cap appends (oldest dropped, newest added).
+    @Published private(set) var revision: Int = 0
+
+    // Last container targeted by a logs fetch (#278); drives the Logs-tab refresh.
+    @Published private(set) var lastContainerTarget: ContainerLogTarget?
+
     private var writers: [LogCategory: LogFileWriter] = [:]
+
+    // Monotonic, assigned per appended line — the merged stream's stable
+    // tiebreaker when two lines share the same timestamp.
+    private var seqCounter = 0
 
     private init() {}
 
@@ -151,11 +195,29 @@ final class LogStore: ObservableObject {
         for cat in LogCategory.allCases {
             entries[cat] = []
         }
+        revision &+= 1
     }
 
     /// Drops in-memory entries for a single category only.
     func clear(category: LogCategory) {
         entries[category] = []
+        revision &+= 1
+    }
+
+    /// All categories flattened into one chronological stream (#276), oldest
+    /// first. Sorted by timestamp, then insertion order (`seq`) so same-second
+    /// lines keep their original sequence. The Logs view renders this reversed
+    /// (newest-first, #277).
+    var merged: [LogEntry] {
+        entries.values.flatMap { $0 }.sorted {
+            $0.date == $1.date ? $0.seq < $1.seq : $0.date < $1.date
+        }
+    }
+
+    /// Remembers the host+container a logs fetch ran against (#278) so the Logs
+    /// tab can re-pull without sending the user back to the server card.
+    func noteContainerTarget(hostID: UUID, containerName: String) {
+        lastContainerTarget = ContainerLogTarget(hostID: hostID, containerName: containerName)
     }
 
     /// Substrings that identify Pion-level noise suppressed below `.verbose`.
@@ -170,34 +232,98 @@ final class LogStore: ObservableObject {
         "pion/webrtc",
     ]
 
-    @MainActor func log(_ category: LogCategory, _ msg: String) {
-        let level = SettingsStore.shared.logLevel
+    /// Appends a line to `category`. `level` defaults to a text-inferred severity
+    /// (#276); `date` defaults to now but callers ingesting external logs pass the
+    /// line's own parsed timestamp so it interleaves chronologically (#278).
+    @MainActor func log(_ category: LogCategory, _ msg: String,
+                        level: LogLineLevel? = nil, date: Date = Date()) {
+        let verbosity = SettingsStore.shared.logLevel
 
         // Off — drop everything (file writes also suppressed)
-        if level == .off { return }
+        if verbosity == .off { return }
 
         // Below verbose — drop Pion-level noise
-        if level < .verbose {
+        if verbosity < .verbose {
             let lower = msg.lowercased()
             if Self.pionNoisePatterns.contains(where: { lower.contains($0.lowercased()) }) { return }
         }
 
         let safe = Self.redactSecrets(msg)
-        let line = "\(Self.timestamp()) \(safe)"
+        let lvl = level ?? Self.classify(safe)
+        seqCounter &+= 1
         var list = entries[category] ?? []
-        list.append(LogEntry(text: line))
+        list.append(LogEntry(date: date, category: category, level: lvl, text: safe, seq: seqCounter))
         let cap = max(50, SettingsStore.shared.logBufferSize)
         if list.count > cap { list.removeFirst(list.count - cap) }
         entries[category] = list
-        writers[category]?.write(line)
+        // The on-disk line keeps the timestamp inline so exported files stay
+        // self-describing (the in-memory entry carries it as a real `Date`).
+        writers[category]?.write("\(Self.format(date: date)) \(safe)")
+        revision &+= 1
     }
 
-    private static let _timestampFormatter: DateFormatter = {
+    // #277: dated, millisecond timestamps everywhere (was time-only "HH:mm:ss.SSS"),
+    // so it's clear which day/session a line belongs to across the merged stream.
+    private static let _displayFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss.SSS"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy.MM.dd HH:mm:ss.SSS"
         return f
     }()
-    static func timestamp() -> String { _timestampFormatter.string(from: Date()) }
+    static func format(date: Date) -> String { _displayFormatter.string(from: date) }
+    static func timestamp() -> String { _displayFormatter.string(from: Date()) }
+
+    // Go's default log stamp ("2006/01/02 15:04:05", no millis) used by the
+    // server/container lines (#278) — plus our own format, so re-ingesting an
+    // already-stamped line is a no-op rather than a double stamp.
+    private static let _goTSFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy/MM/dd HH:mm:ss"
+        return f
+    }()
+
+    /// Splits a leading timestamp off an externally-sourced line (container /
+    /// server logs). Returns the parsed `Date` + the remaining message, or `nil`
+    /// when the line carries no recognised timestamp — the caller then carries
+    /// the previous line's date forward so continuation lines stay adjacent.
+    static func parseExternalTimestamp(_ line: String) -> (date: Date, rest: String)? {
+        func strip(_ count: Int, _ formatter: DateFormatter) -> (Date, String)? {
+            guard line.count >= count else { return nil }
+            guard let d = formatter.date(from: String(line.prefix(count))) else { return nil }
+            let rest = String(line.dropFirst(count)).drop(while: { $0 == " " })
+            return (d, String(rest))
+        }
+        // Try our own format (23 chars, with .SSS) first: DateFormatter treats
+        // "." and "/" as interchangeable separators, so the shorter Go pattern
+        // would otherwise match a dotted line and swallow the millis as `rest`.
+        if let r = strip(23, _displayFormatter) { return r }     // 2006.01.02 15:04:05.000
+        if let r = strip(19, _goTSFormatter) { return r }        // 2006/01/02 15:04:05
+        return nil
+    }
+
+    // #276: infer a line's severity for colour-coding. Order:
+    //   1. noise first, so a pion line containing "failed"/"unreachable" stays
+    //      `.debug` rather than masquerading as an error;
+    //   2. our own emoji severity prefixes (✗/❌ = error, ⚠ = warn) — the
+    //      strongest, deliberate signal (e.g. "⚠ Network lost" must read warn,
+    //      not error, even though it contains the "lost" keyword);
+    //   3. keyword fallback for emoji-less lines (mostly server/container text).
+    private static let _debugMarkers = ["[pc]", "[ice]", "[sctp]", "[dtls]", "pion/",
+        "traffic:", "duplicated packet", "sid=", "kcp", "debug"]
+    private static let _errorMarkers = ["error", "failed", "failure", "fatal", "panic",
+        "cfnetwork", "not responding", "lost", "unreachable", "gave up", "missed_pongs=3"]
+    private static let _warnMarkers = ["warn", "missed pong", "retry", "reconnect",
+        "timeout", "busy", "degrad", "settle"]
+    static func classify(_ text: String) -> LogLineLevel {
+        let s = text.lowercased()
+        if _debugMarkers.contains(where: { s.contains($0) }) { return .debug }
+        if s.contains("✗") || s.contains("❌") { return .error }
+        if s.contains("⚠") { return .warn }
+        if _errorMarkers.contains(where: { s.contains($0) }) { return .error }
+        if _warnMarkers.contains(where: { s.contains($0) }) { return .warn }
+        return .info
+    }
 
     // Redacts encryption credentials before anything lands in the in-memory
     // buffer or on disk. Two passes:

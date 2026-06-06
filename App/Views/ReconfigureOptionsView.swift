@@ -46,7 +46,7 @@ struct ReconfigureOptionsView: View {
     private var carrierSection: some View {
         Section(L10n.sectionCarrier.localized()) {
             OlcChipPicker(selection: $carrier,
-                          options: CarrierTransportMatrix.carriers.map { ($0, $0) })
+                          options: CarrierTransportMatrix.carriers.map { ($0, CarrierTransportMatrix.carrierLabel($0)) })
                 .onChange(of: carrier) { _, c in
                     transport = CarrierTransportMatrix.defaultTransport(for: c)
                 }
@@ -56,7 +56,7 @@ struct ReconfigureOptionsView: View {
     private var transportSection: some View {
         Section {
             OlcChipPicker(selection: $transport,
-                          options: CarrierTransportMatrix.transports.map { ($0, $0) })
+                          options: CarrierTransportMatrix.transports.map { ($0, CarrierTransportMatrix.transportLabel($0)) })
         } header: {
             Text(L10n.transportSectionHeader.localized())
         } footer: {

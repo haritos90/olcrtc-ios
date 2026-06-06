@@ -279,7 +279,11 @@ final class TunnelManager: ObservableObject {
                 if let last = TunnelManager.lastTunnelActivityDate,
                    Date().timeIntervalSince(last) < Double(interval) {
                     failCount = 0
-                    LogStore.shared.log(.connection, "♡ Keep-alive skipped — tunnel active \(Int(Date().timeIntervalSince(last)))s ago")
+                    // #287: `noteActivity(forAtLeast:)` parks the marker in the
+                    // *future* to reserve a known-busy window (e.g. a speed test),
+                    // which made the "ago" math go negative ("active −N s ago").
+                    let age = Date().timeIntervalSince(last)
+                    LogStore.shared.log(.connection, Self.keepAliveSkipNote(ageSeconds: age))
                     continue
                 }
 
@@ -618,6 +622,25 @@ final class TunnelManager: ObservableObject {
     //
     // Without this, ICE-connected-but-TURN-rejected states would be reported
     // as .connected to the UI.
+    /// #287: wording for the "keep-alive skipped" line. `noteActivity(forAtLeast:)`
+    /// can park the activity marker in the future, so a naive "ago" goes negative —
+    /// report the reserved window instead of "active −N s ago".
+    nonisolated static func keepAliveSkipNote(ageSeconds: Double) -> String {
+        ageSeconds < 0
+            ? "♡ Keep-alive skipped — tunnel busy (\(Int(-ageSeconds))s reserved)"
+            : "♡ Keep-alive skipped — tunnel active \(Int(ageSeconds))s ago"
+    }
+
+    /// #287: a valid verify URL only reports "bad URL" when the SOCKS session
+    /// itself can't be built (e.g. the proxy is gone mid-teardown). Translate that
+    /// to a truthful reason; pass everything else through unchanged.
+    nonisolated static func verifyFailureReason(_ error: Error) -> String {
+        if let u = error as? URLError, u.code == .badURL || u.code == .unsupportedURL {
+            return "proxy not ready"
+        }
+        return error.localizedDescription
+    }
+
     private static func verifyTunnel() async -> Bool {
         let session = SOCKSSession.make(mode: .tunnel, timeout: 20)
         return await withTaskGroup(of: (String, Bool).self) { group in
@@ -639,9 +662,10 @@ final class TunnelManager: ObservableObject {
                         }
                         return (urlString, false)
                     } catch {
+                        let reason = Self.verifyFailureReason(error)
                         await MainActor.run {
                             LogStore.shared.log(.connection,
-                                "✗ tunnel verify via \(urlString): \(error.localizedDescription)")
+                                "✗ tunnel verify via \(urlString): \(reason)")
                         }
                         return (urlString, false)
                     }

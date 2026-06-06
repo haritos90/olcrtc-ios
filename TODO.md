@@ -35,7 +35,7 @@ in **ascending ID** order.
 **Layout** — Open and Backlog come first, then their **Details** blocks, then the
 **Closed** history last, so the active work and its descriptions stay at the top.
 
-**Next free ID:** 288
+**Next free ID:** 291
 
 ---
 
@@ -43,10 +43,7 @@ in **ascending ID** order.
 
 Current, actionable work.
 
-| ID | Pri | Eff | Theme | Title |
-|---|---|---|---|---|
-
-_Nothing in progress right now — next candidates are in Backlog._
+_Nothing open — every tracked task is done. Promote one from Backlog to start the next._
 
 ---
 
@@ -67,21 +64,8 @@ Future / blocked / someday. Promote to Open when picked up.
 | 247 | P3 | L | build | Failover/profiles in the gomobile binding — **UPSTREAM-only** (rebuild xcframework; unblocks #235) |
 | 254 | P3 | XS | docs | CODE_OF_CONDUCT.md (Contributor Covenant) |
 | 257 | P3 | S | docs | Privacy-policy document (App Store needs a hosted URL) |
-| 273 | P3 | M | features | Release the "Direct" routing mode (`.allDirect`) — bypass the tunnel while staying connected |
-| 274 | P3 | S | ux | Unify the two per-connection probes — "check latency" (#234) + "time to ready" (#242) share one chip |
-| 275 | P2 | M | reliability | "Container running" ≠ "connection healthy" — explain connect timeouts (no peer joined / key mismatch), not a green "connected" |
-| 276 | P2 | M | observability | Logs: one merged stream + per-entry source tag + level colour-coding |
-| 277 | P3 | M | observability | Logs: dated timestamps `yyyy.MM.dd HH:mm:ss.SSS`, consistent newest-first order, retained scroll |
-| 278 | P2 | M | observability | Server/container logs in the Logs tab (download→refresh); rename VPS "Logs" → "Download logs"; match ordering |
 | 279 | P2 | L | observability | Message catalog: typed (info/warn/error), error-coded client+server messages, searchable + troubleshooting cross-ref |
-| 280 | P2 | M | performance | Fix UI jank when changing font size while the screen scrolls |
-| 281 | P3 | M | ux | Make the Refined/Console design directions actually distinct (or drop the toggle) |
-| 282 | P2 | S | l10n | `serverNotResponding`: RU shows English + reword to name the carrier server, not the VPS |
-| 283 | P2 | M | l10n | Localisation gaps: "Servers" group, VPS-list + matrix carrier/transport, Logs tabs + header; route hardcoded terms through L10n |
-| 284 | P3 | M | parity | Update the carrier×transport compatibility matrix data (upstream / OpenWRT luci) |
-| 285 | P2 | M | reliability | Speed test over the tunnel: graceful degradation on a narrow pipe + selectable providers + log connection-type |
-| 286 | P3 | S | ux | IP-check: selectable providers (checkboxes in Settings) + log connection-type |
-| 287 | P3 | S | observability | Log-line cleanups from the real capture: keep-alive "−N s ago", verify "bad URL", mixed RU/EN |
+| 290 | P3 | S | performance | Logs: debounce/coalesce the on-tab merged-stream rebuild during log storms |
 
 ---
 
@@ -188,79 +172,6 @@ SSH credentials never leave the device / Keychain") and host it (GitHub Pages or
 then link it from App Store Connect and the README. Distinct from the in-bundle privacy
 manifest (#249).
 
-### 273 — Release the "Direct" routing mode (`.allDirect`)
-
-`RoutingMode` ships only `.allTunnel` today (`App/Models/RoutingMode.swift`), so the routing
-segmented control in ConnectionsView is a pointless single option. Add the planned `.allDirect`
-"Direct" mode — a global kill switch that bypasses the tunnel even while the session stays
-connected. Wiring: add the case + `title`/L10n; make ConnectionsView's `currentMode` honour it
-(`routingMode == .allDirect ? .direct : (connected ? .tunnel : .direct)`) so the app's own
-diagnostics (IP check / speed test) and any in-app `SOCKSSession` go direct; persists via the
-existing `@AppStorage("olcrtc_routing_mode")`. **Settle first:** scope — `.allDirect` cleanly
-controls the *app's own* URLSession routing, but it can't force *external* apps off the local
-SOCKS port, so decide whether "Direct" means "app-diagnostics bypass" only or also "tear the
-proxy down but keep the config" (a truer kill switch). Mirrors Shadowrocket's global-route
-toggle; framing groundwork for the later `.rules` / `.scene` modes noted in `RoutingMode`.
-
-### 274 — Unify the two per-connection probes (ping + time-to-ready)
-
-The connection row exposes two confusingly-similar probes that share one chip: **"check
-latency"** (#234 `ping` — HTTP round-trip ms through a throwaway *isolated* olcrtc client that
-doesn't touch the live tunnel) and **"measure time to ready"** (#242 `checkReady` — how long the
-WebRTC transport takes to reach *ready*, via the same throwaway client). Because `checkReady`
-overlays the `ping` chip (long-press / context menu), the two appear to alternate in one slot
-and the distinction is opaque. Merge into a single "Health check" action that runs the probe(s)
-once and shows one combined result (e.g. "ready 420 ms · RTT 90 ms"); drop the dual chip +
-long-press gesture. `TunnelManager.ping`/`checkReady` + `OlcrtcEngine` stay — only the row UI
-collapses. Small.
-
-### 275 — "Container running" ≠ "connection healthy"
-
-**Correction (2026-06):** the original "room does not exist" premise was a misunderstanding — the
-server **auto-creates** the conferencing room (telemost), so a missing room isn't a real failure.
-What remains valid: the VPS card shows "container running" (the *process* is up) even when no
-tunnel/peer is actually established, which reads as "all OK". Detect "tunnel up but no peer in room"
-vs "peer present" and, on a connect timeout, say *why* (no peer joined within Ns — wrong key / room
-mismatch / carrier issue) instead of a generic failure. Ties into #280 (container-log inspection) and
-#279 (typed message OLC-2014 for the condition).
-
-**Signal (from the log capture):** the server joining a room but the iOS client never rendezvousing
-shows as **`Link connected` with no following `session opened: …`** — i.e. the control link is up but
-no peer session ever opens (vs the happy path `Connecting → Link connected → session opened (peer=…)`).
-Client-side that's a `MobileWaitReady` timeout (already → `.failed`), but the VPS card separately shows
-"container running" (the *process* is up), which is what reads as "all OK". So #275 is really two
-fixes: (a) don't equate "container running" with "connection healthy", and (b) when a connect times
-out, say *why* (likely empty/wrong room — no peer joined) rather than the generic carrier-not-responding
-(#282).
-
-### 276 — Logs: one merged stream + per-entry source + level colour-coding
-
-Logs are split into per-category tabs (`connection` / `ip` / `containerLogs` / …) in
-`LogStore.entries: [LogCategory: [LogEntry]]`. The volume is small, so separate tabs add friction
-without value — merge into a **single chronological stream**, tagging each line with a compact
-source badge (Conn / Container / IP / …) so origin stays clear (IP-check lines today carry no
-source label at all). Add **colour-coding by level** — debug/noise · info · warning · error
-(levels partly exist from #217) — so problems are scannable. Keep a source *filter*, not separate
-tabs. Pairs with #277 (timestamps) and #279 (typed messages).
-
-### 277 — Logs: dated timestamps + consistent ordering + scroll
-
-`LogStore.timestamp()` emits `HH:mm:ss.SSS` — **time only, no date** — so it's unclear what
-you're looking at across sessions/days. Standardise on **`yyyy.MM.dd HH:mm:ss.SSS`** everywhere
-(client lines, and the server/container lines once #278 normalises them). Fix ordering + scroll:
-the Logs tab and the VPS-fetched logs disagree on direction, and the view keeps snapping to old
-entries at the bottom even after you scroll up to newer ones — pick one order (newest-first) and
-**retain the user's scroll position**.
-
-### 278 — Server/container logs in the Logs tab (download → refresh) + rename
-
-Add a control **in the Logs tab** to pull the server's container log (`podman logs --tail N`,
-already wired via `Provisioning.containerLogs` / `SSHRunner.containerLogs`); once loaded, change
-it to **"Refresh from server"**. Rename the VPS-card **"Logs"** action (`L10n.actionLogs`) to
-**"Download logs"** (it downloads a snapshot, not a live view). Normalise the fetched lines into
-the same ordering + timestamp format as the client stream (#277) so the two interleave cleanly
-(today the VPS "Logs" output is in a different order than the Logs tab).
-
 ### 279 — Message catalog: typed, error-coded client + server messages
 
 Define a **table of known conditions → messages** for both client and server, each with a
@@ -291,89 +202,14 @@ second precision, no millis) — #277/#278 must reformat + tolerate the missing 
 now the *wiring*: emit these coded lines from the right places (and detect the 🟡-planned ones), make the
 codes searchable in the merged Logs stream (#276), and cross-link from the README troubleshooting.
 
-### 280 — Fix UI jank when changing font size while scrolling
+### 290 — Logs: debounce the on-tab merged-stream rebuild
 
-Dragging the font-size control while the screen scrolls stutters the UI. #203/#204 cached the
-`DateFormatter` / redaction regexes, but the jank persists — profile the font-size path (likely a
-full re-layout of long log lists on every slider tick + scroll) and debounce / virtualise so
-resizing stays smooth.
-
-### 281 — Make the Refined/Console design directions actually distinct
-
-#267 added a Settings toggle (Refined / Console) driving 6 `Theme` tokens, but the two render
-almost identically. Either make them **visibly different** (e.g. Console = sharper radii, mono
-accents, denser spacing, hairline borders) or drop the toggle if a second direction isn't worth
-maintaining.
-
-### 282 — `serverNotResponding`: RU localisation + carrier-vs-VPS wording
-
-On a failed connection the RU UI shows the English message even though the L10n value exists
-(`Сервер не отвечает`) — the English likely comes from a raw Go `TunnelEngineError` message
-passed straight into `.failed(e.message)`, bypassing L10n; route those through localised strings.
-Also **reword**: "Server not responding" reads as if the user's *VPS* is down, when it's the
-**carrier conferencing server** (Jitsi/Telemost/WBStream) that didn't answer — say so (e.g.
-"Conferencing server not responding" / "Сервер видеосвязи не отвечает").
-
-### 283 — Localisation gaps sweep
-
-User-facing strings that render English in RU:
-- the Connections **"Servers"** group name (`ConnectionRecord.groupName` default is a hardcoded
-  literal, not L10n — needs display-time mapping or a migration for existing records);
-- **carrier × transport** names in the VPS list and the compatibility matrix (rendered as raw IDs
-  `telemost` / `vp8channel` via `map { ($0, $0) }`, never localised — add friendly localised
-  display names);
-- the **Logs** tab category labels + header (keys exist — `categoryConnection` = "Подключение",
-  `logsTitle` = "Логи" — but the redesigned view appears to bypass them; wire the tabs/title
-  through the keys).
-
-Convention (per maintainer): route **every** user-facing term through L10n even when we keep it
-English — put the English text in the RU dict explicitly rather than leaving it hardcoded — so
-future locales can translate it. Translate at least `connection` / `container`; `vps` and the
-like may stay English (but still as explicit entries). Document the convention in CONTRIBUTING.
-
-### 284 — Update the carrier×transport compatibility matrix
-
-Re-derive `CarrierTransportMatrix` cell data from the current source of truth. Check **upstream
-`olcrtc`** first (e2e tests / docs) for authoritative carrier×transport support; cross-check the
-OpenWRT luci app (`tankionline2005/OlcRTC-OpenWRT` → `…/view/olcrtc/main.js`, where the original
-cells came from). Refresh recommended / ok / question / fail per current reality (jazz already
-removed #224; jitsi data from #225).
-
-### 285 — Speed test over the tunnel: degrade gracefully + selectable providers
-
-**Root cause (measured 2026-06):** the speed test "never works on the tunnel" because `vp8channel` is a
-low-bandwidth covert transport, not because the test is broken. VPS raw uplink ≈ **775/318 Mbps**
-(cloudflare, from the host); through the tunnel ≈ **0.77/0.51 Mbps** — a ~1000× collapse. `server.yaml` =
-`transport: vp8channel`, `vp8.fps 60 / batch 64`, carrier telemost. Under the test's parallel connections
-the narrow, high-latency pipe returns `remote not ready (timeout)` (server `OLC-2008`), surfaced
-client-side as `CFNetwork error 310` on the ping samples (`OLC-1021`); the bulk transfer still trickles
-at <1 Mbps. Fixes:
-- **Degrade gracefully:** fewer / sequential connections, longer timeouts, tolerate ping failure (report
-  `ping n/a`, not an error), report partial throughput.
-- **Log the connection type** (direct/tunnel + carrier/transport) in the speed-test header (`OLC-1020`).
-- **Selectable providers** in Settings (cloudflare may be slow/blocked) — a short pick-list.
-- **Surface the lever:** vp8channel trades bandwidth for looking like a video call; `datachannel` is far
-  faster *where the network allows it* — and **telemost+datachannel is `.ok`** in the matrix, so hint the
-  user toward Reconfigure → datachannel for speed. Ties into #284 (matrix accuracy).
-
-### 286 — IP-check: selectable providers + connection-type
-
-Add a **Settings list of IP-check providers with checkboxes** (which sources to query). The UI already
-mostly shows just a source counter (#216 collapses agreeing sources), so the per-source choice belongs in
-Settings, backed by the existing `AppConstants.ipCheckServices`. Also log the **connection type**
-(direct/tunnel) in the IP-check header (`OLC-1023`) so a check's context is clear. Pairs with #285 (same
-connection-type treatment).
-
-### 287 — Log-line cleanups from the real capture
-
-Small fixes to misleading lines the 2026-06 capture surfaced (`OLC-1024/1025`):
-- **Keep-alive "active −N s ago"** — `noteActivity(forAtLeast:)` sets the activity marker *ahead* (to
-  suppress probes during a known-busy window), so the "ago" math goes negative. Clamp the displayed age at
-  0 (or word it "active now / for the next N s").
-- **Tunnel verify "bad URL"** — a valid URL reports `bad URL` when the SOCKS session can't be built during
-  teardown; give it a truthful reason ("proxy not ready").
-- **Mixed RU/EN** for one concept (`Port 8808 free` vs `Порт 8808 свободен`) — two code paths log the same
-  thing differently; route both through one L10n key (folds into #283).
+The #289 visibility gate stops `LogsView` rebuilding off-screen, but while the Logs tab *is* open during
+a log storm (connect / verbose), `refreshCache()` still runs once per line — and it sorts every category
++ rebuilds the whole `AttributedString`, which can hitch at large `logBufferSize`. Coalesce bursts:
+rebuild at most once per ~150 ms of quiet via a cancellable `Task`, and/or cap the rendered window to
+the most recent N lines (search still spans the full buffer). Goal: the Logs tab stays smooth even under
+heavy logging.
 
 ---
 
@@ -642,3 +478,19 @@ title-only.
 | 270 | reliability | Bounded exponential-backoff auto-reconnect (replace the one-shot retry) | replaced one-shot `scheduleAutoRetry` with `requestReconnect` — a single recovery sink both keep-alive loss and #269 (network regain/interface swap) feed; capped exponential backoff `backoffDelaySeconds` (2→4→8→16→32→60 s, base·2ⁿ clamped) over `maxReconnectAttempts`=6, then terminal `.failed` («tap Retry»), preserving the deliberate battery cap; idempotent (one loop at a time), a verified connect ends the loop so backoff resets, a network loss cancels it (resets on the round-trip), a manual connect/disconnect supersedes it; extracted `preflight` shared by fire-and-forget `start` + awaitable `connectAndAwait`, `runEngine` now returns `Bool` so the loop sees the *verified* outcome; `Tests/ReconnectBackoffTests.swift` (schedule + cap + overflow/negative guards); removed orphaned `autoReconnect_fmt`, added `reconnectAttempt_fmt`/`reconnectGaveUp` (en+ru) |
 | 271 | reliability | Settle delay before reconnecting into the same room (ghost MUC presence) | carrier-aware room-settle on the auto-reconnect path: `EngineStartSettings.isReconnect` (true only via #270's `connectAndAwait`, false on user `start`) → `OlcrtcEngine.start` waits `rejoinSettleMs(carrier:)` after its `MobileStop()` before re-joining, so the prior session's MUC `presence-unavailable` clears first (jitsi/telemost 3 s, others 1.5 s — XMPP-MUC propagation lag, per the upstream `server.go` ghost-participant note); logged via `rejoinSettle_fmt` (en+ru); fresh connects skip it; `Tests/RejoinSettleTests.swift` pins the mapping + case-insensitivity |
 | 272 | reliability | Epoch/generation guard in TunnelManager (discard superseded connect/retry results) | monotonic `connectEpoch` bumped in `preflight` per attempt + captured into each detached `runEngine`; new `isLiveAttempt(epoch)` (epoch matches **and** `state == .connecting`) replaces the bare `state == .connecting` guard at all four `runEngine` MainActor hops, so a fast disconnect→reconnect can't alias the new attempt's `.connecting` and post a result for the wrong session; `connectEpoch` is `private(set)` (test-observable); +2 tests (epoch advances per launched attempt; invalid connect consumes none) |
+| 273 | features | Release the "Direct" routing mode (`.allDirect`) | added `RoutingMode.allDirect` (case + `routingAllDirect` L10n en+ru) so the routing segmented control is a real 2-option choice instead of one pointless item; `ConnectionsView.currentMode` honours it (`.allDirect ? .direct : connected ? .tunnel : .direct`), so the app's own IP-check / speed-test / in-app `SOCKSSession` bypass the tunnel even while connected (a diagnostics kill switch — external apps on the SOCKS port are unaffected, the documented scope); persists via the existing `@AppStorage("olcrtc_routing_mode")`; `Tests/RoutingModeTests.swift` pins raw-value stability (persisted) + distinct non-empty titles |
+| 274 | ux | Unify the two per-connection probes into one Health check | replaced the dual ping (#234) / time-to-ready (#242) chip — which alternated in one slot via a long-press overlay — with a single **Health check** action (overflow item + chip): one tap runs both isolated probes and logs one combined line `🩺 Health %@ — ready %@ · RTT %@` (`healthResult_fmt`, en+ru); the chip shows RTT (familiar latency pill), or the ready time in amber if only RTT failed, or a red marker if both failed. Underlying `TunnelManager.ping`/`checkReady` + engine unchanged — only the row UI collapsed. Removed 6 now-unused L10n keys (ping/checkReady result/failed/a11y) |
+| 275 | reliability | "Container running" ≠ "connection healthy" — diagnose connect timeouts | a `MobileWaitReady` timeout means the WebRTC transport never readied — no peer rendezvoused in the room ("Link connected" with no "session opened"). The state used to show the bare Go reason ("Timeout"); `TunnelEngine` now keeps that in the log but surfaces a diagnostic, `connectNoPeer` (en+ru): "No peer joined in time — check the key matches the server, the room is correct, or try another carrier/transport." Also reworded `vpsSubRunning` so the VPS "running" pill no longer reads as "connected" ("Server process up — not a connection test" / «Серверный процесс запущен — это не проверка подключения»). Distinct from #282's verify-failure path |
+| 276 | observability | Logs: one merged stream + per-entry source tag + level colour-coding | merged the per-category tabs into one chronological stream — `LogEntry` now carries its `category` + an inferred `LogLineLevel` (debug/info/warn/error) + a monotonic `seq`; `LogStore.merged` flattens every category sorted by (date, seq); LogsView renders a single attributed `Text` (one layout region — keeps it cheap) with each line tagged `[Source]` and colour-coded by level (error red / warn orange / info secondary / debug dim), plus a single-select **source filter** (All + per-category) that replaces the tabs; `classify()` infers severity (pion noise→debug first, then ✗/⚠ emoji prefixes, then keyword fallback) and IP-check lines finally carry a source tag; `Tests/LogStoreMergedTests.swift` |
+| 277 | observability | Logs: dated timestamps + consistent newest-first order + retained scroll | `LogStore.format(date:)`/`timestamp()` now emit `yyyy.MM.dd HH:mm:ss.SSS` (was time-only `HH:mm:ss.SSS`); the in-memory `LogEntry` carries the timestamp as a real `Date` (on-disk lines still self-describe with the inline stamp); the merged stream renders **newest-first** and no longer force-scrolls to the bottom on every append (kills the snap-back to old entries), so the view opens on the freshest line and stays where the user scrolled |
+| 278 | observability | Server context-menu "Logs" → "Download container logs" + in-tab load/refresh | renamed the server-card context-menu `actionLogs` → `actionDownloadContainerLogs` ("Download container logs" / «Скачать логи контейнера») with an `arrow.down.doc` icon; `Provisioner.containerLogs` now parses each line's Go timestamp (`yyyy/MM/dd HH:mm:ss`, carry-forward for continuation lines) so container output interleaves chronologically with the client stream instead of clustering at fetch-time, and records the host/container via `LogStore.noteContainerTarget`; the Logs tab gains a **"Refresh from server"** button (`logsRefreshFromServer`) that re-pulls that target directly (no trip back to the server card); `parseExternalTimestamp` also tolerates our own format so re-ingesting is a no-op |
+| 280 | performance | Fix UI jank when changing font size while scrolling | the font-size `Slider` committed `settings.fontSizeIndex` on **every drag tick**, and that value drives `.dynamicTypeSize` app-wide (a full view-tree relayout) + a UserDefaults write — the stutter. Now the drag updates a local `@State fontDragIndex` only (re-rendering just the Settings row + a live preview); the app-wide value commits **once on release** via `onEditingChanged`. The preview text scales live through a scoped `.dynamicTypeSize`. (The Logs list, the worst offender, is already a single attributed `Text` after #276.) |
+| 281 | ux | Make the Refined/Console design directions actually distinct | amplified the Console tokens from near-identical (±2pt radius / 0.5pt border) into a clearly sharper, denser terminal direction: tighter radii (card 7 vs 20, control 5 vs 13, segmented 5 vs 10), a *visible* hairline card border (1pt @ white 16%, was 0.5pt @ 8% — invisible), denser spacing (card padding 12 vs 16, section gap 14 vs 22), and monospaced caption/section labels. Refined stays soft + borderless. `Tests/ThemeDirectionTests.swift` pins them as distinct |
+| 282 | l10n | `serverNotResponding`: reword to name the carrier server (not the VPS) + RU | reworded the carrier-failure state messages so they no longer read as the user's VPS: `serverNotResponding` → "Conferencing server not responding" / «Сервер видеосвязи не отвечает» (verify-failed path), `serverConnectionLost` → "Connection to the conferencing server lost" / «Связь с сервером видеосвязи потеряна» (keep-alive-loss path). The "RU shows English" was a build-221 artifact — both RU values already shipped on current builds; this is the wording fix. L10n-string-only (no keys / Swift touched) → no bump/build |
+| 283 | l10n | Localisation gaps: "Servers" group + carrier/transport display names | (a) the canonical default group token "Servers" now renders via `ConnectionRecord.displayGroupName` → `L10n.groupDefault` at display time (RU «Основная») with no record migration; AddConnectionView stores the canonical token when the field is left at the localised default. (b) the carrier/transport pickers + matrix showed raw IDs — added `CarrierTransportMatrix.carrierLabel`/`transportLabel` (7 L10n keys, en+ru; "telemost"→«Телемост») wired into all three pickers + the matrix rows (selection value stays the raw ID). Documented the explicit-entry convention in CONTRIBUTING. Logs tabs/header were already covered by #276/#278. `Tests/DisplayNameTests.swift` |
+| 284 | parity | Update the carrier×transport compatibility matrix data | re-derived every cell from the upstream authoritative table (`olcrtc-upstream/docs/settings.md`, from the E2E suite): telemost+datachannel `.ok`→`.fail` (DataChannel removed from Telemost), telemost+seichannel `.unknown`→`.fail` (unsupported), telemost+videochannel and wbstream sei/video `.unknown`→`.ok`, wbstream+datachannel `.fail`→`.question` (guest tokens canPublishData=false), and promoted the per-carrier recommended cells to match `defaultTransport` (jitsi+datachannel, telemost/wbstream+vp8channel). `Tests/CarrierTransportMatrixTests.swift` pins the key cells |
+| 285 | reliability | Speed test over the tunnel: degrade gracefully + selectable providers + connection-type | the test "never worked on the tunnel" because vp8channel is a <1 Mbps covert pipe (raw VPS 775/318 vs ~0.77/0.51 through it), not a broken test. On `.tunnel` the run now degrades: serial (not parallel) measurements, scaled-down payloads (1 MB/512 KB vs 5 MB/2 MB) + longer timeouts, ping failure tolerated (reports "n/a"), partial results kept. Header logs the connection type (direct/tunnel + carrier/transport). Provider is selectable in Settings (`SpeedTestProvider`: Cloudflare parametric down/up/trace + OVH fixed-file download/HEAD, both verified) persisted in `speedTestProviderID`. On a slow video-transport tunnel it hints toward Reconfigure → datachannel. `Tests/SpeedTestProviderTests.swift` |
+| 288 | build | CI: skip the build/test + lint jobs on docs-only pushes | `ci.yml` `push`/`pull_request` now carry `paths-ignore: **/*.md, docs/**, LICENSE`, so a docs-only commit (a TODO/README/catalog edit) skips the whole run (gomobile build + xcodebuild test + SwiftLint); any `.swift` / `project.yml` / `scripts/**` / workflow change still runs. `release.yml` is tag-triggered and untouched. Caveat: if CI ever becomes a *required* branch-protection check, `paths-ignore` leaves it pending on skipped runs — switch to a path-filter gate job that reports success instead |
+| 286 | ux | IP-check: selectable providers (10, incl. RU/ru-zone) + connection-type | grew `AppConstants.ipCheckServices` to a curated **10** (7 international + 3 RU/ru-zone — `2ip.ru`, `2ip.io`, `ip.beget.ru`, all verified to return a bare IP over HTTPS with a curl UA, 2026-06; JSON-only endpoints dropped). The user toggles which to query via **checkboxes in Settings** (`SettingsStore.enabledIPSources`, persisted as an array, keyed by label), with a default subset (3 intl + 1 RU) and an empty-set fallback so the check never queries nothing. IP-check header now logs `→ IP check (Direct/Via tunnel) — N source(s)` (connection-type was already there). `Tests/IPCheckSourcesTests.swift` |
+| 287 | observability | Log-line cleanups from the real capture | three fixes, two extracted as pure testable helpers: (1) keep-alive "active −N s ago" went negative because `noteActivity(forAtLeast:)` parks the marker ahead → `TunnelManager.keepAliveSkipNote(ageSeconds:)` reports "tunnel busy (Ns reserved)" for the future-marker case; (2) tunnel-verify "bad URL" (a valid URL whose SOCKS session can't be built mid-teardown) → `verifyFailureReason(_:)` maps `URLError.badURL/.unsupportedURL` to "proxy not ready"; (3) the port check-result line now routes through single keys `logPortFree_fmt`/`logPortBusy_fmt` (en+ru) instead of assembling fragments. `Tests/LogLineCleanupTests.swift` |
+| 289 | performance | Logs tab: visibility gate — rebuild the merged stream only when on-screen | `LogsView.refreshCache()` (sort all categories + rebuild the `AttributedString`) ran on every `LogStore.revision` bump — once per log line — and `TabView` keeps off-screen tabs alive, so it churned in the background during a log storm on another tab. Added `TabView(selection:)` + `.tag`s in App.swift and pass `isActive: selectedTab == 2` into `LogsView`; the per-line rebuild is gated on `isActive`, with a one-shot catch-up `onChange(of: isActive)` when the tab is shown. Eliminates all off-tab rebuild work. On-tab burst smoothing (debounce) is the follow-up #290 |

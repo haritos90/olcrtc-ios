@@ -38,23 +38,31 @@ struct MainTabView: View {
     /// not every time the user comes back to the Connections tab.
     @State private var didAutoConnect = false
 
+    /// Selected tab. Drives the Logs-tab visibility gate (#289) so its expensive
+    /// merged-stream rebuild only runs when the tab is actually on-screen.
+    @State private var selectedTab = 0
+
     var body: some View {
         // #258 shell pass: every tab uses a large title + a single trailing slot
         // (Connections / VPS: +, Logs: ⋯ overflow, Settings: none). Dark-only is
         // enforced via Info.plist `UIUserInterfaceStyle=Dark` (project.yml).
-        TabView {
+        TabView(selection: $selectedTab) {
             ConnectionsView(store: store, tunnel: tunnel,
                             ipCheck: ipCheck, speed: speed)
                 .tabItem { Label(L10n.tabConnections.localized(), systemImage: "network") }
+                .tag(0)
 
             ServersView(serverStore: serverStore, connections: store)
                 .tabItem { Label(L10n.tabServers.localized(), systemImage: "server.rack") }
+                .tag(1)
 
-            LogsView()
+            LogsView(serverStore: serverStore, isActive: selectedTab == 2)
                 .tabItem { Label(L10n.tabLogs.localized(), systemImage: "doc.text") }
+                .tag(2)
 
             SettingsView()
                 .tabItem { Label(L10n.tabSettings.localized(), systemImage: "gearshape") }
+                .tag(3)
         }
         // Prevent the keyboard from incorrectly resizing tab content. SwiftUI
         // TabView already accounts for the home-indicator / tab-bar safe area,

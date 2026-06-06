@@ -475,7 +475,7 @@ struct ServersView: View {
                     Task { await startContainer(host) }
                 })
             }
-            items.append(.action(L10n.actionLogs.localized(), systemImage: "doc.text.magnifyingglass") {
+            items.append(.action(L10n.actionDownloadContainerLogs.localized(), systemImage: "arrow.down.doc") {
                 Task { await fetchLogs(host) }
             })
             items.append(.action(L10n.actionChangeRoomTransport.localized(), systemImage: "slider.horizontal.3") {
