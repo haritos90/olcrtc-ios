@@ -56,7 +56,7 @@ struct InstallOptionsView: View {
     private var carrierSection: some View {
         Section(L10n.sectionCarrier.localized()) {
             OlcChipPicker(selection: $carrier,
-                          options: CarrierTransportMatrix.carriers.map { ($0, $0) })
+                          options: CarrierTransportMatrix.carriers.map { ($0, CarrierTransportMatrix.carrierLabel($0)) })
                 .onChange(of: carrier) { _, c in
                     transport = CarrierTransportMatrix.defaultTransport(for: c)
                 }
@@ -66,7 +66,7 @@ struct InstallOptionsView: View {
     private var transportSection: some View {
         Section {
             OlcChipPicker(selection: $transport,
-                          options: CarrierTransportMatrix.transports.map { ($0, $0) })
+                          options: CarrierTransportMatrix.transports.map { ($0, CarrierTransportMatrix.transportLabel($0)) })
                 .onChange(of: transport) { _, newTransport in
                     if newTransport != "seichannel" {
                         seiFPS = 30; seiBatch = 10; seiFrag = 1200; seiACK = 1

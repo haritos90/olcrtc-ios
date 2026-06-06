@@ -21,6 +21,16 @@ struct SettingsView: View {
     @State private var socksPassLoaded = false
     @FocusState private var anyFieldFocused: Bool
 
+    /// #280: live slider position while dragging the font size. Non-nil only
+    /// during a drag; the committed value lands in `settings.fontSizeIndex` on
+    /// release, so the whole app re-lays out once instead of on every tick.
+    @State private var fontDragIndex: Double?
+
+    private var fontLiveIndex: Int {
+        let raw = Int((fontDragIndex ?? Double(settings.fontSizeIndex)).rounded())
+        return max(0, min(SettingsStore.fontSizes.count - 1, raw))
+    }
+
     private enum PortCheckResult: Equatable {
         case free
         case busy
@@ -34,6 +44,8 @@ struct SettingsView: View {
                 dnsSection
                 transportSection
                 connectionSection
+                ipSourcesSection
+                speedProviderSection
                 logsSection
                 appearanceSection
                 infoSection
@@ -76,9 +88,11 @@ struct SettingsView: View {
                 } else {
                     portCheck = free ? .free : .busy
                 }
+                // #287: one L10n key per concept instead of assembling the line
+                // from fragments (which drifted between code paths / languages).
                 LogStore.shared.log(.connection,
-                    free ? "✓ \(L10n.settingsPortLabel.localized()) \(settings.socksPort) \(L10n.portFree.localized())"
-                         : "✗ \(L10n.settingsPortLabel.localized()) \(settings.socksPort) \(L10n.portBusy.localized())")
+                    free ? L10n.logPortFree_fmt.formatted(settings.socksPort)
+                         : L10n.logPortBusy_fmt.formatted(settings.socksPort))
             } label: {
                 HStack {
                     Image(systemName: "checkmark.circle")
@@ -312,26 +326,80 @@ struct SettingsView: View {
             HStack {
                 Text(L10n.fontSizeLabel.localized())
                 Spacer()
-                Text(SettingsStore.fontSizeLabels[settings.fontSizeIndex])
+                Text(SettingsStore.fontSizeLabels[fontLiveIndex])
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            Slider(value: Binding(
-                get: { Double(settings.fontSizeIndex) },
-                set: { settings.fontSizeIndex = Int($0.rounded()) }
-            ), in: 0...Double(SettingsStore.fontSizes.count - 1), step: 1) {
-                Text(L10n.fontSizeLabel.localized())
-            } minimumValueLabel: {
-                Text("A").font(.caption2)
-            } maximumValueLabel: {
-                Text("A").font(.title3)
-            }
+            // #280: drag updates local @State (cheap — only this row + the
+            // preview re-render); the app-wide `fontSizeIndex` (and its
+            // UserDefaults write + full-tree relayout) commits once, on release.
+            Slider(
+                value: Binding(
+                    get: { fontDragIndex ?? Double(settings.fontSizeIndex) },
+                    set: { fontDragIndex = $0 }
+                ),
+                in: 0...Double(SettingsStore.fontSizes.count - 1),
+                step: 1,
+                label: { Text(L10n.fontSizeLabel.localized()) },
+                minimumValueLabel: { Text("A").font(.caption2) },
+                maximumValueLabel: { Text("A").font(.title3) },
+                onEditingChanged: { editing in
+                    if !editing {
+                        if let v = fontDragIndex { settings.fontSizeIndex = Int(v.rounded()) }
+                        fontDragIndex = nil
+                    }
+                }
+            )
+            // Live preview without committing: scope the dragged size to this text.
             Text(L10n.fontPreviewText.localized())
                 .foregroundStyle(.secondary)
+                .environment(\.dynamicTypeSize, SettingsStore.fontSizes[fontLiveIndex])
         } header: {
             Text(L10n.sectionFont.localized())
         } footer: {
             Text(L10n.fontFooter.localized())
+                .font(.caption2)
+        }
+    }
+
+    // MARK: IP-check sources (#286)
+
+    @ViewBuilder
+    private var ipSourcesSection: some View {
+        Section {
+            ForEach(AppConstants.ipCheckServices, id: \.label) { svc in
+                Toggle(isOn: Binding(
+                    get: { settings.enabledIPSources.contains(svc.label) },
+                    set: { on in
+                        if on { settings.enabledIPSources.insert(svc.label) }
+                        else  { settings.enabledIPSources.remove(svc.label) }
+                    }
+                )) {
+                    Text(svc.label)
+                }
+            }
+        } header: {
+            Text(L10n.sectionIPSources.localized())
+        } footer: {
+            Text(L10n.ipSourcesFooter.localized())
+                .font(.caption2)
+        }
+    }
+
+    // MARK: Speed-test provider (#285)
+
+    @ViewBuilder
+    private var speedProviderSection: some View {
+        Section {
+            Picker(L10n.sectionSpeedProvider.localized(), selection: $settings.speedTestProviderID) {
+                ForEach(AppConstants.SpeedTest.providers) { p in
+                    Text(p.label).tag(p.id)
+                }
+            }
+        } header: {
+            Text(L10n.sectionSpeedProvider.localized())
+        } footer: {
+            Text(L10n.speedProviderFooter.localized())
                 .font(.caption2)
         }
     }

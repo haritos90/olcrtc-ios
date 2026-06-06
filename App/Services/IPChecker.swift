@@ -26,9 +26,18 @@ final class IPChecker: ObservableObject {
     @Published var results   : [IPResult] = []
     @Published var isChecking = false
 
-    // Endpoints live in AppConstants.ipCheckServices.
+    // Endpoints live in AppConstants.ipCheckServices; the user enables a subset
+    // in Settings (#286). Preserve the catalogue order; if the user disabled
+    // everything, fall back to the defaults so the check never queries nothing.
     private var sources: [(label: String, url: String)] {
-        AppConstants.ipCheckServices
+        let enabled = SettingsStore.shared.enabledIPSources
+        let chosen = AppConstants.ipCheckServices.filter { enabled.contains($0.label) }
+        if chosen.isEmpty {
+            return AppConstants.ipCheckServices.filter {
+                AppConstants.defaultEnabledIPCheckLabels.contains($0.label)
+            }
+        }
+        return chosen
     }
 
     func checkAll(via mode: RouteMode) async {
@@ -37,11 +46,14 @@ final class IPChecker: ObservableObject {
         results    = []
         defer { isChecking = false }
 
+        let chosen = sources
         LogStore.shared.log(.ip, "---")
-        LogStore.shared.log(.ip, "→ IP check (\(mode.label))")
+        // #286: header records the connection type (direct/tunnel) + how many
+        // sources are queried (the user can trim the list in Settings).
+        LogStore.shared.log(.ip, "→ IP check (\(mode.label)) — \(chosen.count) source(s)")
 
         let session = SOCKSSession.make(mode: mode)
-        for src in sources {
+        for src in chosen {
             LogStore.shared.log(.ip, "  GET \(src.url)")
             let r = await Self.fetchIP(label: src.label, urlStr: src.url,
                                         mode: mode, session: session)

@@ -4,10 +4,9 @@ import Foundation
 //
 // Defines how traffic from local apps is routed once the tunnel is up.
 //
-// Today only `.allTunnel` exists. Planned future modes:
-//
-//   .allDirect — global kill switch: bypass the tunnel even when connected.
-//                Useful for "tunnel off but stay connected" scenarios.
+// `.allTunnel` routes all app traffic through the tunnel; `.allDirect` (#273) is a
+// global kill switch that bypasses the tunnel even while connected ("tunnel off but
+// stay connected"). Planned future modes:
 //
 //   .rules     — per-host / per-domain rules loaded from a config file
 //                (.conf / .yaml). Matches Shadowrocket's "Config" tab.
@@ -21,12 +20,14 @@ import Foundation
 
 enum RoutingMode: String, CaseIterable, Identifiable {
     case allTunnel
+    case allDirect
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .allTunnel: return L10n.routingAllTunnel.localized()
+        case .allDirect: return L10n.routingAllDirect.localized()
         }
     }
 }

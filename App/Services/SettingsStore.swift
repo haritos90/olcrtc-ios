@@ -186,6 +186,16 @@ final class SettingsStore: ObservableObject {
             if v != keepAliveSeconds { keepAliveSeconds = v } else { Self.persist(keepAliveSeconds, forKey: Keys.keepAlive) }
         }
     }
+    /// #286: which `AppConstants.ipCheckServices` labels the IP check queries.
+    /// Persisted as an array (Set isn't a plist type). An empty set falls back
+    /// to the defaults at query time so the check never silently does nothing.
+    @Published var enabledIPSources: Set<String> {
+        didSet { Self.persist(Array(enabledIPSources), forKey: Keys.enabledIPSources) }
+    }
+    /// #285: which speed-test provider a run uses (id into `AppConstants.SpeedTest.providers`).
+    @Published var speedTestProviderID: String {
+        didSet { Self.persist(speedTestProviderID, forKey: Keys.speedTestProviderID) }
+    }
 
     // MARK: Init
 
@@ -219,6 +229,12 @@ final class SettingsStore: ObservableObject {
         keepAliveSeconds    = (d.object(forKey: Keys.keepAlive)           as? Int)  .map { $0.clamped(to: Defaults.keepAliveRange) }         ?? Defaults.keepAliveSeconds
         vpsAutoPingEnabled  = (d.object(forKey: Keys.vpsAutoPingEnabled)  as? Bool)                                                          ?? Defaults.vpsAutoPingEnabled
         vpsAutoPingInterval = (d.object(forKey: Keys.vpsAutoPingInterval) as? Int)  .map { $0.clamped(to: Defaults.vpsAutoPingRange) }       ?? Defaults.vpsAutoPingInterval
+        if let arr = d.object(forKey: Keys.enabledIPSources) as? [String] {
+            enabledIPSources = Set(arr)
+        } else {
+            enabledIPSources = AppConstants.defaultEnabledIPCheckLabels
+        }
+        speedTestProviderID = d.string(forKey: Keys.speedTestProviderID) ?? AppConstants.SpeedTest.defaultProviderID
     }
 
     // MARK: Reset
@@ -243,6 +259,8 @@ final class SettingsStore: ObservableObject {
         keepAliveSeconds       = Defaults.keepAliveSeconds
         vpsAutoPingEnabled     = Defaults.vpsAutoPingEnabled
         vpsAutoPingInterval    = Defaults.vpsAutoPingInterval
+        enabledIPSources       = AppConstants.defaultEnabledIPCheckLabels
+        speedTestProviderID    = AppConstants.SpeedTest.defaultProviderID
     }
 
     /// Picks Russian if the device's preferred language starts with `ru`,
@@ -289,6 +307,8 @@ final class SettingsStore: ObservableObject {
         static let keepAlive                 = "settings.keepAliveSeconds"
         static let vpsAutoPingEnabled        = "settings.vpsAutoPingEnabled"
         static let vpsAutoPingInterval       = "settings.vpsAutoPingInterval"
+        static let enabledIPSources          = "settings.enabledIPSources"
+        static let speedTestProviderID       = "settings.speedTestProviderID"
     }
 }
 

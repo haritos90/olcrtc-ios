@@ -51,22 +51,71 @@ enum AppConstants {
         (.dnsLabelYota,    "83.149.32.66:53"),   // MVNO on MegaFon, shares its DNS
     ]
 
-    /// Public IP-echo services queried in parallel by `IPChecker`.
-    /// `icanhazip.com` deliberately omitted — corporate Falcon MITM strips
-    /// its certificate in our test environment.
+    /// Public IP-echo services `IPChecker` can query (#286). The user picks which
+    /// are active in Settings (persisted in `SettingsStore.enabledIPSources`,
+    /// keyed by `label`), so this is the *catalogue* — querying all ten every
+    /// time is slow and redundant once sources agree (#216 collapses them).
+    /// Every entry returns a **bare IP over HTTPS** with a curl UA (verified
+    /// 2026-06); JSON-only endpoints (e.g. `api.2ip.io`) are intentionally out.
+    /// The RU / ru-zone block stays reachable when public resolvers are blocked
+    /// from Russian carriers — `icanhazip.com` is in the catalogue but off by
+    /// default (corporate Falcon MITM strips its certificate in some networks).
     static let ipCheckServices: [(label: String, url: String)] = [
-        ("api.ipify.org", "https://api.ipify.org"),
-        ("ipinfo.io",     "https://ipinfo.io/ip"),
-        ("ifconfig.me",   "https://ifconfig.me/ip"),
+        // International
+        ("api.ipify.org",         "https://api.ipify.org"),
+        ("ipinfo.io",             "https://ipinfo.io/ip"),
+        ("ifconfig.me",           "https://ifconfig.me/ip"),
+        ("icanhazip.com",         "https://icanhazip.com"),
+        ("ident.me",              "https://ident.me"),
+        ("ipapi.co",              "https://ipapi.co/ip"),
+        ("checkip.amazonaws.com", "https://checkip.amazonaws.com"),
+        // Russian / ru-zone
+        ("2ip.ru",                "https://2ip.ru"),
+        ("2ip.io",                "https://2ip.io"),
+        ("ip.beget.ru",           "https://ip.beget.ru"),
     ]
 
-    /// Cloudflare speed-test configuration. Anycast = low baseline RTT;
-    /// `/__down` and `/__up` accept arbitrary payload sizes with no API key.
+    /// Labels of `ipCheckServices` enabled out of the box — a fast, balanced
+    /// subset (three international + one RU) rather than all ten. The rest are
+    /// opt-in via Settings. Used as the fallback when the user's enabled set is
+    /// missing (first launch / migration) or empty.
+    static let defaultEnabledIPCheckLabels: Set<String> = [
+        "api.ipify.org", "ipinfo.io", "ifconfig.me", "2ip.ru",
+    ]
+
+    /// Speed-test configuration (#285).
     enum SpeedTest {
-        static let host          = "speed.cloudflare.com"
-        static let downloadBytes = 5_000_000   // 5 MB
-        static let uploadBytes   = 2_000_000   // 2 MB (uploads are typically slower)
-        static let pingSamples   = 4           // first sample is discarded as warmup
+        static let pingSamples = 4             // first sample is discarded as warmup
+
+        // Mode-aware payloads + timeouts. The tunnel (vp8channel ≈ <1 Mbps)
+        // can't move 5 MB inside 60s, so it gets smaller transfers + more time.
+        static let downloadBytesDirect = 5_000_000
+        static let downloadBytesTunnel = 1_000_000
+        static let uploadBytesDirect   = 2_000_000
+        static let uploadBytesTunnel   =   500_000
+        static let pingTimeoutDirect: TimeInterval = 5
+        static let pingTimeoutTunnel: TimeInterval = 10
+        static let xferTimeoutDirect: TimeInterval = 60
+        static let xferTimeoutTunnel: TimeInterval = 90
+
+        // User-selectable providers. Cloudflare is parametric (anycast, low RTT,
+        // `/__down`+`/__up`+trace, no API key); OVH serves fixed-size files
+        // (download + HEAD ping, no upload) and is the non-Cloudflare fallback
+        // when Cloudflare is slow/blocked. Both verified to serve real bytes over
+        // HTTPS (2026-06).
+        static let providers: [SpeedTestProvider] = [
+            SpeedTestProvider(id: "cloudflare", label: "speed.cloudflare.com",
+                              host: "speed.cloudflare.com", parametric: true, supportsUpload: true,
+                              fixedSmallURL: nil, fixedLargeURL: nil),
+            SpeedTestProvider(id: "ovh", label: "proof.ovh.net (OVH)",
+                              host: "proof.ovh.net", parametric: false, supportsUpload: false,
+                              fixedSmallURL: "https://proof.ovh.net/files/1Mb.dat",
+                              fixedLargeURL: "https://proof.ovh.net/files/10Mb.dat"),
+        ]
+        static let defaultProviderID = "cloudflare"
+        static func provider(id: String) -> SpeedTestProvider {
+            providers.first { $0.id == id } ?? providers[0]
+        }
     }
 
     /// DNS-over-HTTPS resolver endpoints used by `SubscriptionFetcher` as a

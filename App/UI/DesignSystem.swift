@@ -144,8 +144,10 @@ struct OlcCard<Content: View>: View {
             .background(Theme.Palette.card)
             .clipShape(RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius, style: .continuous))
             .overlay {
+                // #281: at white@8% the Console hairline was invisible — bump it so
+                // the bordered direction actually reads (Refined width is 0 → no-op).
                 RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.08), lineWidth: Theme.Metrics.cardBorderWidth)
+                    .strokeBorder(Color.white.opacity(0.16), lineWidth: Theme.Metrics.cardBorderWidth)
             }
     }
 }

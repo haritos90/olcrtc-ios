@@ -8,7 +8,19 @@ name: CI
 on:
   push:
     branches: [main, master]
+    # #288: a docs-only push (README/TODO/docs) shouldn't spend minutes on the
+    # gomobile build + xcodebuild + lint. Skip when *every* changed file is docs.
+    # Never add `.swift`, `project.yml`, `scripts/**`, or `.github/workflows/**`
+    # here, or real changes would silently skip CI.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:

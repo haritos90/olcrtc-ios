@@ -42,7 +42,10 @@ struct AddConnectionView: View {
     @State private var name      = ""
     @State private var groupName = L10n.groupDefault.localized()
     @State private var carrier   = "wbstream"
-    @State private var transport = "datachannel"
+    // #284: default to the carrier's recommended transport (wbstream+datachannel
+    // is now `.question`); keeps the initial pick consistent with the matrix and
+    // with InstallOptions / ReconfigureOptions.
+    @State private var transport = CarrierTransportMatrix.defaultTransport(for: "wbstream")
     @State private var roomID    = ""
     @State private var key       = ""
     @State private var clientID  = "default"
@@ -145,13 +148,13 @@ struct AddConnectionView: View {
                 Text(L10n.sectionCarrier.localized())
                     .font(.caption).foregroundStyle(.secondary)
                 OlcChipPicker(selection: $carrier,
-                              options: CarrierTransportMatrix.carriers.map { ($0, $0) })
+                              options: CarrierTransportMatrix.carriers.map { ($0, CarrierTransportMatrix.carrierLabel($0)) })
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text(L10n.labelTransport.localized())
                     .font(.caption).foregroundStyle(.secondary)
                 OlcChipPicker(selection: $transport,
-                              options: CarrierTransportMatrix.transports.map { ($0, $0) })
+                              options: CarrierTransportMatrix.transports.map { ($0, CarrierTransportMatrix.transportLabel($0)) })
             }
 
             FormField(label: "Room ID",   placeholder: L10n.roomIDLabel.localized(),  text: $roomID)
@@ -300,10 +303,15 @@ struct AddConnectionView: View {
             socksPass:    socksPass
         )
         let trimmedGroup = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+        // #283: store the canonical default token when the user left the group at
+        // the (localised) default or empty, so it localises at display time
+        // instead of freezing the language it was created in.
+        let resolvedGroup = (trimmedGroup.isEmpty || trimmedGroup == L10n.groupDefault.localized())
+            ? ConnectionRecord.defaultGroupName : trimmedGroup
         let record = ConnectionRecord(
             id:        existing?.id ?? UUID(),
             name:      name,
-            groupName: trimmedGroup.isEmpty ? L10n.groupDefault.localized() : trimmedGroup,
+            groupName: resolvedGroup,
             details:   .olcrtc(params)
         )
         onSave(record)
@@ -314,14 +322,16 @@ struct AddConnectionView: View {
         guard let r = existing else {
             // Create mode: reset all fields to defaults
             name = ""; groupName = L10n.groupDefault.localized()
-            carrier = "wbstream"; transport = "datachannel"
+            carrier = "wbstream"; transport = CarrierTransportMatrix.defaultTransport(for: "wbstream")
             roomID = ""; key = ""; clientID = "default"
             socksUser = ""; socksPass = ""; vp8FPS = nil; vp8BatchSize = nil
             uriText = ""; parseError = ""
             return
         }
         name      = r.name
-        groupName = r.groupName
+        // #283: show the localised default ("Основная") in the edit field, not the
+        // raw "Servers" token; `save()` maps it back to the canonical token.
+        groupName = ConnectionRecord.displayGroupName(r.groupName)
         if case .olcrtc(let p) = r.details {
             carrier      = p.carrier
             transport    = p.transport

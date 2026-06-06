@@ -427,12 +427,25 @@ final class Provisioner: ObservableObject {
                 containerName: containerName, tail: tail,
                 onStep: stepHandler())
 
-            // Persist into a dedicated log category so it survives the
-            // sheet being dismissed.
+            // Persist into a dedicated log category so it survives the sheet
+            // being dismissed. #278: parse each line's Go timestamp
+            // ("2006/01/02 15:04:05") into a real Date so the container lines
+            // interleave chronologically with the client stream instead of all
+            // clustering at fetch-time; lines without their own stamp carry the
+            // previous line's date forward (multi-line panics etc.).
             LogStore.shared.startSession(.containerLogs)
+            var carry = Date()
             for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
-                LogStore.shared.log(.containerLogs, String(line))
+                let raw = String(line)
+                if let parsed = LogStore.parseExternalTimestamp(raw) {
+                    carry = parsed.date
+                    LogStore.shared.log(.containerLogs, parsed.rest, date: parsed.date)
+                } else {
+                    LogStore.shared.log(.containerLogs, raw, date: carry)
+                }
             }
+            // Remember this host/container so the Logs tab can re-pull directly.
+            LogStore.shared.noteContainerTarget(hostID: host.id, containerName: containerName)
 
             status = .success(L10n.logsBytesReceived_fmt.formatted(output.count))
             return output

@@ -60,8 +60,19 @@ enum ConnectionDetails: Codable, Equatable, Sendable {
 struct ConnectionRecord: Identifiable, Codable, Equatable {
     var id        = UUID()
     var name      : String
-    var groupName : String = "Servers" // canonical default; users can rename
+    var groupName : String = ConnectionRecord.defaultGroupName // users can rename
     var details   : ConnectionDetails
+
+    /// Canonical default group token. Stored verbatim (locale-stable); rendered
+    /// via `displayGroupName` so it localises (#283) without migrating existing
+    /// records when the UI language changes.
+    static let defaultGroupName = "Servers"
+
+    /// Maps the canonical default token to its localised label at display time;
+    /// user-named groups pass through unchanged.
+    static func displayGroupName(_ raw: String) -> String {
+        raw == defaultGroupName ? L10n.groupDefault.localized() : raw
+    }
 
     var protocolType: ProtocolType { details.protocolType }
 

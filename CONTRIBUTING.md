@@ -24,6 +24,13 @@ User-facing text is never hardcoded: add an `L10n` case and its entries in
 `App/Localization/L10nTable.swift`. English (`en`) is the source language; every
 other language is a translation of the English string.
 
+Route **every** user-facing term through `L10n` — even ones deliberately kept in
+English (brand/technical names, abbreviations). Add the case and give the other
+languages an *explicit* entry equal to the English value rather than leaving a
+literal in the view, so a future locale can translate it without hunting for
+hardcoded strings. Identifiers shown to users (carrier/transport IDs, the default
+group name) get a display-name mapping rather than rendering the raw token.
+
 (Discussion with maintainers can be in any language — but anything committed to
 the repo is English.)
 

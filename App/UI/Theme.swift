@@ -52,13 +52,17 @@ enum Theme {
     // MARK: - Metrics (spacing / shape)
     enum Metrics {
         static let controlHeight:   CGFloat = 44   // every button, always
-        static var controlRadius:   CGFloat { Theme.console ? 11 : 13 }
-        static var cardRadius:      CGFloat { Theme.console ? 14 : 20 }
-        static let cardPadding:     CGFloat = 16
-        static var cardBorderWidth: CGFloat { Theme.console ? 0.5 : 0 }
-        static let rowMinHeight:    CGFloat = 52   // Compact density: 44
-        static let sectionGap:      CGFloat = 22   // Compact density: 16
-        static let segmentedRadius: CGFloat = 10
+        // #281: Console is the sharp, dense, terminal direction — tight radii,
+        // a visible hairline card border, and denser spacing — so it reads
+        // clearly different from Refined (soft, borderless, roomy). Previously
+        // the two differed by only 2pt/0.5pt and looked identical.
+        static var controlRadius:   CGFloat { Theme.console ? 5  : 13 }
+        static var cardRadius:      CGFloat { Theme.console ? 7  : 20 }
+        static var cardPadding:     CGFloat { Theme.console ? 12 : 16 }
+        static var cardBorderWidth: CGFloat { Theme.console ? 1  : 0 }
+        static var rowMinHeight:    CGFloat { Theme.console ? 44 : 52 }
+        static var sectionGap:      CGFloat { Theme.console ? 14 : 22 }
+        static var segmentedRadius: CGFloat { Theme.console ? 5  : 10 }
         static let chipHeight:      CGFloat = 34   // handoff range 32–38
     }
 
@@ -70,8 +74,10 @@ enum Theme {
         static let largeTitle     = Font.largeTitle.bold()                                    // 32 / 800
         static let button         = Font.callout.weight(.semibold)                            // ~16 / 600
         static let statusTitle    = Font.subheadline.weight(.semibold)                        // ~15 / 600
-        static let statusSubtitle = Font.caption                                              // ~12.5
-        static let sectionHeader  = Font.caption.weight(.semibold)                            // ~12.5 / 600 (tracked + uppercased by the view)
+        // #281: Console reskins the caption-level labels to monospaced for its
+        // terminal feel; Refined keeps the proportional system font.
+        static var statusSubtitle: Font { Theme.console ? Font.system(.caption, design: .monospaced) : Font.caption }
+        static var sectionHeader:  Font { Theme.console ? Font.system(.caption, design: .monospaced).weight(.semibold) : Font.caption.weight(.semibold) }
         static let chip           = Font.subheadline.weight(.semibold)                        // ~14 / 600
         static let segment        = Font.subheadline.weight(.semibold)                        // ~14 / 600
         static let metricLabel    = Font.caption2.weight(.semibold)                           // ~11 / 600 (tracked + uppercased)

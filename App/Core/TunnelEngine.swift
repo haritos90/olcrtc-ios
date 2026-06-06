@@ -217,8 +217,18 @@ final class OlcrtcEngine: TunnelEngine, @unchecked Sendable {
         guard ready else {
             let msg = waitErr?.localizedDescription ?? "Timeout"
             MobileStop()
-            await MainActor.run { LogStore.shared.log(.connection, L10n.waitReadyFailed_fmt.formatted(msg)) }
-            throw TunnelEngineError(msg)
+            // #275: WaitReady failing means the WebRTC transport never reached
+            // ready — i.e. no peer rendezvoused in the room ("Link connected" with
+            // no "session opened"). Keep the raw Go reason in the log for
+            // debugging, but surface a diagnostic that names the likely causes
+            // instead of a bare "Timeout".
+            let diagnostic = await MainActor.run { () -> String in
+                LogStore.shared.log(.connection, L10n.waitReadyFailed_fmt.formatted(msg))
+                let d = L10n.connectNoPeer.localized()
+                LogStore.shared.log(.connection, d)
+                return d
+            }
+            throw TunnelEngineError(diagnostic)
         }
         await MainActor.run {
             LogStore.shared.log(.connection, L10n.waitReadyOK.localized())

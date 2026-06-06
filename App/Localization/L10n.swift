@@ -46,7 +46,7 @@ enum L10n: String, CaseIterable {
     case tabConnections, tabServers, tabLogs, tabSettings
 
     // MARK: Routing
-    case routingHeader, routingAllTunnel, routingViaTunnel, routingDirect
+    case routingHeader, routingAllTunnel, routingAllDirect, routingViaTunnel, routingDirect
 
     // MARK: Connection state
     case stateDisconnected, stateConnecting, stateConnected
@@ -90,7 +90,8 @@ enum L10n: String, CaseIterable {
     case hostField, portField, loginField, passwordField
     case actionInstall, actionUninstall, actionUpdate, actionReboot
     case actionChangeRoomTransport         // "Change Room / Transport"
-    case actionLogs, actionDone
+    case actionDownloadContainerLogs       // #278: was "Logs" — clarifies it pulls podman logs
+    case actionDone
     case actionRemoveFromList               // "Remove host from list"
     case removeHostConfirmTitle             // "Remove %@?"
     case removeHostConfirmMessage           // explanation about Keychain/uninstall
@@ -142,16 +143,26 @@ enum L10n: String, CaseIterable {
     case categorySpeed                      // "Speed test"
     case categoryProvisioning               // "VPS"
     case categoryContainerLogs              // "Container"
+    case logsAllSources                     // "All sources" — merged-stream filter default (#276)
+    case logsSourceLabel                    // "Source" — filter menu label/a11y (#276)
+    case logsRefreshFromServer              // "Refresh from server" — in-tab container pull (#278)
 
     // MARK: SettingsView
     case settingsTitle
     case sectionSOCKS5, sectionDNS, sectionVP8, sectionConnection
     case sectionKeepAlive
     case sectionLogs, sectionFont
+    case sectionIPSources                   // "IP-check sources" (#286)
+    case ipSourcesFooter                    // explanation of the IP-source toggles (#286)
+    case sectionSpeedProvider               // "Speed-test provider" (#285)
+    case speedProviderFooter                // explanation of the provider pick-list (#285)
+    case speedAllFailed                     // "All measurements failed" (#285)
+    case speedDatachannelHint               // tip: switch to datachannel for speed (#285)
     case settingsPortLabel
     case checkPortAction                    // "Check port"
     case randomPortAction                   // "Random"
     case portFree, portBusy                 // "free" / "busy"
+    case logPortFree_fmt, logPortBusy_fmt   // "✓ Port %d free" / "✗ Port %d busy" — single key per concept (#287)
     case socksFooter
     case socksPortChangeNote                // "Port change takes effect on the next connection"
     case dnsFreeFormPlaceholder             // "IP:port"
@@ -206,6 +217,7 @@ enum L10n: String, CaseIterable {
     case mobileStartFailed_fmt              // "✗ MobileStart: %@"
     case bgKeeperFailed_fmt                 // "⚠ Background runtime keeper failed: %@ (app may be suspended in background)"
     case waitReadyFailed_fmt                // "✗ WaitReady: %@"
+    case connectNoPeer                      // #275: WaitReady timed out → no peer joined (likely key/room/carrier)
     case waitReadyOK                        // "✓ WaitReady OK — SOCKS5..."
     case tunnelOK                           // "✓ Tunnel works — traffic is flowing through the server"
     case tunnelFailed                       // "✗ Tunnel not responding (server unreachable or 403 Forbidden IP)"
@@ -276,15 +288,11 @@ enum L10n: String, CaseIterable {
     case pingTCPOK_fmt                      // "TCP/%d responded in %@ ms"
     case pingTCPFail_fmt                    // "TCP/%d unreachable"
 
-    // MARK: ConnectionsView per-connection ping (#234)
-    case pingResult_fmt                     // "⚡ Ping %@: %d ms"
-    case pingFailedLog_fmt                  // "✗ Ping %@: %@"
+    // MARK: ConnectionsView per-connection health check (#274 — merges #234 + #242)
     case pingNoFreePort                     // "No free local port available for ping"
     case pingFailed                         // "Ping failed"
-    case pingButtonA11y                     // "Measure latency"
-    case checkReadyResult_fmt               // "⏱ Ready %@: %d ms"  (#242)
-    case checkReadyFailedLog_fmt            // "✗ Ready-check %@: %@"  (#242)
-    case checkReadyA11y                     // "Check time-to-ready"  (#242)
+    case healthCheckAction                  // "Health check" — menu item + chip a11y (#274)
+    case healthResult_fmt                   // "🩺 Health %@ — ready %@ · RTT %@" (#274)
 
     // MARK: ServersView alerts
     case alertPasswordMissingShort          // "Password not found"
@@ -314,6 +322,9 @@ enum L10n: String, CaseIterable {
     case cameraUnavailableBody              // "QR scanning requires a physical device with a camera."
     case sectionCarrier                     // "Carrier"
     case labelTransport                     // "Transport"
+    // #283: friendly display names for the raw carrier/transport IDs
+    case carrierTelemost, carrierWbstream, carrierJitsi
+    case transportDatachannel, transportVp8channel, transportSeichannel, transportVideochannel
     case fieldRoomID                        // "Room ID"
     case fieldJitsiURL                      // "https://meet.example.org" (#256)
 
