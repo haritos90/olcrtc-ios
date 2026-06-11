@@ -45,7 +45,7 @@ When **Open** has no rows, keep the header + separator and leave a single placeh
 row — `| — | — | — | — | _(empty — promote one from Backlog)_ |` — instead of replacing
 the table with prose.
 
-**Next free ID:** 309
+**Next free ID:** 313
 
 ---
 
@@ -84,6 +84,10 @@ Future / blocked / someday. Promote to Open when picked up.
 | 254 | P3 | XS | docs | CODE_OF_CONDUCT.md (Contributor Covenant) |
 | 257 | P3 | S | docs | Privacy-policy document (App Store needs a hosted URL) |
 | 279 | P2 | L | observability | Message catalog: typed (info/warn/error), error-coded client+server messages, searchable + troubleshooting cross-ref |
+| 309 | P3 | S | build | download-stats: "commit only on change" guard is defeated by the embedded timestamp — commits every week |
+| 310 | P3 | XS | build | closed-tasks-since.py: `\d{3}` row regex silently drops task IDs ≥ #1000 from release notes |
+| 311 | P3 | S | l10n | Route the speed-tile metric labels/units and the upload-fallback log line through L10n |
+| 312 | P3 | XS | docs | README testing section stale: "238 unit tests" (now 239) + "port selection" wording predates #308 |
 
 ---
 
@@ -289,6 +293,43 @@ Since we have SSH access, either **import** the existing connection parameters f
 deployed key/room/transport → rebuild the `olcrtc://` URI) or **generate** a new key, write it
 server-side, then add the `ConnectionRecord`. Neither read-existing nor generate-new exists today — both
 need server-side support (emit config or rotate key) + client wiring. Ties to #133/#134/#135.
+
+### 309 — download-stats: timestamp defeats the commit-on-change guard
+
+Review finding from `dfd9053` (#307). `download-stats.py --write` embeds `Last updated:
+<now>` in `docs/download-stats.md`, so every weekly `download-stats.yml` run produces a
+diff even when no `download_count` changed — the `git diff --quiet` guard never fires and
+the workflow commits noise every Monday, contradicting its own "commit it only when the
+numbers actually change" comment. Fix: diff ignoring the timestamp line (e.g. regenerate,
+compare with the old file minus both `Last updated` lines, skip the write when equal), or
+only refresh the timestamp when the table body changed.
+
+### 310 — closed-tasks-since.py: 3-digit-only row regex
+
+Review finding from `dfd9053` (#305). `ROW = re.compile(r"^\|\s*(\d{3})\s*\|…")` matches
+exactly three digits, so the day task IDs reach #1000 their Closed rows silently vanish
+from release notes (and `sorted()` on string IDs would mis-order mixed widths). `\d+`
+still excludes the header/separator/placeholder rows, so use it + a numeric sort key.
+Note TODO.md's own header says "permanent 3-digit ID" — update that wording in the same
+change so the doc and the parser move together.
+
+### 311 — L10n: speed-tile metrics + upload-fallback log line
+
+Review finding from `dfd9053` (#291). New user-facing literals bypass `L10n` (the
+explicit-entries rule: every string gets a case, RU = English value where it stays
+English): the `ConnectionsView.speedRow` metric labels `"Ping"`/`"DL"`/`"UL"` and the
+unit-bearing format strings `"%.0f ms"`/`"%.1f Mbps"`, and the
+`SpeedTest.measureUpload` fallback sentence `"upload: <provider> has no upload endpoint
+— using <fallback>"`. The tile labels predate the commit, but it extended them ("Mbps"),
+so sweep the whole metric row plus the new log line in one pass.
+
+### 312 — README testing section drifted from the suite
+
+Review finding from `dfd9053`. The commit's test edits (−3 auto-slide, +2 port-busy
+mapping, +2 upload fallback) moved the suite to **239** tests (verified green on
+simulator), but README still says "238 unit tests"; its coverage list also still names
+"port selection", which #308 removed — say "port availability / busy-error mapping"
+instead. Consider dropping the exact count for a rounder claim so it stops rotting.
 
 ---
 
