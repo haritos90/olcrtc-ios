@@ -146,6 +146,19 @@ final class OlcrtcEngine: TunnelEngine, @unchecked Sendable {
         }
     }
 
+    /// #308: the preflight already checked the configured SOCKS port is free, but a
+    /// late race (another process grabs it before MobileStart binds) surfaces from
+    /// Go as a generic `listen tcp 127.0.0.1:PORT: bind: address already in use`.
+    /// Map that to the same clear, port-named "port busy" reason instead of a vague
+    /// connection error; pass any other start failure through unchanged. Pure → tested.
+    static func startErrorReason(_ raw: String, port: Int) -> String {
+        let lower = raw.lowercased()
+        let portBusy = lower.contains("address already in use")
+            || lower.contains("eaddrinuse")
+            || (lower.contains("bind") && lower.contains("\(port)"))
+        return portBusy ? L10n.errorPortBusy_fmt.formatted(port) : raw
+    }
+
     func start(_ details: ConnectionDetails, port: Int, settings s: EngineStartSettings) async throws {
         guard case .olcrtc(let params) = details else {
             throw TunnelEngineError("internal: OlcrtcEngine received non-olcrtc details")
@@ -206,8 +219,11 @@ final class OlcrtcEngine: TunnelEngine, @unchecked Sendable {
             params.roomID, params.clientID, params.key,
             port, socksUser, socksPass, &startErr)
         guard ok else {
-            let msg = startErr?.localizedDescription ?? "Start failed"
-            await MainActor.run { LogStore.shared.log(.connection, L10n.mobileStartFailed_fmt.formatted(msg)) }
+            let raw = startErr?.localizedDescription ?? "Start failed"
+            // #308: keep the raw Go reason in the log, but surface a clear port-busy
+            // reason to the user when the bind raced (mirrors the WaitReady pattern).
+            let msg = Self.startErrorReason(raw, port: port)
+            await MainActor.run { LogStore.shared.log(.connection, L10n.mobileStartFailed_fmt.formatted(raw)) }
             throw TunnelEngineError(msg)
         }
         await MainActor.run { LogStore.shared.log(.connection, L10n.mobileStartOK.localized()) }

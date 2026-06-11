@@ -33,11 +33,11 @@ counter. Work the task you were handed, or an **Open** one.
    - comment out any code you replace as `// #NNN was: …` instead of deleting it,
    - wrap multi-line edits in `// boc #NNN` … `// eoc #NNN`.
 
-   The app sources are **not committed to git** (only the upstream
-   `olcrtc-upstream` submodule is tracked), so these comments are the code's only change history —
-   record *what* changed, *for which task*, and *why*. Full format and the
-   "keep it proportionate" guidance: CONTRIBUTING.md → *Marking task-driven
-   changes*.
+   Commits are coarse-grained — several tasks often land in one commit — so git
+   history alone can't tie a line to its task; these comments are the per-task
+   change record the code itself carries: *what* changed, *for which task*, and
+   *why*. Full format and the "keep it proportionate" guidance: CONTRIBUTING.md
+   → *Marking task-driven changes*.
 2. **English everywhere** — code, comments, docs, identifiers, commit messages.
    Never hardcode user-facing strings: add an `L10n` case in
    `App/Localization/L10nTable.swift` (English is the source language, then
@@ -56,9 +56,11 @@ counter. Work the task you were handed, or an **Open** one.
 
 ```bash
 xcodegen generate --spec project.yml          # after editing project.yml or adding source files
+# simulator names drift between Xcode versions — pick whatever iPhone is installed:
+UDID=$(xcrun simctl list devices available | grep -m1 'iPhone' | grep -oE '[0-9A-Fa-f-]{36}')
 xcodebuild test -project olcrtc-ios.xcodeproj \
   -scheme olcrtc-ios-tests \
-  -destination 'platform=iOS Simulator,name=iPhone 16'
+  -destination "id=$UDID"
 python3 scripts/parity_check.py               # after touching scripts/srv.sh
 ```
 
@@ -102,6 +104,9 @@ block**. If you
 built, report the new build number and test result
 (`BUILD SUCCEEDED — <marketing>.<build> | N/N tests passed`).
 
+Committing is the user's job — an agent commits only on explicit request.
+Before pushing, the user may ask for a **commit review**: see §7.
+
 ---
 
 ## 6. Hard don'ts
@@ -115,3 +120,29 @@ built, report the new build number and test result
   the symbols the framework exports. Verify a function or flag exists before
   building on it — e.g. check the gomobile header at
   `App/Mobile.xcframework/ios-arm64/Mobile.framework/Headers/Mobile.objc.h`.
+
+---
+
+## 7. Pre-push commit review
+
+The user commits locally and pushes only after a review — their own, or one
+they request from an agent. When asked to "review the commits":
+
+1. **Scope** — the unpushed commits: `git log origin/main..HEAD` (or the exact
+   range/hashes the user names). Review each commit's diff (`git show <hash>`)
+   on its own, then `git diff origin/main..HEAD` once for cross-commit effects.
+2. **Context** — only the repo: the diffs, the surrounding code, `TODO.md`
+   (which tasks the commits close), and these docs. A fresh session is the
+   point — judge what was committed, not what was meant.
+3. **Checklist** — correctness, regressions, and security first; then the
+   conventions: task markers (§2.1), every user-facing string through `L10n`,
+   English-only, Conventional Commit messages, no secrets in code/logs,
+   `srv.sh` parity discipline, tests for parsing/validation/wire-contract
+   changes, exactly one `CFBundleVersion` bump per built artifact.
+4. **Findings → tasks** — file each accepted finding as a new `TODO.md` row
+   (Backlog, or Open if it should block the push), `Pri` by severity, naming
+   the commit hash. Otherwise the review is read-only: no code edits, no
+   version bump, no commits. Running the test suite or
+   `python3 scripts/parity_check.py` to verify a suspicion is fine.
+5. **Verdict** — end with one line per commit:
+   `<hash> <subject> — OK to push` or `<hash> <subject> — fix first: #NNN`.

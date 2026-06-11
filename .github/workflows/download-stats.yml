@@ -1,0 +1,41 @@
+# #307: surface real per-version install counts. Regenerate docs/download-stats.md
+# from the GitHub Releases API (release.assets[].download_count) on a schedule, and
+# commit it only when the numbers actually change. Markdown-only, so the commit
+# skips ci.yml (its paths-ignore, #288); [skip ci] is belt-and-braces.
+name: Download stats
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # weekly, Monday 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # commit the regenerated docs/download-stats.md
+
+concurrency:
+  group: download-stats
+  cancel-in-progress: false
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Regenerate docs/download-stats.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/download-stats.py --write docs/download-stats.md
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- docs/download-stats.md; then
+            echo "Download stats unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/download-stats.md
+          git commit -m "docs: update download statistics [skip ci]"
+          git push

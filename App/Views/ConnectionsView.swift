@@ -28,8 +28,9 @@ struct ConnectionsView: View {
     @State private var showAdd        = false
     @State private var editConn       : ConnectionRecord?
     @State private var qrConn         : ConnectionRecord?
-    @State private var shareConn      : ConnectionRecord?
-    @State private var pendingQRConn  : ConnectionRecord?
+    // #304 was: shareConn + pendingQRConn — the "Share connection" sheet moved to
+    // the Manage VPS server card (ShareConnectionView). Copy URI / QR stay here as
+    // per-connection quick utilities.
     /// #264: timestamp of the last IP check, shown as a small caption.
     @State private var ipCheckTime    : Date?
 
@@ -113,15 +114,6 @@ struct ConnectionsView: View {
                         }
                 }
                 .presentationDetents([.medium])
-            }
-            .sheet(item: $shareConn) { conn in
-                shareConnectionSheet(conn)
-            }
-            .onChange(of: shareConn) { _, v in
-                if v == nil, let p = pendingQRConn {
-                    qrConn = p
-                    pendingQRConn = nil
-                }
             }
         }
     }
@@ -311,9 +303,13 @@ struct ConnectionsView: View {
     private var speedRow: some View {
         HStack(alignment: .top, spacing: 12) {
             HStack(alignment: .top, spacing: 18) {
+                // #291: restore the measurement units next to the numbers — a bare
+                // "0.77" is ambiguous; DL/UL had lost their "Mbps" suffix (matches
+                // the existing hardcoded "ms" unit, the convention in this view).
                 OlcMetric(label: "Ping", value: speedValue(speed.lastResult?.pingMs, "%.0f ms"))
-                OlcMetric(label: "DL",   value: speedValue(speed.lastResult?.downloadMbps, "%.1f"))
-                OlcMetric(label: "UL",   value: speedValue(speed.lastResult?.uploadMbps, "%.1f"))
+                // #291 was: "%.1f" (no unit)
+                OlcMetric(label: "DL",   value: speedValue(speed.lastResult?.downloadMbps, "%.1f Mbps"))
+                OlcMetric(label: "UL",   value: speedValue(speed.lastResult?.uploadMbps, "%.1f Mbps"))
             }
             Spacer(minLength: 8)
             OlcButton(L10n.speedTestRun.localized(), role: .secondary, isBusy: speed.isTesting) {
@@ -446,10 +442,9 @@ struct ConnectionsView: View {
         items.append(.action(L10n.healthCheckAction.localized(), systemImage: "waveform.path.ecg") {
             runHealthCheck(conn)
         })
+        // #304: "Share connection" moved to the Manage VPS server card. Copy URI /
+        // QR remain here as lightweight per-connection utilities.
         items.append(.divider)
-        items.append(.action(L10n.shareConnectionTitle.localized(), systemImage: "square.and.arrow.up") {
-            shareConn = conn
-        })
         items.append(.action(L10n.copyURIAction.localized(), systemImage: "doc.on.doc") {
             UIPasteboard.general.string = Self.uriOf(conn)
             LogStore.shared.log(.connection, L10n.copiedURI_fmt.formatted(conn.displayName))
@@ -560,71 +555,6 @@ struct ConnectionsView: View {
         }
     }
 
-    // MARK: Share connection sheet
-
-    // #258: explanation + mono URI block (OlcCard) + three equal secondary actions.
-    @ViewBuilder
-    private func shareConnectionSheet(_ conn: ConnectionRecord) -> some View {
-        let uri = Self.uriOf(conn)
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(L10n.shareConnectionExplanation.localized())
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.Palette.textSecondary)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(L10n.shareConnectionURIHeader.localized())
-                            .tracking(0.6)
-                            .font(Theme.Typography.sectionHeader)
-                            .textCase(.uppercase)
-                            .foregroundStyle(Theme.Palette.textSecondary)
-                        OlcCard {
-                            Text(uri)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(Theme.Palette.textSecondary)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-
-                    VStack(spacing: 8) {
-                        OlcButton(L10n.copyURIAction.localized(), systemImage: "doc.on.doc",
-                                  role: .secondary, fillWidth: true) {
-                            UIPasteboard.general.string = uri
-                            shareConn = nil
-                            LogStore.shared.log(.connection, L10n.copiedURI_fmt.formatted(conn.displayName))
-                        }
-                        // ShareLink styled to match OlcButton(.secondary).
-                        ShareLink(item: uri, subject: Text(conn.displayName)) {
-                            Label(L10n.shareAction.localized(), systemImage: "square.and.arrow.up")
-                                .font(Theme.Typography.button)
-                                .foregroundStyle(Theme.Palette.accent)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: Theme.Metrics.controlHeight)
-                                .background(Theme.Palette.fill,
-                                            in: RoundedRectangle(cornerRadius: Theme.Metrics.controlRadius, style: .continuous))
-                        }
-                        OlcButton(L10n.actionQR.localized(), systemImage: "qrcode",
-                                  role: .secondary, fillWidth: true) {
-                            pendingQRConn = conn
-                            shareConn = nil
-                        }
-                    }
-                }
-                .padding(16)
-            }
-            .navigationTitle(L10n.shareConnectionTitle.localized())
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { shareConn = nil } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel(L10n.closeAction.localized())
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
 }
 
 // #262: `olcCardRow()` now lives in DesignSystem.swift (shared with ServersView).

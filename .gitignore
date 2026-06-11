@@ -22,6 +22,7 @@ $RECYCLE.BIN/
 .idea/
 .vscode-test/
 .claude/
+CLAUDE.md
 *.swp
 *.swo
 *.orig

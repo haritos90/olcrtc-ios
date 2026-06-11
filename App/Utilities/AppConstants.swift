@@ -100,9 +100,9 @@ enum AppConstants {
 
         // User-selectable providers. Cloudflare is parametric (anycast, low RTT,
         // `/__down`+`/__up`+trace, no API key); OVH serves fixed-size files
-        // (download + HEAD ping, no upload) and is the non-Cloudflare fallback
-        // when Cloudflare is slow/blocked. Both verified to serve real bytes over
-        // HTTPS (2026-06).
+        // (download + HEAD ping; no upload sink — #291 measures UL against the
+        // Cloudflare fallback) and is the non-Cloudflare fallback when Cloudflare
+        // is slow/blocked. Both verified to serve real bytes over HTTPS (2026-06).
         static let providers: [SpeedTestProvider] = [
             SpeedTestProvider(id: "cloudflare", label: "speed.cloudflare.com",
                               host: "speed.cloudflare.com", parametric: true, supportsUpload: true,
@@ -115,6 +115,14 @@ enum AppConstants {
         static let defaultProviderID = "cloudflare"
         static func provider(id: String) -> SpeedTestProvider {
             providers.first { $0.id == id } ?? providers[0]
+        }
+
+        // #291: provider for the *upload* leg when the selected one has no upload
+        // sink (OVH is fixed-file download-only). Cloudflare's parametric /__up is
+        // the universal upload target, so UL is measured instead of left blank.
+        static let uploadFallbackProviderID = "cloudflare"
+        static func uploadProvider(for provider: SpeedTestProvider) -> SpeedTestProvider {
+            provider.supportsUpload ? provider : self.provider(id: uploadFallbackProviderID)
         }
     }
 

@@ -512,22 +512,22 @@ final class TunnelManager: ObservableObject {
         }.value
     }
 
-    /// Reserves a free local SOCKS port and snapshots the `SettingsStore` values
-    /// the engine needs — both on MainActor. Returns nil (and sets `.failed`) if
-    /// no port is free in the auto-retry window.
+    /// Checks the configured SOCKS port is free and snapshots the `SettingsStore`
+    /// values the engine needs — both on MainActor. Returns nil (and sets
+    /// `.failed`) if the configured port is busy.
     private func reservePortAndSettings(isReconnect: Bool) -> (port: Int, settings: EngineStartSettings)? {
         let s = SettingsStore.shared
-        let preferred = UInt16(s.socksPort)
-        guard let freePort = PortAvailability.nextFreePort(startingAt: preferred) else {
-            let msg = L10n.errorAllPortsBusy_fmt.formatted(Int(preferred),
-                                                            Int(preferred) + PortAvailability.autoRetryAttempts - 1)
-            LogStore.shared.log(.connection, "✗ \(msg)")
+        let configuredPort = UInt16(s.socksPort)
+        // #308: always bind the *configured* port — never auto-slide to another.
+        // The port is the contract with external SOCKS clients (Shadowrocket,
+        // browsers) pointed at exactly it, so a single isFree() check that fails
+        // fast on a busy port is correct; the user frees it or changes the setting.
+        // #308 was: PortAvailability.nextFreePort auto-slide + portChangedAuto log.
+        guard PortAvailability.isFree(configuredPort) else {
+            let msg = L10n.errorPortBusy_fmt.formatted(Int(configuredPort))
+            LogStore.shared.log(.connection, "✗ \(msg)")  // OLC-1026 (docs/diagnostic-messages.md)
             state = .failed(msg)
             return nil
-        }
-        if freePort != preferred {
-            LogStore.shared.log(.connection,
-                L10n.portChangedAuto_fmt.formatted(Int(preferred), Int(freePort)))
         }
         let settings = EngineStartSettings(
             dns:                   s.dnsServer,
@@ -539,7 +539,7 @@ final class TunnelManager: ObservableObject {
             localSocksUser:        s.localSocksUser,
             localSocksPass:        s.localSocksPass,
             isReconnect:           isReconnect)
-        return (Int(freePort), settings)
+        return (Int(configuredPort), settings)
     }
 
     /// Off-MainActor: start the engine (blocking native work), then verify

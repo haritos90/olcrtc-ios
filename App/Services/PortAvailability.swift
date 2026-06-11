@@ -15,23 +15,12 @@ import Darwin
 
 enum PortAvailability {
 
-    /// How many consecutive ports `nextFreePort` will try before giving up.
-    static let autoRetryAttempts = 8
-
-    /// Walks up from `startingAt` and returns the first free port, or nil if
-    /// none of the next `maxAttempts` ports are free. Used by the connect
-    /// preflight so a transient conflict on the user's preferred port slides
-    /// one slot up and retries instead of failing the whole connect.
-    static func nextFreePort(startingAt: UInt16,
-                              maxAttempts: Int = autoRetryAttempts) -> UInt16? {
-        for offset in 0..<maxAttempts {
-            let candidate = UInt32(startingAt) + UInt32(offset)
-            guard candidate <= UInt32(UInt16.max) else { return nil }
-            let port = UInt16(candidate)
-            if isFree(port) { return port }
-        }
-        return nil
-    }
+    // #308 was: nextFreePort(startingAt:maxAttempts:) + autoRetryAttempts — the
+    // connect preflight used to slide the user's busy SOCKS port one slot up and
+    // bind the next free one. Removed: the SOCKS port is the contract with external
+    // SOCKS clients (Shadowrocket, browsers) configured to point at exactly it, so
+    // silently bumping it broke them. The preflight now does a single isFree() check
+    // on the configured port and fails fast (reverses closed #108/#148).
 
     /// Returns a free local TCP port in the IANA ephemeral range
     /// (49152–65535), or nil if none of `maxAttempts` random candidates is

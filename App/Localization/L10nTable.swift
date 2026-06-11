@@ -35,6 +35,10 @@ enum L10nTable {
         .tabServers:        "Manage VPS",
         .tabLogs:           "Logs",
         .tabSettings:       "Settings",
+        .tabConfig:         "Config",
+        .configComingSoonTitle: "Coming soon",
+        .configComingSoonHint:  "Routing options — direct/tunnel modes and per-app rules — will live here.",
+        .autoDetectedContainer_fmt: "Auto-detected existing container: %@",
 
         // Routing
         .routingHeader:     "Routing",
@@ -285,7 +289,6 @@ enum L10nTable {
         .reconnectGaveUp:            "✗ Reconnect failed — tap Retry",
         .rejoinSettle_fmt:           "⏳ Room settle: %.1fs before re-join",
         .connectingOlcrtc_fmt:       "→ olcrtc carrier=%@ transport=%@ clientID=%@",
-        .portChangedAuto_fmt:        "↪ Port %d is busy, using %d (updated in Settings)",
 
         // TunnelManager errors
         .validateClientIDEmpty:      "Client ID cannot be empty",
@@ -293,7 +296,7 @@ enum L10nTable {
         .validateKeyLength_fmt:      "Key must be 64 hex characters (got: %d)",
         .validateKeyNonHex:          "Key contains non-hex characters",
         .validateRoomIDEmpty:        "Room ID cannot be empty",
-        .errorAllPortsBusy_fmt:      "Ports %d–%d are all busy, change the port",
+        .errorPortBusy_fmt:          "Port %d is busy — free it or change the port in Settings",
 
         // OlcrtcURI errors
         .uriErrorInvalidScheme:      "URI must start with olcrtc://",
@@ -427,6 +430,10 @@ enum L10nTable {
         .tabServers:        "Управление VPS",
         .tabLogs:           "Логи",
         .tabSettings:       "Настройки",
+        .tabConfig:         "Конфиг",
+        .configComingSoonTitle: "Скоро",
+        .configComingSoonHint:  "Здесь появятся настройки маршрутизации — режимы «напрямую/через туннель» и правила по приложениям.",
+        .autoDetectedContainer_fmt: "Обнаружен существующий контейнер: %@",
 
         // Routing
         .routingHeader:     "Маршрутизация",
@@ -677,7 +684,6 @@ enum L10nTable {
         .reconnectGaveUp:            "✗ Не удалось переподключиться — нажмите «Повторить»",
         .rejoinSettle_fmt:           "⏳ Очистка комнаты: %.1f с до повторного входа",
         .connectingOlcrtc_fmt:       "→ olcrtc carrier=%@ transport=%@ clientID=%@",
-        .portChangedAuto_fmt:        "↪ Порт %d занят, используем %d (обновлено в Настройках)",
 
         // TunnelManager errors
         .validateClientIDEmpty:      "Client ID не может быть пустым",
@@ -685,7 +691,7 @@ enum L10nTable {
         .validateKeyLength_fmt:      "Ключ должен быть 64 hex-символа (получено: %d)",
         .validateKeyNonHex:          "Ключ содержит не-hex символы",
         .validateRoomIDEmpty:        "Room ID не может быть пустым",
-        .errorAllPortsBusy_fmt:      "Порты %d–%d все заняты, смените порт",
+        .errorPortBusy_fmt:          "Порт %d занят — освободите его или смените порт в Настройках",
 
         // OlcrtcURI errors
         .uriErrorInvalidScheme:      "URI должен начинаться с olcrtc://",

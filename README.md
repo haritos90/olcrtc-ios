@@ -10,12 +10,13 @@ iOS client for [olcrtc](https://github.com/openlibrecommunity/olcrtc) — a WebR
 ![Platform](https://img.shields.io/badge/platform-iOS%2017%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-5-orange)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/haritos90/olcrtc-ios/total.svg)](docs/download-stats.md)
 
 The app manages the full lifecycle end to end:
 
 - **Provision** — SSH into a VPS, upload and run the install script, and capture the resulting `olcrtc://` URI.
 - **Connect** — run the olcrtc Go core (via gomobile bindings) as a local SOCKS5 proxy.
-- **Route** — send app traffic through the proxy with a per-app `URLSessionConfiguration`.
+- **Route** — point SOCKS5-aware apps, and the app's own diagnostics, at that local port. iOS has no system-wide per-app proxy routing without a NetworkExtension packet tunnel, so today's scope is the SOCKS5 port itself (a system-wide routing mode is a future option, not shipping yet).
 
 ---
 
@@ -178,6 +179,8 @@ With a free Apple ID the signature lasts **7 days** (re-run the tool to refresh 
 keep at most three sideloaded apps; a paid Apple Developer account extends this to a year. The
 app needs no paid-only entitlements, so a free Apple ID is enough.
 
+Per-version install counts are tracked in [download statistics](docs/download-stats.md).
+
 ### Build the .ipa yourself
 
 Needs the **full Xcode** (same iOS SDK requirement as the framework build) and an existing
@@ -304,10 +307,12 @@ User taps Install
 ## Testing
 
 ```bash
+# simulator names drift between Xcode versions — pick whatever iPhone is installed
+UDID=$(xcrun simctl list devices available | grep -m1 'iPhone' | grep -oE '[0-9A-Fa-f-]{36}')
 xcodebuild test \
   -project olcrtc-ios.xcodeproj \
   -scheme olcrtc-ios-tests \
-  -destination 'platform=iOS Simulator,name=iPhone 16'
+  -destination "id=$UDID"
 ```
 
 238 unit tests cover URI round-trips, carrier/transport rules, connection persistence, Keychain round-trips, the tunnel state machine and parameter validation, settings clamping, log secret-redaction, port selection, SSH output parsing, and `installEnv()` ↔ `srv.sh` env-var parity. They also run on every push and PR in [CI](.github/workflows/ci.yml).

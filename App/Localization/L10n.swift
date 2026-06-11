@@ -44,6 +44,10 @@ enum L10n: String, CaseIterable {
 
     // MARK: Tabs
     case tabConnections, tabServers, tabLogs, tabSettings
+    case tabConfig                          // #301: "Config" tab (placeholder)
+    case configComingSoonTitle              // #301: placeholder title
+    case configComingSoonHint               // #301: placeholder hint
+    case autoDetectedContainer_fmt          // #302: "Auto-detected existing container: %@"
 
     // MARK: Routing
     case routingHeader, routingAllTunnel, routingAllDirect, routingViaTunnel, routingDirect
@@ -234,7 +238,8 @@ enum L10n: String, CaseIterable {
     case reconnectGaveUp                    // "✗ Reconnect failed — tap Retry" (#270 give-up)
     case rejoinSettle_fmt                   // "⏳ Room settle: %.1fs before re-join" (#271)
     case connectingOlcrtc_fmt               // "→ olcrtc carrier=%@..."
-    case portChangedAuto_fmt                // "↪ Port %d is busy, using %d (updated in Settings)"
+    // #308 was: portChangedAuto_fmt ("↪ Port %d is busy, using %d") — removed with
+    // the auto-slide; the configured SOCKS port is now always bound (see errorPortBusy_fmt).
 
     // MARK: TunnelManager errors
     case validateClientIDEmpty
@@ -242,7 +247,9 @@ enum L10n: String, CaseIterable {
     case validateKeyLength_fmt
     case validateKeyNonHex
     case validateRoomIDEmpty
-    case errorAllPortsBusy_fmt
+    // #308 was: errorAllPortsBusy_fmt (port-range "all busy") — replaced by the
+    // single-port errorPortBusy_fmt now that the port no longer slides.
+    case errorPortBusy_fmt                  // "Port %d is busy — free it or change the port in Settings" (OLC-1026)
 
     // MARK: OlcrtcURI errors
     case uriErrorInvalidScheme
