@@ -15,8 +15,13 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject private var settings = SettingsStore.shared
+    // #300: live tunnel state, needed to tell "port busy because our tunnel
+    // reserved it" apart from "port busy because something else holds it" —
+    // the old check compared configured ports only, so it reported "in use
+    // by tunnel" even while disconnected.
+    @ObservedObject var tunnel: TunnelManager
 
-    @State private var portCheck: PortCheckResult?
+    @State private var portCheck: PortAvailability.PortState?
     @State private var socksPassInput: String = ""
     @State private var socksPassLoaded = false
     @FocusState private var anyFieldFocused: Bool
@@ -35,12 +40,6 @@ struct SettingsView: View {
     /// the whole app (dynamic type), moving the viewport — we scroll back here to
     /// keep the control in place.
     private static let fontAnchorID = "settingsFontAnchor"
-
-    private enum PortCheckResult: Equatable {
-        case free
-        case busy
-        case inUseByUs  // port busy because our tunnel is using it
-    }
 
     var body: some View {
         NavigationStack {
@@ -97,17 +96,26 @@ struct SettingsView: View {
             }
 
             Button {
-                let free = PortAvailability.isFree(UInt16(settings.socksPort))
-                if !free && TunnelManager.socksPort == settings.socksPort {
-                    portCheck = .inUseByUs
-                } else {
-                    portCheck = free ? .free : .busy
-                }
+                let port = UInt16(settings.socksPort)
+                // #300: gate "in use by olcrtc tunnel" on live tunnel state —
+                // only true when the tunnel is actually connected and bound to
+                // exactly this port, not just "this is the configured port"
+                // (that was always true and produced a false positive while
+                // disconnected).
+                let tunnelHoldsPort = tunnel.state.isConnected
+                    && TunnelManager.socksPort == settings.socksPort
+                let result = PortAvailability.state(port, tunnelHoldsPort: tunnelHoldsPort)
+                portCheck = result
                 // #287: one L10n key per concept instead of assembling the line
                 // from fragments (which drifted between code paths / languages).
-                LogStore.shared.log(.connection,
-                    free ? L10n.logPortFree_fmt.formatted(settings.socksPort)
-                         : L10n.logPortBusy_fmt.formatted(settings.socksPort))
+                // #300: three states → three log lines.
+                let logLine: String
+                switch result {
+                case .free:      logLine = L10n.logPortFree_fmt.formatted(settings.socksPort)
+                case .busyOther: logLine = L10n.logPortBusyOther_fmt.formatted(settings.socksPort)
+                case .busyOurs:  logLine = L10n.logPortBusyOlcrtc_fmt.formatted(settings.socksPort)
+                }
+                LogStore.shared.log(.connection, logLine)
             } label: {
                 HStack {
                     Image(systemName: "checkmark.circle")
@@ -115,9 +123,9 @@ struct SettingsView: View {
                     Spacer()
                     if let r = portCheck {
                         switch r {
-                        case .free:     Text(L10n.portFree.localized()).foregroundStyle(.green)
-                        case .inUseByUs: Text(L10n.portInUseByTunnel.localized()).foregroundStyle(.green)
-                        case .busy:     Text(L10n.portBusy.localized()).foregroundStyle(.red)
+                        case .free:      Text(L10n.portFree.localized()).foregroundStyle(.green)
+                        case .busyOurs:  Text(L10n.portInUseByOlcrtc.localized()).foregroundStyle(.green)
+                        case .busyOther: Text(L10n.portBusy.localized()).foregroundStyle(.red)
                         }
                     }
                 }

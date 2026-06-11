@@ -15,6 +15,32 @@ import Darwin
 
 enum PortAvailability {
 
+    // #300: three explicit outcomes for "what's going on with this port?",
+    // replacing a binary isFree() check plus a heuristic in SettingsView
+    // ("does the configured port equal the configured tunnel port?") that
+    // reported "in use by tunnel" even while the tunnel was disconnected
+    // (false positive — #177 partial fix). `.busyOurs` now requires the
+    // caller to confirm the *live* tunnel state actually holds this port.
+    enum PortState: Equatable {
+        /// Nothing is bound to this port — safe to start the tunnel.
+        case free
+        /// Something other than our tunnel is bound to this port.
+        case busyOther
+        /// Our own tunnel is currently bound to this port — a reservation,
+        /// not a conflict.
+        case busyOurs
+    }
+
+    /// Classifies `port` into one of three `PortState`s. `tunnelHoldsPort`
+    /// must be supplied by the caller from live state — e.g.
+    /// `tunnel.state.isConnected && TunnelManager.socksPort == Int(port)` —
+    /// this function only probes the socket, it does not guess at the
+    /// tunnel's state.
+    static func state(_ port: UInt16, tunnelHoldsPort: Bool) -> PortState {
+        if tunnelHoldsPort { return .busyOurs }
+        return isFree(port) ? .free : .busyOther
+    }
+
     // #308 was: nextFreePort(startingAt:maxAttempts:) + autoRetryAttempts — the
     // connect preflight used to slide the user's busy SOCKS port one slot up and
     // bind the next free one. Removed: the SOCKS port is the contract with external

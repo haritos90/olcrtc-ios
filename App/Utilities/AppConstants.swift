@@ -103,6 +103,23 @@ enum AppConstants {
         // (download + HEAD ping; no upload sink — #291 measures UL against the
         // Cloudflare fallback) and is the non-Cloudflare fallback when Cloudflare
         // is slow/blocked. Both verified to serve real bytes over HTTPS (2026-06).
+        //
+        // #292: Hetzner is a major global hosting provider (like OVH) with a
+        // long-standing public speedtest mirror network (ash-speed.hetzner.com
+        // et al.), verified 2026-06 to serve `100MB.bin` over HTTPS with a
+        // correct Content-Length (104857600), Accept-Ranges, no redirects, and
+        // a stable ETag dating back to 2021. No 1Mb/10Mb-sized files are
+        // published, so the same 100MB file is used for both modes; on the
+        // tunnel it will typically time out and report download as n/a, same
+        // as any other failed sample (#285 tolerates this). No upload sink, so
+        // UL falls back to Cloudflare like OVH (#291).
+        //
+        // A Yandex endpoint was researched but no public, HTTPS-stable,
+        // appropriately-sized (~1-10 MB) fixed-file or parametric speedtest
+        // host could be found: storage.yandexcloud.net/speedtest-* buckets
+        // 404, speedtest.yandex.net is 503, and mirror.yandex.ru (RU Linux
+        // mirror, otherwise healthy) only has version-pinned ISOs (100s of MB,
+        // filenames change on every release). Left out for now.
         static let providers: [SpeedTestProvider] = [
             SpeedTestProvider(id: "cloudflare", label: "speed.cloudflare.com",
                               host: "speed.cloudflare.com", parametric: true, supportsUpload: true,
@@ -111,6 +128,11 @@ enum AppConstants {
                               host: "proof.ovh.net", parametric: false, supportsUpload: false,
                               fixedSmallURL: "https://proof.ovh.net/files/1Mb.dat",
                               fixedLargeURL: "https://proof.ovh.net/files/10Mb.dat"),
+            // #292: global hosting provider fixed-file fallback (no upload sink).
+            SpeedTestProvider(id: "hetzner", label: "ash-speed.hetzner.com (Hetzner)",
+                              host: "ash-speed.hetzner.com", parametric: false, supportsUpload: false,
+                              fixedSmallURL: "https://ash-speed.hetzner.com/100MB.bin",
+                              fixedLargeURL: "https://ash-speed.hetzner.com/100MB.bin"),
         ]
         static let defaultProviderID = "cloudflare"
         static func provider(id: String) -> SpeedTestProvider {

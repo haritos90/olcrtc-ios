@@ -45,6 +45,10 @@ struct ServersView: View {
     @State private var uninstallConfirmHost    : ServerHost?
     @State private var deepUninstallConfirmHost: ServerHost?
     @State private var rebootConfirmHost       : ServerHost?
+    // #303: confirm before recovering/adding a ConnectionRecord from an
+    // already-installed-but-unlinked host (#302 auto-detect with no
+    // lastConnectionID).
+    @State private var recoverConfirmHost      : ServerHost?
     @State private var pingTimer       : Timer?
 
     @ObservedObject private var settings = SettingsStore.shared
@@ -78,13 +82,16 @@ struct ServersView: View {
                 advancePhase(note: msg)
             }
             .sheet(isPresented: $showAdd) {
-                AddServerHostView { host, pw in
+                // #295: pass every existing label so the sheet can reject a
+                // duplicate (case-insensitive / sanitised-prefix) name.
+                AddServerHostView(otherLabels: serverStore.hosts.map(\.label)) { host, pw in
                     serverStore.add(host, password: pw)
                 }
             }
             .sheet(item: $editHost) { host in
                 AddServerHostView(existing: host,
-                                  existingPassword: serverStore.password(for: host)) { updated, pw in
+                                  existingPassword: serverStore.password(for: host),
+                                  otherLabels: serverStore.hosts.filter { $0.id != host.id }.map(\.label)) { updated, pw in
                     serverStore.update(updated, password: pw.isEmpty ? nil : pw)
                 }
             }
@@ -183,6 +190,25 @@ struct ServersView: View {
                 Button(L10n.cancel.localized(), role: .cancel) { rebootConfirmHost = nil }
             } message: { _ in
                 Text(L10n.rebootConfirmBody.localized())
+            }
+            // #303: recover/add a ConnectionRecord from this host's deployed
+            // server.yaml — read-only on the server, only adds locally.
+            .confirmationDialog(
+                L10n.recoverConfirmTitle.localized(),
+                isPresented: Binding(
+                    get: { recoverConfirmHost != nil },
+                    set: { if !$0 { recoverConfirmHost = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: recoverConfirmHost
+            ) { host in
+                Button(L10n.recoverConfirmAction.localized()) {
+                    recoverConfirmHost = nil
+                    Task { await recoverConnection(host) }
+                }
+                Button(L10n.cancel.localized(), role: .cancel) { recoverConfirmHost = nil }
+            } message: { _ in
+                Text(L10n.recoverConfirmBody.localized())
             }
         }
     }
@@ -496,6 +522,14 @@ struct ServersView: View {
             items.append(.action(L10n.actionUpdate.localized(), systemImage: "arrow.triangle.2.circlepath") {
                 Task { await update(host) }
             })
+            // #303: container is installed but no ConnectionRecord links to it —
+            // surface the recovery action so the user can get a usable connection
+            // without re-installing or losing the room/key.
+            if host.lastConnectionID == nil {
+                items.append(.action(L10n.actionRecoverConnection.localized(), systemImage: "arrow.counterclockwise.circle") {
+                    recoverConfirmHost = host
+                })
+            }
             items.append(.divider)
             items.append(.action(L10n.actionUninstall.localized(), systemImage: "trash", role: .destructive) {
                 uninstallConfirmHost = host
@@ -739,6 +773,47 @@ struct ServersView: View {
                 on: host, password: pw, containerName: cname,
                 tail: SettingsStore.shared.containerLogsTailLines)
             logsPayload = ContainerLogsPayload(containerName: cname, output: output)
+        } catch {
+            alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription)
+        }
+    }
+
+    // #303: read the deployed server.yaml + ~/.olcrtc_key for `host`'s linked
+    // container and add a ConnectionRecord from it — recovers a usable
+    // connection when Connections is empty (new device / reinstall) but the
+    // server is already running olcrtc. Read-only on the server.
+    private func recoverConnection(_ host: ServerHost) async {
+        guard let pw = password(for: host) else {
+            alertText = L10n.alertPasswordMissingShort.localized(); return
+        }
+        guard let cname = host.lastContainerName else {
+            alertText = L10n.containerNotInstalled.localized(); return
+        }
+        do {
+            let cfg = try await provisioner.recoverConfig(on: host, password: pw, containerName: cname)
+            // #303: default-struct values (30/10/1200/1) match OlcrtcConnection's
+            // own seiFPS/seiBatch/seiFrag/seiACK defaults (App/Models/OlcrtcConnection.swift)
+            // — used as a fallback only if the deployed server.yaml's sei: block
+            // somehow lacked a field (shouldn't happen for srv.sh-written configs).
+            let params = OlcrtcConnection(
+                carrier:      cfg.carrier,
+                transport:    cfg.transport,
+                roomID:       cfg.roomID,
+                key:          cfg.key,
+                clientID:     "default",
+                vp8FPS:       cfg.vp8FPS,
+                vp8BatchSize: cfg.vp8BatchSize,
+                seiFPS:       cfg.seiFPS   ?? 30,
+                seiBatch:     cfg.seiBatch ?? 10,
+                seiFrag:      cfg.seiFrag  ?? 1200,
+                seiACK:       cfg.seiACK   ?? 1
+            )
+            let record = ConnectionRecord(name: host.label, details: .olcrtc(params))
+            connections.add(record)
+            var updated = host
+            updated.lastConnectionID = record.id
+            serverStore.update(updated, password: nil)
+            alertText = L10n.recoverResultSuccess_fmt.formatted(cfg.carrier, cfg.transport)
         } catch {
             alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription)
         }

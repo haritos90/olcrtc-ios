@@ -25,4 +25,30 @@ struct ServerHost: Identifiable, Codable, Equatable {
     /// install on this host. Used by the UI to surface "this VPS produced
     /// this connection" in the host card.
     var lastConnectionID : UUID?
+
+    // #295: per-server container logs are stored as `<logFilePrefix>_container.log`.
+    // Sanitises `label` into a filesystem-safe prefix: alphanumerics are kept,
+    // everything else (spaces, punctuation, non-ASCII) collapses to a single
+    // underscore, and leading/trailing underscores are trimmed. Empty/all-symbol
+    // labels fall back to "server" so the filename is never empty.
+    // e.g. "TW Moscow #1" -> "TW_Moscow_1", "  " -> "server".
+    var logFilePrefix: String {
+        Self.sanitizeLogFilePrefix(label)
+    }
+
+    static func sanitizeLogFilePrefix(_ label: String) -> String {
+        var out = ""
+        var lastWasUnderscore = false
+        for ch in label {
+            if ch.isASCII && (ch.isLetter || ch.isNumber) {
+                out.append(ch)
+                lastWasUnderscore = false
+            } else if !lastWasUnderscore && !out.isEmpty {
+                out.append("_")
+                lastWasUnderscore = true
+            }
+        }
+        while out.hasSuffix("_") { out.removeLast() }
+        return out.isEmpty ? "server" : out
+    }
 }

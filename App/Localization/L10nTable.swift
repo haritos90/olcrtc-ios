@@ -57,7 +57,8 @@ enum L10nTable {
 
         // ConnectionsView
         .emptyNoConnections:         "No connections yet",
-        .emptyNoConnectionsHint:     "Tap + to add a connection manually. If you have a VPS, go to the Servers tab to install and link automatically.",
+        // #303 was: "Tap + to add a connection manually. If you have a VPS, go to the Servers tab to install and link automatically."
+        .emptyNoConnectionsHint:     "Tap + to add a connection manually. If you have a VPS, go to the Servers tab to install and link automatically — or, if olcrtc is already running there, use \"Recover connection\".",
         .actionConnect:              "Connect",
         .actionRetry:                "Retry",
         .shareAction:                "Share",
@@ -121,6 +122,16 @@ enum L10nTable {
         .rebootConfirmBody:          "This will reboot the entire VPS. The olcrtc container will restart automatically once the server is back online.",
         .carrierTransportMatrix:     "Carrier × Transport",
 
+        // #303: Recover connection from server
+        .actionRecoverConnection:    "Recover connection",
+        .recoverConfirmTitle:        "Recover connection from this server?",
+        .recoverConfirmBody:         "Reads the carrier, room, transport and encryption key already deployed on this server (read-only) and adds them as a new connection here.",
+        .recoverConfirmAction:       "Recover",
+        .provisioningRecovering:     "Reading server config…",
+        .recoverResultSuccess_fmt:   "Recovered %@/%@ — connection added",
+        .recoverErrorMissingYAML:    "Server config not found — the deployed server.yaml could not be read.",
+        .recoverErrorMissingField_fmt: "Server config is missing '%@'",
+
         // Container status
         .containerRunning_fmt:       "Container running: %@",
         .containerStopped_fmt:       "Container stopped: %@",
@@ -172,13 +183,26 @@ enum L10nTable {
         .noSearchResults:            "Nothing found",
         .noSearchResultsHint_fmt:    "No matches for «%@».",
         .categoryConnection:         "Connection",
-        .categoryIP:                 "IP",
-        .categorySpeed:              "Speed test",
+        .categoryDiagnostics:        "Diagnostics",
         .categoryProvisioning:       "VPS",
         .categoryContainerLogs:      "Container",
-        .logsAllSources:             "All sources",
-        .logsSourceLabel:            "Source",
-        .logsRefreshFromServer:      "Refresh from server",
+
+        // #294: per-source Logs tabs
+        .logsTabDescConnection:      "connection logs",
+        .logsTabDescDiagnostics:     "IP and speed test logs",
+        .logsTabDescVPS:             "VPS provisioning logs",
+        .logsTabDescContainer:       "Server container extracted logs",
+        .logsFileNameLabel_fmt:      "File: %@",
+        .logsContainerSelectServer:  "Server",
+        .logsContainerNoServers:     "No servers configured",
+
+        // #295: per-server container log files
+        .duplicateServerNameError:   "A server with this name already exists",
+
+        // #296: Container tab always-present load button
+        .logsDownloadFromServer:     "Download logs from server",
+        .logsCheckServer:            "Check server",
+        .logsContainerEmptyHint:     "Logs need to be loaded from the server.",
 
         // SettingsView
         .settingsTitle:              "Settings",
@@ -200,7 +224,8 @@ enum L10nTable {
         .portFree:                   "free",
         .portBusy:                   "busy",
         .logPortFree_fmt:            "✓ Port %d free",
-        .logPortBusy_fmt:            "✗ Port %d busy",
+        .logPortBusyOther_fmt:       "✗ Port %d busy",
+        .logPortBusyOlcrtc_fmt:      "✓ Port %d in use by olcrtc tunnel",
         .socksFooter:                "Local port the embedded SOCKS5 proxy listens on. If the port is busy, the connection will fail with «Port XXXX is busy, change the port».",
         .socksPortChangeNote:        "Port change takes effect on the next connection.",
         .dnsFreeFormPlaceholder:     "IP:port",
@@ -375,13 +400,21 @@ enum L10nTable {
         .ipCheckRun:                 "Check IP",
         .speedTestRun:               "Run test",
 
+        // #311 — speed-tile metric labels/units + upload-fallback log line
+        .speedLabelPing:             "Ping",
+        .speedLabelDL:               "DL",
+        .speedLabelUL:               "UL",
+        .speedPingValue_fmt:         "%.0f ms",
+        .speedRateValue_fmt:         "%.1f Mbps",
+        .speedUploadFallback_fmt:    "  upload: %@ has no upload endpoint — using %@",
+
         // #236/#237 — UI strings localized after the i18n pass
         .ipChecking:                 "Checking…",
         .ipNotChecked:               "Not checked yet",
         .ipDnsLeak:                  "IPs differ — possible DNS leak",
         .ipSourcesAgree_fmt:         "✓ %@ (%d sources)",
         .socksProxyAddr_fmt:         "SOCKS5 proxy: 127.0.0.1:%@",
-        .portInUseByTunnel:          "in use by tunnel",
+        .portInUseByOlcrtc:          "in use by olcrtc tunnel",
         .roomPrefix_fmt:             "room: %@",
         .qrCodeURIA11y:              "Connection URI QR Code",
         .qrCodeHintA11y:             "Scan this code to import the connection on another device",
@@ -452,7 +485,8 @@ enum L10nTable {
 
         // ConnectionsView
         .emptyNoConnections:         "Нет подключений",
-        .emptyNoConnectionsHint:     "Нажми + чтобы добавить подключение вручную. Если есть VPS — перейди во вкладку Управление VPS для автоматической установки.",
+        // #303 was: "Нажми + чтобы добавить подключение вручную. Если есть VPS — перейди во вкладку Управление VPS для автоматической установки."
+        .emptyNoConnectionsHint:     "Нажми + чтобы добавить подключение вручную. Если есть VPS — перейди во вкладку Управление VPS для автоматической установки. Если olcrtc уже запущен на сервере, используй «Восстановить подключение».",
         .actionConnect:              "Подключить",
         .actionRetry:                "Повторить",
         .shareAction:                "Поделиться",
@@ -516,6 +550,16 @@ enum L10nTable {
         .rebootConfirmBody:          "Будет выполнена перезагрузка всего VPS. Контейнер olcrtc запустится автоматически после того, как сервер поднимется.",
         .carrierTransportMatrix:     "Carrier × Transport",
 
+        // #303: Recover connection from server
+        .actionRecoverConnection:    "Восстановить подключение",
+        .recoverConfirmTitle:        "Восстановить подключение с этого сервера?",
+        .recoverConfirmBody:         "Считывает carrier, room, transport и ключ шифрования, уже развёрнутые на этом сервере (только чтение), и добавляет их как новое подключение здесь.",
+        .recoverConfirmAction:       "Восстановить",
+        .provisioningRecovering:     "Чтение конфигурации сервера…",
+        .recoverResultSuccess_fmt:   "Восстановлено %@/%@ — подключение добавлено",
+        .recoverErrorMissingYAML:    "Конфигурация сервера не найдена — не удалось прочитать развёрнутый server.yaml.",
+        .recoverErrorMissingField_fmt: "В конфигурации сервера отсутствует поле «%@»",
+
         // Container status
         .containerRunning_fmt:       "Контейнер работает: %@",
         .containerStopped_fmt:       "Контейнер остановлен: %@",
@@ -567,13 +611,26 @@ enum L10nTable {
         .noSearchResults:            "Ничего не найдено",
         .noSearchResultsHint_fmt:    "По запросу «%@» совпадений нет.",
         .categoryConnection:         "Подключение",
-        .categoryIP:                 "IP",
-        .categorySpeed:              "Скорость",
+        .categoryDiagnostics:        "Диагностика",
         .categoryProvisioning:       "VPS",
         .categoryContainerLogs:      "Контейнер",
-        .logsAllSources:             "Все источники",
-        .logsSourceLabel:            "Источник",
-        .logsRefreshFromServer:      "Обновить с сервера",
+
+        // #294: per-source Logs tabs
+        .logsTabDescConnection:      "логи подключения",
+        .logsTabDescDiagnostics:     "логи проверки IP и скорости",
+        .logsTabDescVPS:             "логи установки VPS",
+        .logsTabDescContainer:       "логи контейнера сервера",
+        .logsFileNameLabel_fmt:      "Файл: %@",
+        .logsContainerSelectServer:  "Сервер",
+        .logsContainerNoServers:     "Нет настроенных серверов",
+
+        // #295: per-server container log files
+        .duplicateServerNameError:   "Сервер с таким именем уже существует",
+
+        // #296: Container tab always-present load button
+        .logsDownloadFromServer:     "Загрузить логи с сервера",
+        .logsCheckServer:            "Проверить сервер",
+        .logsContainerEmptyHint:     "Логи нужно загрузить с сервера.",
 
         // SettingsView
         .settingsTitle:              "Настройки",
@@ -595,7 +652,8 @@ enum L10nTable {
         .portFree:                   "свободен",
         .portBusy:                   "занят",
         .logPortFree_fmt:            "✓ Порт %d свободен",
-        .logPortBusy_fmt:            "✗ Порт %d занят",
+        .logPortBusyOther_fmt:       "✗ Порт %d занят",
+        .logPortBusyOlcrtc_fmt:      "✓ Порт %d занят туннелем olcrtc",
         .socksFooter:                "Локальный порт, который слушает встроенный SOCKS5-прокси. При занятом порте подключение завершится сообщением «Порт XXXX занят, смените порт».",
         .socksPortChangeNote:        "Изменение порта применится при следующем подключении.",
         .dnsFreeFormPlaceholder:     "IP:port",
@@ -770,13 +828,21 @@ enum L10nTable {
         .ipCheckRun:                 "Проверить IP",
         .speedTestRun:               "Запустить тест",
 
+        // #311 — speed-tile metric labels/units + upload-fallback log line (ru = en, see L10n.swift)
+        .speedLabelPing:             "Ping",
+        .speedLabelDL:               "DL",
+        .speedLabelUL:               "UL",
+        .speedPingValue_fmt:         "%.0f ms",
+        .speedRateValue_fmt:         "%.1f Mbps",
+        .speedUploadFallback_fmt:    "  upload: %@ has no upload endpoint — using %@",
+
         // #236/#237 — UI strings localized after the i18n pass
         .ipChecking:                 "Проверка…",
         .ipNotChecked:               "Ещё не проверялось",
         .ipDnsLeak:                  "IP различаются — возможна утечка DNS",
         .ipSourcesAgree_fmt:         "✓ %@ (источников: %d)",
         .socksProxyAddr_fmt:         "SOCKS5-прокси: 127.0.0.1:%@",
-        .portInUseByTunnel:          "занят туннелем",
+        .portInUseByOlcrtc:          "занят туннелем olcrtc",
         .roomPrefix_fmt:             "комната: %@",
         .qrCodeURIA11y:              "QR-код URI подключения",
         .qrCodeHintA11y:             "Отсканируйте этот код, чтобы импортировать подключение на другом устройстве",
