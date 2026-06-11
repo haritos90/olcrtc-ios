@@ -98,34 +98,55 @@ jobs:
             fi
             echo
           } >> notes.md
+          # 2b. #305: tasks closed since the previous tag, from TODO.md's Closed
+          #     table (diff this tag's TODO.md against $PREV's). Omitted on the
+          #     first release or when nothing new was closed.
+          if [ -n "$PREV" ]; then
+            CLOSED=$(python3 scripts/closed-tasks-since.py --since "$PREV" 2>/dev/null || true)
+            if [ -n "$CLOSED" ]; then
+              {
+                echo
+                echo "**Tasks closed since $PREV**"
+                echo
+                echo "$CLOSED"
+                echo
+              } >> notes.md
+            fi
+          fi
           # 3. Asset footer.
           {
             echo
             echo "---"
             echo "**Assets**"
-            echo "- \`Mobile.xcframework.zip\` — prebuilt olcrtc core (device + simulator). Download: \`./scripts/fetch-framework.sh $TAG\`."
+            # #306: list the .ipa first — it leads on the Release page.
             echo "- \`olcrtc-ios-unsigned.ipa\` — unsigned build for sideloading (AltStore / Sideloadly)."
+            echo "- \`Mobile.xcframework.zip\` — prebuilt olcrtc core (device + simulator). Download: \`./scripts/fetch-framework.sh $TAG\`."
           } >> notes.md
 
-      - name: Create the release with the framework
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: |
-          gh release create "$TAG" --title "$TAG" --notes-file notes.md Mobile.xcframework.zip \
-            || { gh release edit "$TAG" --notes-file notes.md; \
-                 gh release upload "$TAG" Mobile.xcframework.zip --clobber; }
-
       # The unsigned .ipa depends on the Swift code (changes per tag), so it is
-      # always rebuilt — against the framework restored/built above.
+      # always rebuilt — against the framework restored/built above. Built before
+      # the release is created so it can be the *first* asset uploaded (#306).
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Build the unsigned .ipa
         run: bash scripts/package-ipa.sh
 
-      - name: Attach the unsigned .ipa
+      # #306: attach olcrtc-ios-unsigned.ipa BEFORE Mobile.xcframework.zip so the
+      # user-facing sideload artifact leads on the Release page — GitHub orders
+      # assets by upload time, so the .ipa goes in at release-create, the framework
+      # in the follow-up upload.
+      - name: Create the release with the unsigned .ipa
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: gh release upload "$TAG" olcrtc-ios-unsigned.ipa --clobber
+        run: |
+          gh release create "$TAG" --title "$TAG" --notes-file notes.md olcrtc-ios-unsigned.ipa \
+            || { gh release edit "$TAG" --notes-file notes.md; \
+                 gh release upload "$TAG" olcrtc-ios-unsigned.ipa --clobber; }
+
+      - name: Attach Mobile.xcframework
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" Mobile.xcframework.zip --clobber

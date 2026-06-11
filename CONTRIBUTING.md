@@ -105,10 +105,12 @@ bump.
 Run the suite before opening a PR; all tests must pass:
 
 ```bash
+# simulator names drift between Xcode versions — pick whatever iPhone is installed
+UDID=$(xcrun simctl list devices available | grep -m1 'iPhone' | grep -oE '[0-9A-Fa-f-]{36}')
 xcodebuild test \
   -project olcrtc-ios.xcodeproj \
   -scheme olcrtc-ios-tests \
-  -destination 'platform=iOS Simulator,name=iPhone 16'
+  -destination "id=$UDID"
 ```
 
 Add tests for new parsing/validation logic and for any change to the
@@ -146,9 +148,9 @@ deletes its detail block.
 ## Marking task-driven changes
 
 When you change code to implement a numbered `TODO.md` task, leave an inline trail
-tying the change back to that task. The app sources are **not committed to git**
-(only the upstream `olcrtc-upstream` submodule is tracked), so these comments are the only
-change history the code itself carries: *what* changed, *for which task*, and *why*.
+tying the change back to that task. Commits are coarse-grained — several tasks
+often land in one commit — so these comments, not git history, are the per-task
+change record the code itself carries: *what* changed, *for which task*, and *why*.
 
 - **New or changed code** — tag it with the task ID and a short description:
 

@@ -34,6 +34,20 @@ final class SpeedTestProviderTests: XCTestCase {
         XCTAssertEqual(ovh.pingURL(), "https://proof.ovh.net/files/1Mb.dat")    // HEAD on small file
     }
 
+    // #291: a fixed-file provider (OVH) has no upload sink, so the upload leg
+    // falls back to Cloudflare's parametric /__up; an upload-capable provider
+    // keeps itself.
+    func testUploadFallsBackToCloudflareForFixedFileProvider() {
+        let up = AppConstants.SpeedTest.uploadProvider(for: provider("ovh"))
+        XCTAssertEqual(up.id, "cloudflare")
+        XCTAssertTrue(up.supportsUpload)
+        XCTAssertNotNil(up.uploadURLString)
+    }
+
+    func testUploadKeepsSelectedProviderWhenItUploads() {
+        XCTAssertEqual(AppConstants.SpeedTest.uploadProvider(for: provider("cloudflare")).id, "cloudflare")
+    }
+
     func testTunnelDegradesPayloadsAndTimeouts() {
         XCTAssertLessThan(AppConstants.SpeedTest.downloadBytesTunnel, AppConstants.SpeedTest.downloadBytesDirect)
         XCTAssertLessThan(AppConstants.SpeedTest.uploadBytesTunnel, AppConstants.SpeedTest.uploadBytesDirect)

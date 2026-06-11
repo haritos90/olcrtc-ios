@@ -35,7 +35,17 @@ in **ascending ID** order.
 **Layout** — Open and Backlog come first, then their **Details** blocks, then the
 **Closed** history last, so the active work and its descriptions stay at the top.
 
-**Next free ID:** 291
+**Table formats** — never delete a section's table when it empties; keep the header
+rows so the structure survives and nothing has to be rebuilt from scratch. The columns are:
+
+- **Open** / **Backlog** — `| ID | Pri | Eff | Theme | Title |`
+- **Closed** — `| ID | Theme | Title | Resolution |`
+
+When **Open** has no rows, keep the header + separator and leave a single placeholder
+row — `| — | — | — | — | _(empty — promote one from Backlog)_ |` — instead of replacing
+the table with prose.
+
+**Next free ID:** 309
 
 ---
 
@@ -43,7 +53,16 @@ in **ascending ID** order.
 
 Current, actionable work.
 
-_Nothing open — every tracked task is done. Promote one from Backlog to start the next._
+| ID | Pri | Eff | Theme | Title |
+|---|---|---|---|---|
+| 292 | P2 | M | features | Speed test: add more providers (Yandex + large regional/global operators) |
+| 294 | P1 | L | observability | Logs: revert merged stream → per-source tabs (Connection/Diagnostics/VPS/Container) + per-tab description + visible file name |
+| 295 | P2 | M | observability | Logs: per-server container log files with a unique server-name prefix |
+| 296 | P1 | M | ux | Container logs: always-present "Download from server" button (→ "Check server" when offline) + empty hint |
+| 297 | P1 | S | reliability | Fix freeze when opening Container logs for a server not yet checked |
+| 299 | P3 | L | ux | Theme = real colour schemes (Dark/Light/Gray), not tile borders — replace Refined/Console |
+| 300 | P2 | M | ux | Port check: 3 states (free / used by another / used by olcrtc tunnel) + fix false "in use" when off |
+| 303 | P2 | L | features | Recover/add a connection from server access when Connections is empty (import or generate) |
 
 ---
 
@@ -65,7 +84,6 @@ Future / blocked / someday. Promote to Open when picked up.
 | 254 | P3 | XS | docs | CODE_OF_CONDUCT.md (Contributor Covenant) |
 | 257 | P3 | S | docs | Privacy-policy document (App Store needs a hosted URL) |
 | 279 | P2 | L | observability | Message catalog: typed (info/warn/error), error-coded client+server messages, searchable + troubleshooting cross-ref |
-| 290 | P3 | S | performance | Logs: debounce/coalesce the on-tab merged-stream rebuild during log storms |
 
 ---
 
@@ -202,14 +220,75 @@ second precision, no millis) — #277/#278 must reformat + tolerate the missing 
 now the *wiring*: emit these coded lines from the right places (and detect the 🟡-planned ones), make the
 codes searchable in the merged Logs stream (#276), and cross-link from the README troubleshooting.
 
-### 290 — Logs: debounce the on-tab merged-stream rebuild
+### 292 — Speed test: more providers
 
-The #289 visibility gate stops `LogsView` rebuilding off-screen, but while the Logs tab *is* open during
-a log storm (connect / verbose), `refreshCache()` still runs once per line — and it sorts every category
-+ rebuilds the whole `AttributedString`, which can hitch at large `logBufferSize`. Coalesce bursts:
-rebuild at most once per ~150 ms of quiet via a cancellable `Task`, and/or cap the rendered window to
-the most recent N lines (search still spans the full buffer). Goal: the Logs tab stays smooth even under
-heavy logging.
+Grow the provider list beyond Cloudflare + OVH (#285). Add **Yandex** and other large regional / global
+operators with stable, HTTPS-reachable fixed-file or parametric speed endpoints, vetting each the way
+#286 vetted IP sources (sized payload over a curl UA, no CORS/redirect surprises). Goal: representative
+RU-zone + global measurement, user-selectable in Settings (`speedTestProviderID`). Check upload support
+per provider (pairs with #291).
+
+### 294 — Logs: back to per-source tabs
+
+Revert the single merged stream (#276) to **per-source tabs** — **Connection**, **Diagnostics**,
+**VPS**, **Container** — because the sources are unrelated and a merged pile isn't useful (so the
+"All sources" view is dropped and the debounce work #290 is moot). **Keep** the per-line wins from the
+merge: severity colour-coding (#276), dated newest-first timestamps with retained scroll (#277), and
+in-tab container download/refresh (#278). Each tab carries a short description line — Connection:
+"connection logs"; VPS: "VPS provisioning logs"; Diagnostics: "IP and speed test logs"; Container:
+"Server container extracted logs" — and shows its backing **file name**: `connection.log`,
+`diagnostics.log`, `provisioning.log`, `%servername%_container.log`. Rename the old ip/speed category +
+file to **diagnostics** (tab "Diagnostics", `diagnostics.log`). Retire the merged-stream visibility-gate
+plumbing (#289) where it no longer applies. **Supersedes #290.**
+
+### 295 — Per-server container log files
+
+Container logs from different servers currently share one file and overwrite each other. Store each
+server's container logs in its **own file**, prefixed by a unique server name — e.g.
+`TWmsk1_container.log`. Enforce server-name **uniqueness** when adding/editing a host (so the prefix is
+unambiguous) and sanitise the name into a filesystem-safe prefix. The Container tab (294/296) then
+selects which server's file to show.
+
+### 296 — Container tab: always-present load button + offline state
+
+The "Refresh from server" affordance only appears once container lines already exist. Make the Container
+tab always show a **"Download logs from server"** button even when empty. When the server connection
+isn't established yet, the button instead reads **"Check server"** (mirroring the Manage VPS card),
+running the readiness check first. The empty-state hint should say the logs need to be **loaded from the
+server** (not the generic "no logs"). Pairs with 294 (Container tab) + 297 (don't block the UI).
+
+### 297 — Fix freeze opening Container logs for an unchecked server
+
+Selecting Container logs for a server that hasn't been checked yet **hangs the app** — a blocking
+SSH/connect call on the main actor. Move the fetch/connect fully off the main thread, guard the
+not-yet-checked / unknown-host path, and show progress instead of freezing. Pairs with 296 (the
+"Check server" gating).
+
+### 299 — Theme = real colour schemes (Dark / Light / Gray)
+
+**User wants this prioritised.** The current "Theme" picker (Refined/Console — #267/#281) only changes
+corner radii + border weight; it does **not** change colours, which is what "Theme" should mean. Replace
+it with **Dark / Light / Gray** colour schemes that actually swap the palette (`Theme.Palette`). The app
+is currently forced-dark (`UIUserInterfaceStyle=Dark` in project.yml) — Light/Gray require lifting that
+and authoring light + neutral-gray palettes while keeping the design-system component structure. Drop
+the shape/border-only "design direction" framing.
+
+### 300 — Port check: three clear states
+
+The SOCKS-port check reports "in use by tunnel" even when the tunnel is **off** (false positive), and
+never distinguishes *who* holds the port. Report three explicit states: **free**, **in use by another
+process**, and **in use by olcrtc tunnel** (only when our tunnel actually holds it — gate on live tunnel
+state, not a heuristic). Label our own reservation **"in use by olcrtc tunnel"** so it's clear we
+reserved it. Supersedes the partial #177.
+
+### 303 — Recover/add a connection from server access
+
+When the server already runs olcrtc but the **Connections** tab is empty (new device / reinstall / fresh
+app), there's no safe way to get a usable connection — you can start the server but can't connect to it.
+Since we have SSH access, either **import** the existing connection parameters from the server (read the
+deployed key/room/transport → rebuild the `olcrtc://` URI) or **generate** a new key, write it
+server-side, then add the `ConnectionRecord`. Neither read-existing nor generate-new exists today — both
+need server-side support (emit config or rotate key) + client wiring. Ties to #133/#134/#135.
 
 ---
 
@@ -456,7 +535,7 @@ title-only.
 | 244 | build | Replace placeholder bundle IDs before TestFlight/App Store | set to com.alexk.olcrtc-ios{,-tests} |
 | 245 | docs | `OlcrtcConnection.swift` references missing `docs/uri.md` | created `docs/uri.md` (olcrtc:// URI format reference) |
 | 246 | build | GitHub issue templates (bug report + feature request) | added `.github/ISSUE_TEMPLATE/` — bug_report + feature_request + config.yml (English, iOS-flavoured; core/protocol bugs routed upstream) |
-| 248 | build | App icon — `AppIcon.appiconset` ships with no images | added user's pixel-hand + `olcrtc-ios` wordmark → `AppIcon.appiconset/AppIcon.png` (1024 universal); reproducible via `scripts/icon/make-icon.py` |
+| 248 | build | App icon — `AppIcon.appiconset` ships with no images | added user's pixel-hand + `olcrtc-ios` wordmark → `AppIcon.appiconset/AppIcon.png` (1024 universal); one-shot generator (`scripts/icon/`) removed once the icon was committed |
 | 249 | build | Privacy manifest (`PrivacyInfo.xcprivacy`) — required for App Store | added `App/PrivacyInfo.xcprivacy`: no tracking, empty tracking-domains/collected-data; required-reason audit found only User Defaults → `CA92.1`; auto-bundled to Resources via the `App` glob, `plutil`-lint clean |
 | 250 | build | CI: build + test (+ `srv.sh` parity) on a macOS runner | `.github/workflows/ci.yml` on push/PR/dispatch (macos-15): parity check → gomobile-build `Mobile.xcframework` (cached by upstream commit) → `xcodegen` → `xcodebuild test` on iPhone 16 sim |
 | 252 | docs | README publication pass — public framing, screenshots, disclaimer | restructured for a serious-project layout (badges, Features, Screenshots placeholder, Contributing, neutral Disclaimer); corrected stale architecture docs (connect→start→runEngine per #243, ATS/`NWConnection` attribution, test coverage); set `haritos90/olcrtc-ios` links; dropped censorship/RU framing |
@@ -494,3 +573,14 @@ title-only.
 | 286 | ux | IP-check: selectable providers (10, incl. RU/ru-zone) + connection-type | grew `AppConstants.ipCheckServices` to a curated **10** (7 international + 3 RU/ru-zone — `2ip.ru`, `2ip.io`, `ip.beget.ru`, all verified to return a bare IP over HTTPS with a curl UA, 2026-06; JSON-only endpoints dropped). The user toggles which to query via **checkboxes in Settings** (`SettingsStore.enabledIPSources`, persisted as an array, keyed by label), with a default subset (3 intl + 1 RU) and an empty-set fallback so the check never queries nothing. IP-check header now logs `→ IP check (Direct/Via tunnel) — N source(s)` (connection-type was already there). `Tests/IPCheckSourcesTests.swift` |
 | 287 | observability | Log-line cleanups from the real capture | three fixes, two extracted as pure testable helpers: (1) keep-alive "active −N s ago" went negative because `noteActivity(forAtLeast:)` parks the marker ahead → `TunnelManager.keepAliveSkipNote(ageSeconds:)` reports "tunnel busy (Ns reserved)" for the future-marker case; (2) tunnel-verify "bad URL" (a valid URL whose SOCKS session can't be built mid-teardown) → `verifyFailureReason(_:)` maps `URLError.badURL/.unsupportedURL` to "proxy not ready"; (3) the port check-result line now routes through single keys `logPortFree_fmt`/`logPortBusy_fmt` (en+ru) instead of assembling fragments. `Tests/LogLineCleanupTests.swift` |
 | 289 | performance | Logs tab: visibility gate — rebuild the merged stream only when on-screen | `LogsView.refreshCache()` (sort all categories + rebuild the `AttributedString`) ran on every `LogStore.revision` bump — once per log line — and `TabView` keeps off-screen tabs alive, so it churned in the background during a log storm on another tab. Added `TabView(selection:)` + `.tag`s in App.swift and pass `isActive: selectedTab == 2` into `LogsView`; the per-line rebuild is gated on `isActive`, with a one-shot catch-up `onChange(of: isActive)` when the tab is shown. Eliminates all off-tab rebuild work. On-tab burst smoothing (debounce) is the follow-up #290 |
+| 290 | performance | Logs: debounce/coalesce the on-tab merged-stream rebuild during log storms | Won't Do — superseded by #294 (logs revert to per-source tabs; no merged stream left to debounce) |
+| 291 | reliability | Speed test: OVH measures no upload + result units (Mbps/ms) no longer shown | (a) upload: a fixed-file provider (OVH) has no `/__up` sink, so UL showed nothing — `AppConstants.SpeedTest.uploadProvider(for:)` now routes the upload leg to the Cloudflare parametric `/__up` fallback when the selected provider can't upload (logged), so UL is measured instead of blank; (b) units: DL/UL lost their `Mbps` suffix in the redesign — restored next to the numbers (Ping already showed `ms`), matching this view's hardcoded-unit convention. `Tests/SpeedTestProviderTests.swift` (+2 fallback-resolution tests) |
+| 293 | ux | Settings: move IP-check source selection into its own sub-screen | the inline #286 checkboxes now sit behind a navigation row ("IP check sources" + a selected-count) in the main Settings list; the toggle list moved to a dedicated `IPSourcesSettingsView` sub-screen. Model unchanged (`SettingsStore.enabledIPSources` + default subset + empty-set fallback) |
+| 298 | ux | Settings: keep scroll position stable on font-size change (don't jump) | wrapped the Settings `Form` in a `ScrollViewReader` and tagged the Font row with a stable id; on `fontSizeIndex` commit (the app-wide dynamic-type relayout that moved the viewport) it `scrollTo`s that anchor (`.center`), so the Font control stays put instead of the list jumping |
+| 301 | features | New "Config" tab between Manage VPS and Logs (placeholder "Coming soon") | new `ConfigView` (NavigationStack + `OlcEmptyState` "Coming soon") inserted at tab index 2; Logs/Settings shifted to tags 3/4 and the Logs visibility gate updated to `selectedTab == 3`. New L10n `tabConfig` + placeholder strings (en+ru) |
+| 302 | reliability | Server check: auto-detect existing olcrtc containers (no false "cached for reinstall") | `checkServer` now, when the readiness probe finds no *known* container on a host with `lastContainerName == nil`, folds in `scanContainers` and adopts the first `olcrtc-server-*` found — persists its name, sets the base to running/stopped from its status, logs `autoDetectedContainer` — so an existing container surfaces without the separate "Look for olcrtc containers" tap (still available for multi-container hosts) |
+| 304 | ux | Move "Share connection" from Connections to the Manage VPS tab | extracted the share sheet into a reusable `ShareConnectionView` (QR now a `NavigationLink` push, not a second-sheet handoff) and moved the "Share connection" action onto the server card (shown when the host has a linked `ConnectionRecord`). Removed it (and its `shareConn`/`pendingQRConn` plumbing) from the Connections row menu; Copy URI / QR remain there as quick utilities |
+| 305 | build | Release notes: auto-append tasks closed between releases (ID + title + resolution) | new `scripts/closed-tasks-since.py` diffs TODO.md's Closed table between `--since <tag>` and the working tree → markdown bullets `- #ID title — resolution`; `release.yml` runs it for `$PREV` and appends a "Tasks closed since <tag>" section to the notes (omitted on the first release / when empty / when the script is absent at an old tag) |
+| 306 | build | Release assets order: `.ipa` before `Mobile.xcframework` | `release.yml`: build the unsigned `.ipa` before creating the release and make it the create asset, then attach `Mobile.xcframework.zip` in a follow-up upload — GitHub orders assets by upload time, so the user-facing sideload artifact now leads. Asset footer in the notes reordered to match |
+| 307 | build | Per-version download counter for Release assets (GitHub API `download_count`) | new `scripts/download-stats.py` (stdlib-only) sums `release.assets[].download_count` per tag → markdown table (per-asset + per-tag + all-time total); repo from `--repo`/`$GITHUB_REPOSITORY`/git origin, token from `GH_TOKEN`/`GITHUB_TOKEN` (one paginated `GET /releases`, within the unauth rate limit). New `download-stats.yml` workflow regenerates `docs/download-stats.md` weekly (+ manual) and commits only on change (`[skip ci]`). Surfaced via a README total-downloads shields badge + a link from the sideload section |
+| 308 | reliability | SOCKS port: always bind the configured port (no auto-slide — breaks Shadowrocket etc.); busy → clear "port busy" error, don't connect | removed `PortAvailability.nextFreePort`/`autoRetryAttempts` (the auto-slide, reversing #108/#148); (a) `reservePortAndSettings` now does a single `isFree(configuredPort)` check → typed `.failed` before the engine starts; (b) `OlcrtcEngine.startErrorReason(_:port:)` maps a late gomobile bind race (`address already in use`) to the same reason; (c) new `errorPortBusy_fmt` L10n (en+ru) names the busy port, dropping `portChangedAuto_fmt`/`errorAllPortsBusy_fmt`; (d) catalog row OLC-1026 (E). `freeEphemeralPort` kept for probes. `Tests/PortAvailabilityTests.swift` (−3 slide tests, +2 error-mapping tests) |

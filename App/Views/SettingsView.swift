@@ -31,6 +31,11 @@ struct SettingsView: View {
         return max(0, min(SettingsStore.fontSizes.count - 1, raw))
     }
 
+    /// #298: scroll anchor for the Font control. Committing the font size relayouts
+    /// the whole app (dynamic type), moving the viewport — we scroll back here to
+    /// keep the control in place.
+    private static let fontAnchorID = "settingsFontAnchor"
+
     private enum PortCheckResult: Equatable {
         case free
         case busy
@@ -39,23 +44,33 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                socksSection
-                dnsSection
-                transportSection
-                connectionSection
-                ipSourcesSection
-                speedProviderSection
-                logsSection
-                appearanceSection
-                infoSection
-            }
-            .onDisappear { socksPassLoaded = false }
-            .navigationTitle(L10n.settingsTitle.localized())
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button(L10n.done.localized()) { anyFieldFocused = false }
+            ScrollViewReader { proxy in
+                Form {
+                    socksSection
+                    dnsSection
+                    transportSection
+                    connectionSection
+                    ipSourcesSection
+                    speedProviderSection
+                    logsSection
+                    appearanceSection
+                    infoSection
+                }
+                .onDisappear { socksPassLoaded = false }
+                .navigationTitle(L10n.settingsTitle.localized())
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button(L10n.done.localized()) { anyFieldFocused = false }
+                    }
+                }
+                // #298: committing the font size triggers the app-wide dynamic-type
+                // relayout, which shifted the Settings viewport (it jumped). Pull the
+                // Font control back into view so the scroll position stays stable.
+                .onChange(of: settings.fontSizeIndex) { _, _ in
+                    DispatchQueue.main.async {
+                        withAnimation { proxy.scrollTo(Self.fontAnchorID, anchor: .center) }
+                    }
                 }
             }
         }
@@ -330,6 +345,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
+            .id(Self.fontAnchorID)   // #298: re-anchor here after the relayout
             // #280: drag updates local @State (cheap — only this row + the
             // preview re-render); the app-wide `fontSizeIndex` (and its
             // UserDefaults write + full-tree relayout) commits once, on release.
@@ -364,22 +380,24 @@ struct SettingsView: View {
 
     // MARK: IP-check sources (#286)
 
+    // #293: the inline checkboxes (#286) crowded the main Settings list — moved
+    // behind a navigation row into their own sub-screen (IPSourcesSettingsView).
+    // The model (`enabledIPSources` + default subset + empty-set fallback) is
+    // unchanged; the row shows the count of selected sources.
     @ViewBuilder
     private var ipSourcesSection: some View {
         Section {
-            ForEach(AppConstants.ipCheckServices, id: \.label) { svc in
-                Toggle(isOn: Binding(
-                    get: { settings.enabledIPSources.contains(svc.label) },
-                    set: { on in
-                        if on { settings.enabledIPSources.insert(svc.label) }
-                        else  { settings.enabledIPSources.remove(svc.label) }
-                    }
-                )) {
-                    Text(svc.label)
+            NavigationLink {
+                IPSourcesSettingsView()
+            } label: {
+                HStack {
+                    Text(L10n.sectionIPSources.localized())
+                    Spacer()
+                    Text("\(settings.enabledIPSources.count)")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
             }
-        } header: {
-            Text(L10n.sectionIPSources.localized())
         } footer: {
             Text(L10n.ipSourcesFooter.localized())
                 .font(.caption2)
@@ -423,5 +441,38 @@ struct SettingsView: View {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2"
         let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         return "\(v).\(b)"
+    }
+}
+
+// MARK: - IPSourcesSettingsView (#293)
+//
+// Dedicated sub-screen for the IP-check source checkboxes (moved out of the main
+// Settings list, which #286 had crowded). Pushed from the "IP check sources" row;
+// the model + default subset + empty-set fallback live in SettingsStore.
+
+struct IPSourcesSettingsView: View {
+    @ObservedObject private var settings = SettingsStore.shared
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(AppConstants.ipCheckServices, id: \.label) { svc in
+                    Toggle(isOn: Binding(
+                        get: { settings.enabledIPSources.contains(svc.label) },
+                        set: { on in
+                            if on { settings.enabledIPSources.insert(svc.label) }
+                            else  { settings.enabledIPSources.remove(svc.label) }
+                        }
+                    )) {
+                        Text(svc.label)
+                    }
+                }
+            } footer: {
+                Text(L10n.ipSourcesFooter.localized())
+                    .font(.caption2)
+            }
+        }
+        .navigationTitle(L10n.sectionIPSources.localized())
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

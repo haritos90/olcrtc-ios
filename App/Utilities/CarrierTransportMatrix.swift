@@ -5,7 +5,7 @@ import SwiftUI
 // Carrier × Transport compatibility reference, shown in the Servers tab.
 //
 // #284: re-derived from the upstream authoritative matrix in
-// `olcrtc-upstream/docs/settings.md` ("Матрица совместимости", from the E2E
+// `olcrtc-upstream/docs/settings.md` (the "compatibility matrix", from the E2E
 // suite). Legend mapping: `+` (pass) → .ok, the per-carrier best/default → .recommended,
 // `~` (unstable, may work) → .question, `-` (fail / unsupported) → .fail.
 //

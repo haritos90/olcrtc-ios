@@ -2,9 +2,10 @@ import SwiftUI
 
 // MARK: - App entry
 //
-// Hosts the root TabView with four tabs:
+// Hosts the root TabView with five tabs:
 //   - Connections — server list, global toggle, status, IP/speed test triggers
 //   - VPS         — SSH-managed hosts: install / uninstall / reboot olcrtc
+//   - Config      — placeholder for routing/config options (#301)
 //   - Logs        — per-category log browser with copy-to-clipboard
 //   - Settings    — port, DNS, font size, vp8 tuning, debug toggle
 //
@@ -56,13 +57,18 @@ struct MainTabView: View {
                 .tabItem { Label(L10n.tabServers.localized(), systemImage: "server.rack") }
                 .tag(1)
 
-            LogsView(serverStore: serverStore, isActive: selectedTab == 2)
-                .tabItem { Label(L10n.tabLogs.localized(), systemImage: "doc.text") }
+            // #301: Config placeholder between Manage VPS and Logs (tags shifted +1).
+            ConfigView()
+                .tabItem { Label(L10n.tabConfig.localized(), systemImage: "slider.horizontal.3") }
                 .tag(2)
+
+            LogsView(serverStore: serverStore, isActive: selectedTab == 3)
+                .tabItem { Label(L10n.tabLogs.localized(), systemImage: "doc.text") }
+                .tag(3)
 
             SettingsView()
                 .tabItem { Label(L10n.tabSettings.localized(), systemImage: "gearshape") }
-                .tag(3)
+                .tag(4)
         }
         // Prevent the keyboard from incorrectly resizing tab content. SwiftUI
         // TabView already accounts for the home-indicator / tab-bar safe area,

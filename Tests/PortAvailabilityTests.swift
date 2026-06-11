@@ -50,46 +50,22 @@ final class PortAvailabilityTests: XCTestCase {
         XCTAssertTrue(free, "Port \(testPort) should be free shortly after close()")
     }
 
-    // MARK: nextFreePort
+    // MARK: port-busy error mapping (#308)
+    //
+    // #308 removed nextFreePort (the auto-slide): the configured SOCKS port is now
+    // always bound, and a late bind race is mapped to a clear "port busy" reason.
 
-    func testNextFreePortReturnsStartingPortWhenFree() throws {
-        // Find a definitively-free starting port, then verify nextFreePort
-        // returns it unchanged.
-        testPort = try findFreePort()
-        XCTAssertEqual(PortAvailability.nextFreePort(startingAt: testPort), testPort)
+    func testStartErrorMapsBindInUseToPortBusy() {
+        let port = 1080
+        let raw = "listen tcp 127.0.0.1:1080: bind: address already in use"
+        let mapped = OlcrtcEngine.startErrorReason(raw, port: port)
+        XCTAssertEqual(mapped, L10n.errorPortBusy_fmt.formatted(port))
+        XCTAssertNotEqual(mapped, raw)
     }
 
-    func testNextFreePortSlidesPastBoundPort() throws {
-        // Hunt for two consecutive free ports — needed because the bound port
-        // sits below an unrelated process otherwise.
-        var candidate: UInt16 = 0
-        for _ in 0..<20 {
-            let p = UInt16.random(in: 50_000...60_000)
-            if PortAvailability.isFree(p) && PortAvailability.isFree(p + 1) {
-                candidate = p; break
-            }
-        }
-        guard candidate != 0 else {
-            throw XCTSkip("Could not find two consecutive free ports for the test")
-        }
-        let sock = try bind127(port: candidate)
-        defer { close(sock) }
-
-        let next = PortAvailability.nextFreePort(startingAt: candidate)
-        XCTAssertEqual(next, candidate + 1,
-                       "Expected nextFreePort to slide one slot up past bound \(candidate)")
-    }
-
-    func testNextFreePortReturnsNilNearUInt16Max() {
-        // Starting at the absolute end of the port range, with no headroom,
-        // we still return nil rather than overflowing.
-        let near = UInt16.max - 1
-        let result = PortAvailability.nextFreePort(startingAt: near, maxAttempts: 8)
-        // If the system happens to have both 65534 and 65535 free, we get a port;
-        // otherwise nil. Either way, no overflow crash.
-        if let r = result {
-            XCTAssertGreaterThanOrEqual(r, near)
-        }
+    func testStartErrorPassesOtherFailuresThrough() {
+        let raw = "carrier auth failed: 403 Forbidden"
+        XCTAssertEqual(OlcrtcEngine.startErrorReason(raw, port: 1080), raw)
     }
 
     // MARK: freeEphemeralPort

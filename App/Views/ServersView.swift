@@ -39,6 +39,7 @@ struct ServersView: View {
     @State private var pingLatencies  : [UUID: Double?] = [:]   // ms, nil=unreachable, absent=not pinged
     @State private var scanFor        : ServerHost?
     @State private var foundContainers: [SSHRunner.FoundContainer] = []
+    @State private var shareConn      : ConnectionRecord?   // #304: share the host's linked connection
     @State private var alertText           : String?
     @State private var removeHost          : ServerHost?
     @State private var uninstallConfirmHost    : ServerHost?
@@ -102,6 +103,10 @@ struct ServersView: View {
             }
             .sheet(item: $scanFor) { host in
                 containerScanSheet(host: host)
+            }
+            // #304: "Share connection" moved here from the Connections tab.
+            .sheet(item: $shareConn) { conn in
+                ShareConnectionView(conn: conn)
             }
             .alert(L10n.okPrompt.localized(), isPresented: Binding(
                 get: { alertText != nil },
@@ -230,6 +235,13 @@ struct ServersView: View {
 
     private func hasContainer(_ host: ServerHost) -> Bool { currentBase(host).hasContainer }
     private func isRunning(_ host: ServerHost)   -> Bool { currentBase(host) == .running }
+
+    /// #304: the ConnectionRecord this host installed/owns (by `lastConnectionID`),
+    /// if still present — drives the "Share connection" item on the server card.
+    private func linkedConnection(_ host: ServerHost) -> ConnectionRecord? {
+        guard let id = host.lastConnectionID else { return nil }
+        return connections.connections.first { $0.id == id }
+    }
 
     /// Any host mid-operation. Operations are serialized (one provisioner), so we
     /// disable every card's actions while one runs — this also keeps `runningHostID`
@@ -504,6 +516,15 @@ struct ServersView: View {
             })
         }
 
+        // #304: share the connection this host owns (URI / QR), moved here from the
+        // Connections tab — the connection is configured on this card.
+        if let conn = linkedConnection(host) {
+            items.append(.divider)
+            items.append(.action(L10n.shareConnectionTitle.localized(), systemImage: "square.and.arrow.up") {
+                shareConn = conn
+            })
+        }
+
         items.append(.divider)
         items.append(.action(L10n.actionReboot.localized(), systemImage: "arrow.clockwise", role: .destructive) {
             rebootConfirmHost = host
@@ -529,7 +550,21 @@ struct ServersView: View {
             let (rstate, stats) = try await provisioner.checkReadiness(
                 on: host, password: pw, containerName: host.lastContainerName)
             if let stats { vpsStats[host.id] = stats }
-            return HostBase(rstate)
+            var base = HostBase(rstate)
+            // #302: a check on a host with no *known* container reports "image
+            // cached, ready for reinstall" even when an olcrtc container already
+            // exists (just stopped) — the user only saw it after manually tapping
+            // "Look for olcrtc containers". Fold that scan into the check so an
+            // existing container is auto-detected + adopted without the extra step.
+            if host.lastContainerName == nil, !base.hasContainer,
+               let found = try? await provisioner.scanContainers(on: host, password: pw).first {
+                var updated = host
+                updated.lastContainerName = found.name
+                serverStore.update(updated, password: nil)
+                LogStore.shared.log(.provisioning, L10n.autoDetectedContainer_fmt.formatted(found.name))
+                if case .running = found.status { base = .running } else { base = .stopped }
+            }
+            return base
         }
     }
 

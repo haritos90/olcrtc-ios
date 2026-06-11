@@ -112,8 +112,10 @@ final class SpeedTest: ObservableObject {
         lastResult = SpeedResult(service: provider.label, mode: mode,
                                  pingMs: p, downloadMbps: d, uploadMbps: u, error: errorMsg)
 
-        let upStr = u.map { String(format: "%.2fMbps", $0) }
-            ?? (provider.supportsUpload ? "n/a" : "—")
+        // #291 was: ?? (provider.supportsUpload ? "n/a" : "—") — UL is now always
+        // attempted (Cloudflare fallback for no-upload providers), so nil means the
+        // attempt failed ("n/a"), not "no endpoint" ("—").
+        let upStr = u.map { String(format: "%.2fMbps", $0) } ?? "n/a"
         LogStore.shared.log(.speed,
             "  ping=\(p.map { String(format: "%.0fms", $0) } ?? "n/a") " +
             "down=\(d.map { String(format: "%.2fMbps", $0) } ?? "n/a") " +
@@ -173,9 +175,18 @@ final class SpeedTest: ObservableObject {
 
     // POST a fixed buffer of zeros — content doesn't matter, only byte count.
     private func measureUpload(mode: RouteMode, provider: SpeedTestProvider) async -> Double? {
-        guard let urlStr = provider.uploadURLString, let url = URL(string: urlStr) else {
-            return nil   // provider has no upload endpoint → reported as "—"
+        // boc #291: OVH (and any fixed-file provider) has no upload sink, so UL used
+        // to show nothing. Fall back to Cloudflare's parametric /__up so upload is
+        // still measured against a real endpoint.
+        let uploadProvider = AppConstants.SpeedTest.uploadProvider(for: provider)
+        if uploadProvider.id != provider.id {
+            LogStore.shared.log(.speed,
+                "  upload: \(provider.label) has no upload endpoint — using \(uploadProvider.label)")
         }
+        guard let urlStr = uploadProvider.uploadURLString, let url = URL(string: urlStr) else {
+            return nil   // no upload endpoint even after fallback → reported as "—"
+        }
+        // eoc #291
         let bytes = mode == .tunnel ? AppConstants.SpeedTest.uploadBytesTunnel
                                     : AppConstants.SpeedTest.uploadBytesDirect
         let timeout = mode == .tunnel ? AppConstants.SpeedTest.xferTimeoutTunnel
