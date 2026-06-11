@@ -9,6 +9,10 @@ import SwiftUI
 struct AddServerHostView: View {
     var existing: ServerHost? = nil
     var existingPassword: String? = nil          // pre-fill on edit; nil for add-new flow
+    // #295: every other host's label, for uniqueness validation. The label
+    // (sanitised via `ServerHost.logFilePrefix`) prefixes the per-server
+    // container-log file, so two hosts must not collapse to the same prefix.
+    var otherLabels: [String] = []
     var onSave: (ServerHost, String) -> Void   // (host, password)
 
     @Environment(\.dismiss) private var dismiss
@@ -25,9 +29,23 @@ struct AddServerHostView: View {
     @State private var testResult: String? = nil
     @State private var testTask: Task<Void, Never>? = nil
 
+    // #295: case-insensitive duplicate check on the raw label AND on the
+    // sanitised log-file prefix — two visually distinct labels (e.g. "TW
+    // Moscow #1" vs "TW Moscow-1") could still collapse to the same prefix.
+    private var isDuplicateLabel: Bool {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let lowered = trimmed.lowercased()
+        let prefix = ServerHost.sanitizeLogFilePrefix(trimmed).lowercased()
+        return otherLabels.contains { other in
+            other.lowercased() == lowered
+                || ServerHost.sanitizeLogFilePrefix(other).lowercased() == prefix
+        }
+    }
+
     private var isValid: Bool {
         !label.isEmpty && !host.isEmpty && Int(port) != nil
-            && !username.isEmpty && !password.isEmpty
+            && !username.isEmpty && !password.isEmpty && !isDuplicateLabel
     }
 
     private var canTest: Bool {
@@ -39,6 +57,13 @@ struct AddServerHostView: View {
             Form {
                 Section(L10n.sectionDescription.localized()) {
                     FormField(label: L10n.nameField.localized(), placeholder: "TW Moscow", text: $label)
+                    // #295: server names must be unique — they prefix the
+                    // per-server container-log file (`<name>_container.log`).
+                    if isDuplicateLabel {
+                        Text(L10n.duplicateServerNameError.localized())
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
                 Section(L10n.sshAccessHeader.localized()) {
                     FormField(label: L10n.hostField.localized(),     placeholder: "1.2.3.4", text: $host)

@@ -39,8 +39,11 @@ struct MainTabView: View {
     /// not every time the user comes back to the Connections tab.
     @State private var didAutoConnect = false
 
-    /// Selected tab. Drives the Logs-tab visibility gate (#289) so its expensive
-    /// merged-stream rebuild only runs when the tab is actually on-screen.
+    /// Selected tab.
+    // #294 was: also drove the Logs-tab visibility gate (#289) for the
+    // merged-stream rebuild. With per-source Logs tabs (#294) each tab only
+    // rebuilds its own small category buffer, so that gate was retired —
+    // `selectedTab` now only does normal `TabView` selection.
     @State private var selectedTab = 0
 
     var body: some View {
@@ -66,7 +69,10 @@ struct MainTabView: View {
                 .tabItem { Label(L10n.tabLogs.localized(), systemImage: "doc.text") }
                 .tag(3)
 
-            SettingsView()
+            // #300: SettingsView needs live tunnel state to gate the
+            // "in use by olcrtc tunnel" port-check result on an actual
+            // connection, not just the configured port number.
+            SettingsView(tunnel: tunnel)
                 .tabItem { Label(L10n.tabSettings.localized(), systemImage: "gearshape") }
                 .tag(4)
         }

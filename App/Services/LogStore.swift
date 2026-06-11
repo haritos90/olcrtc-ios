@@ -18,8 +18,10 @@ import Foundation
 
 enum LogCategory: String, CaseIterable, Identifiable {
     case connection
-    case ip
-    case speed
+    // #294 was: separate `.ip` / `.speed` categories, each with its own
+    // ip.log / speed.log. Both are short, user-triggered diagnostic runs the
+    // user reads together, so they're merged into one "Diagnostics" tab/file.
+    case diagnostics
     case provisioning    // SSH-driven server install / uninstall / reboot
     case containerLogs   // podman logs from the olcrtc container on the VPS
 
@@ -28,22 +30,37 @@ enum LogCategory: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .connection:    return L10n.categoryConnection.localized()
-        case .ip:            return L10n.categoryIP.localized()
-        case .speed:         return L10n.categorySpeed.localized()
+        case .diagnostics:   return L10n.categoryDiagnostics.localized()
         case .provisioning:  return L10n.categoryProvisioning.localized()
         case .containerLogs: return L10n.categoryContainerLogs.localized()
+        }
+    }
+
+    /// #294: short description shown under each Logs tab title.
+    var tabDescription: String {
+        switch self {
+        case .connection:    return L10n.logsTabDescConnection.localized()
+        case .diagnostics:   return L10n.logsTabDescDiagnostics.localized()
+        case .provisioning:  return L10n.logsTabDescVPS.localized()
+        case .containerLogs: return L10n.logsTabDescContainer.localized()
         }
     }
 
     var systemImage: String {
         switch self {
         case .connection:    return "network"
-        case .ip:            return "globe"
-        case .speed:         return "speedometer"
+        case .diagnostics:   return "stethoscope"
         case .provisioning:  return "server.rack"
         case .containerLogs: return "shippingbox"
         }
     }
+
+    /// #294: the on-disk file name for the fixed (non-per-server) categories.
+    /// `LogFileWriter`'s default filename for these matches this value —
+    /// `LogTabHeader` reads it from here so the displayed name can't drift
+    /// from what's actually written. Not meaningful for `.containerLogs`,
+    /// which is per-server (#295) — see `ServerHost.logFilePrefix`.
+    var logFileName: String { "\(rawValue).log" }
 }
 
 /// Per-line severity for colour-coding the merged Logs stream (#276). Distinct
@@ -57,9 +74,12 @@ enum LogLineLevel: Int, Comparable, CaseIterable {
 
 /// Host + container of the most recent `podman logs` fetch (#278), so the Logs
 /// tab can offer an in-place "Refresh from server" without re-selecting a host.
+/// #295: also carries the sanitised server-name prefix that selects the
+/// per-server `%servername%_container.log` file/buffer.
 struct ContainerLogTarget: Equatable {
     let hostID: UUID
     let containerName: String
+    let serverPrefix: String
 }
 
 /// A single line in the in-memory log buffer. `text` is the *message only* — the
@@ -92,7 +112,11 @@ final class LogFileWriter {
     private var mirrorHandle: FileHandle?
     private(set) var fileURL: URL?
 
-    init(category: LogCategory) {
+    /// `filename` defaults to `"<category>.log"`, giving each of the fixed
+    /// categories (connection/diagnostics/provisioning) a stable name. #295:
+    /// containerLogs passes an explicit `"<serverPrefix>_container.log"` so
+    /// each server's container output lands in its own file.
+    init(category: LogCategory, filename: String? = nil) {
         guard let docs = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask).first else {
             preconditionFailure("FileManager.urls(.documentDirectory) returned empty — iOS sandbox invariant violated")
@@ -100,9 +124,10 @@ final class LogFileWriter {
         let logsDir = docs.appendingPathComponent("logs", isDirectory: true)
         try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
 
-        // Use a fixed filename per category so history accumulates across
-        // sessions instead of starting a new file on every startSession call.
-        let filename = "\(category.rawValue).log"
+        // Use a fixed filename per category (or per-server, for containerLogs)
+        // so history accumulates across sessions instead of starting a new
+        // file on every startSession call.
+        let filename = filename ?? category.logFileName
         let url = logsDir.appendingPathComponent(filename)
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: nil)
@@ -152,9 +177,15 @@ final class LogStore: ObservableObject {
 
     @Published var fileURLs: [LogCategory: URL] = [:]
 
+    // #295: per-server container-log buffers, keyed by `ServerHost.logFilePrefix`.
+    // `.containerLogs` no longer shares a single buffer/file across servers —
+    // each server gets its own `<prefix>_container.log` and in-memory list.
+    @Published var containerEntries: [String: [LogEntry]] = [:]
+    @Published var containerFileURLs: [String: URL] = [:]
+
     // Bumped on every appended line so views can cheaply observe "something
-    // changed" — the merged stream (#276) collapses the per-category counts, so a
-    // count-diff alone misses same-cap appends (oldest dropped, newest added).
+    // changed" — a count-diff alone misses same-cap appends (oldest dropped,
+    // newest added).
     @Published private(set) var revision: Int = 0
 
     // Last container targeted by a logs fetch (#278); drives the Logs-tab refresh.
@@ -162,14 +193,19 @@ final class LogStore: ObservableObject {
 
     private var writers: [LogCategory: LogFileWriter] = [:]
 
-    // Monotonic, assigned per appended line — the merged stream's stable
-    // tiebreaker when two lines share the same timestamp.
+    // #295: per-server container-log file writers, keyed the same way as
+    // `containerEntries`.
+    private var containerWriters: [String: LogFileWriter] = [:]
+
+    // Monotonic, assigned per appended line — the stable tiebreaker when two
+    // lines share the same timestamp (used by the per-tab newest-first sort).
     private var seqCounter = 0
 
     private init() {}
 
     /// Start a new log file for the given category.
     /// Called at the start of each operation (connect, ip check run, speed test run).
+    /// Not used for `.containerLogs` — see `startContainerSession`.
     func startSession(_ category: LogCategory, clearMemory: Bool = false) {
         let w = LogFileWriter(category: category)
         writers[category] = w
@@ -183,41 +219,60 @@ final class LogStore: ObservableObject {
         log(category, "# \(Self.appVersionString())")
     }
 
+    /// #295: start (or resume) the per-server container-log file for
+    /// `serverPrefix` (a sanitised `ServerHost.logFilePrefix`). Each server's
+    /// container output accumulates in `<serverPrefix>_container.log`.
+    func startContainerSession(serverPrefix: String) {
+        let w = LogFileWriter(category: .containerLogs, filename: "\(serverPrefix)_container.log")
+        containerWriters[serverPrefix] = w
+        containerFileURLs[serverPrefix] = w.fileURL
+        if containerEntries[serverPrefix] == nil {
+            containerEntries[serverPrefix] = []
+        }
+        if !(containerEntries[serverPrefix]?.isEmpty ?? true) {
+            logContainer(serverPrefix: serverPrefix, "── new session ──────────────────────────")
+        }
+        logContainer(serverPrefix: serverPrefix, "# \(Self.appVersionString())")
+    }
+
     static func appVersionString() -> String {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         return "olcrtc-ios \(v) build \(b)"
     }
 
-    /// Drops every in-memory entry across all categories. File-on-disk
-    /// logs are NOT deleted — they're forensic and live across sessions.
+    /// Drops every in-memory entry across all categories, including every
+    /// per-server container-log buffer (#295). File-on-disk logs are NOT
+    /// deleted — they're forensic and live across sessions.
     func clearAll() {
         for cat in LogCategory.allCases {
             entries[cat] = []
         }
+        for prefix in containerEntries.keys {
+            containerEntries[prefix] = []
+        }
         revision &+= 1
     }
 
-    /// Drops in-memory entries for a single category only.
+    /// Drops in-memory entries for a single category only. Not used for
+    /// `.containerLogs` — see `clearContainer(serverPrefix:)`.
     func clear(category: LogCategory) {
         entries[category] = []
         revision &+= 1
     }
 
-    /// All categories flattened into one chronological stream (#276), oldest
-    /// first. Sorted by timestamp, then insertion order (`seq`) so same-second
-    /// lines keep their original sequence. The Logs view renders this reversed
-    /// (newest-first, #277).
-    var merged: [LogEntry] {
-        entries.values.flatMap { $0 }.sorted {
-            $0.date == $1.date ? $0.seq < $1.seq : $0.date < $1.date
-        }
+    /// #295: drops the in-memory buffer for one server's container log.
+    func clearContainer(serverPrefix: String) {
+        containerEntries[serverPrefix] = []
+        revision &+= 1
     }
 
     /// Remembers the host+container a logs fetch ran against (#278) so the Logs
     /// tab can re-pull without sending the user back to the server card.
-    func noteContainerTarget(hostID: UUID, containerName: String) {
-        lastContainerTarget = ContainerLogTarget(hostID: hostID, containerName: containerName)
+    /// #295: also remembers the sanitised server prefix that selects the
+    /// per-server container-log file/buffer.
+    func noteContainerTarget(hostID: UUID, containerName: String, serverPrefix: String) {
+        lastContainerTarget = ContainerLogTarget(hostID: hostID, containerName: containerName, serverPrefix: serverPrefix)
     }
 
     /// Substrings that identify Pion-level noise suppressed below `.verbose`.
@@ -259,6 +314,26 @@ final class LogStore: ObservableObject {
         // The on-disk line keeps the timestamp inline so exported files stay
         // self-describing (the in-memory entry carries it as a real `Date`).
         writers[category]?.write("\(Self.format(date: date)) \(safe)")
+        revision &+= 1
+    }
+
+    /// #295: appends a line to the per-server container-log buffer/file for
+    /// `serverPrefix`. Mirrors `log(_:_:level:date:)` but keyed by server
+    /// instead of `LogCategory` since `.containerLogs` is now per-server.
+    @MainActor func logContainer(serverPrefix: String, _ msg: String,
+                                  level: LogLineLevel? = nil, date: Date = Date()) {
+        let verbosity = SettingsStore.shared.logLevel
+        if verbosity == .off { return }
+
+        let safe = Self.redactSecrets(msg)
+        let lvl = level ?? Self.classify(safe)
+        seqCounter &+= 1
+        var list = containerEntries[serverPrefix] ?? []
+        list.append(LogEntry(date: date, category: .containerLogs, level: lvl, text: safe, seq: seqCounter))
+        let cap = max(50, SettingsStore.shared.logBufferSize)
+        if list.count > cap { list.removeFirst(list.count - cap) }
+        containerEntries[serverPrefix] = list
+        containerWriters[serverPrefix]?.write("\(Self.format(date: date)) \(safe)")
         revision &+= 1
     }
 

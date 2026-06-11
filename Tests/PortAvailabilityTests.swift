@@ -50,6 +50,45 @@ final class PortAvailabilityTests: XCTestCase {
         XCTAssertTrue(free, "Port \(testPort) should be free shortly after close()")
     }
 
+    // MARK: PortAvailability.state — three explicit outcomes (#300)
+    //
+    // #300 was: a single isFree() bool plus a SettingsView heuristic
+    // ("configured port == configured tunnel port") that reported
+    // "in use by tunnel" even while the tunnel was disconnected. `state`
+    // now requires the caller to assert the live tunnel state explicitly
+    // via `tunnelHoldsPort`.
+
+    func testStateFreeWhenNothingBoundAndTunnelDoesNotHoldPort() throws {
+        testPort = try findFreePort()
+        XCTAssertEqual(PortAvailability.state(testPort, tunnelHoldsPort: false), .free)
+    }
+
+    func testStateBusyOtherWhenBoundAndTunnelDoesNotHoldPort() throws {
+        testPort = try findFreePort()
+        let sock = try bind127(port: testPort)
+        defer { close(sock) }
+
+        XCTAssertEqual(PortAvailability.state(testPort, tunnelHoldsPort: false), .busyOther)
+    }
+
+    func testStateBusyOursWhenTunnelHoldsPortEvenIfPortAppearsFree() throws {
+        // The tunnel's own listener may not be probeable via a second bind
+        // attempt depending on socket options, so this also covers the case
+        // where the socket-level probe alone can't tell "ours" from "free".
+        testPort = try findFreePort()
+        XCTAssertEqual(PortAvailability.state(testPort, tunnelHoldsPort: true), .busyOurs)
+    }
+
+    func testStateBusyOursTakesPriorityWhenPortAlsoBoundByUs() throws {
+        testPort = try findFreePort()
+        let sock = try bind127(port: testPort)
+        defer { close(sock) }
+
+        // Even though the socket-level probe would report busy, the
+        // tunnel-state signal is authoritative for labeling it "ours".
+        XCTAssertEqual(PortAvailability.state(testPort, tunnelHoldsPort: true), .busyOurs)
+    }
+
     // MARK: port-busy error mapping (#308)
     //
     // #308 removed nextFreePort (the auto-slide): the configured SOCKS port is now

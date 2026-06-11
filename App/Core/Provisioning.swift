@@ -411,9 +411,10 @@ final class Provisioner: ObservableObject {
     }
 
     /// Pulls `podman logs --tail N` over SSH. Returns the raw text and ALSO
-    /// dumps each line into the dedicated `.containerLogs` LogStore category
-    /// so the user can scroll through it in the Logs tab later. Returned
-    /// string is what the calling view shows in its sheet.
+    /// dumps each line into this server's per-host `.containerLogs` buffer/file
+    /// (#295: `<host.logFilePrefix>_container.log`) so the user can scroll
+    /// through it in the Logs tab Container tab later. Returned string is
+    /// what the calling view shows in its sheet.
     func containerLogs(on host: ServerHost, password: String,
                         containerName: String, tail: Int = 200) async throws -> String {
         status = .running(L10n.provisioningLogsFetching.localized())
@@ -427,25 +428,28 @@ final class Provisioner: ObservableObject {
                 containerName: containerName, tail: tail,
                 onStep: stepHandler())
 
-            // Persist into a dedicated log category so it survives the sheet
-            // being dismissed. #278: parse each line's Go timestamp
-            // ("2006/01/02 15:04:05") into a real Date so the container lines
-            // interleave chronologically with the client stream instead of all
-            // clustering at fetch-time; lines without their own stamp carry the
-            // previous line's date forward (multi-line panics etc.).
-            LogStore.shared.startSession(.containerLogs)
+            // Persist into this server's own container-log file so it
+            // survives the sheet being dismissed. #278: parse each line's Go
+            // timestamp ("2006/01/02 15:04:05") into a real Date so the
+            // container lines interleave chronologically with the client
+            // stream instead of all clustering at fetch-time; lines without
+            // their own stamp carry the previous line's date forward
+            // (multi-line panics etc.). #295: per-server file/buffer, keyed
+            // by the sanitised server-name prefix.
+            let prefix = host.logFilePrefix
+            LogStore.shared.startContainerSession(serverPrefix: prefix)
             var carry = Date()
             for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
                 let raw = String(line)
                 if let parsed = LogStore.parseExternalTimestamp(raw) {
                     carry = parsed.date
-                    LogStore.shared.log(.containerLogs, parsed.rest, date: parsed.date)
+                    LogStore.shared.logContainer(serverPrefix: prefix, parsed.rest, date: parsed.date)
                 } else {
-                    LogStore.shared.log(.containerLogs, raw, date: carry)
+                    LogStore.shared.logContainer(serverPrefix: prefix, raw, date: carry)
                 }
             }
             // Remember this host/container so the Logs tab can re-pull directly.
-            LogStore.shared.noteContainerTarget(hostID: host.id, containerName: containerName)
+            LogStore.shared.noteContainerTarget(hostID: host.id, containerName: containerName, serverPrefix: prefix)
 
             status = .success(L10n.logsBytesReceived_fmt.formatted(output.count))
             return output
@@ -480,6 +484,31 @@ final class Provisioner: ObservableObject {
             return newURI
         } catch {
             LogStore.shared.log(.provisioning, "✗ Reconfigure failed: \(error.localizedDescription)")
+            status = .failure(error.localizedDescription)
+            throw error
+        }
+    }
+
+    // #303: read-only recovery of an existing server's connection params
+    // (carrier/transport/room/key) from its deployed server.yaml, for hosts
+    // where a container was found (#302 auto-detect) but no ConnectionRecord
+    // is linked — e.g. fresh install / reinstall with an empty Connections tab.
+    func recoverConfig(on host: ServerHost, password: String,
+                       containerName: String) async throws -> SSHRunner.RecoveredConfig {
+        status = .running(L10n.provisioningRecovering.localized())
+        LogStore.shared.startSession(.provisioning)
+        LogStore.shared.log(.provisioning, "→ Recover config: \(containerName) on \(host.host)")
+        do {
+            try await ensureReachable(host)
+            let cfg = try await SSHRunner.recoverConfig(host: host, password: password,
+                                                        containerName: containerName,
+                                                        onStep: stepHandler())
+            LogStore.shared.log(.provisioning,
+                "✓ Recovered config: carrier=\(cfg.carrier) transport=\(cfg.transport) room=\(cfg.roomID.prefix(8))…")
+            status = .success(L10n.recoverResultSuccess_fmt.formatted(cfg.carrier, cfg.transport))
+            return cfg
+        } catch {
+            LogStore.shared.log(.provisioning, "✗ Recover config failed: \(error.localizedDescription)")
             status = .failure(error.localizedDescription)
             throw error
         }

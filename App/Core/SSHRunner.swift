@@ -962,6 +962,155 @@ enum SSHRunner {
         return extract(key: "OLCRTC_URI", from: output)
     }
 
+    // MARK: #303 — Recover config script
+    //
+    // Reads the deployed `server.yaml` (written by srv.sh, see scripts/srv.sh
+    // "Generate YAML config") and `~/.olcrtc_key` for an existing container,
+    // dumping both verbatim between sentinel markers so `parseRecoveredConfig`
+    // can rebuild an `olcrtc://` URI without any server-side mutation.
+    //
+    // Strategy mirrors `reconfigureScript`: `podman inspect` finds the bind-mount
+    // source dir (where srv.sh wrote server.yaml), then `cat` the file and the
+    // key file. No restart, no edits — read-only.
+    static func recoverConfigScript(containerName: String) -> String {
+        let safeCname = shellSafe(containerName)
+        return #"""
+        set -e
+        CNAME="\#(safeCname)"
+        if ! podman ps -a --format '{{.Names}}' | grep -q "^${CNAME}$" 2>/dev/null; then
+            echo "ERROR: container ${CNAME} not found" >&2; exit 1
+        fi
+        DEPLOY_DIR=$(podman inspect --format '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{break}}{{end}}{{end}}' "${CNAME}")
+        CONFIG="${DEPLOY_DIR}/server.yaml"
+        if [ -z "$DEPLOY_DIR" ] || [ ! -f "$CONFIG" ]; then
+            echo "ERROR: server.yaml not found for ${CNAME} (deploy dir: ${DEPLOY_DIR:-unknown})" >&2; exit 1
+        fi
+        echo "OLCRTC_RECOVER_YAML_BEGIN"
+        cat "$CONFIG"
+        echo "OLCRTC_RECOVER_YAML_END"
+        echo "OLCRTC_RECOVER_KEY=$(cat ~/.olcrtc_key 2>/dev/null | tr -d '[:space:]' || echo "")"
+        """#
+    }
+
+    /// Recovered server-side config, parsed from `recoverConfigScript` output.
+    /// Mirrors the subset of `server.yaml` (scripts/srv.sh "Generate YAML config")
+    /// needed to rebuild an `olcrtc://` URI.
+    struct RecoveredConfig: Equatable, Sendable {
+        var carrier  : String
+        var transport: String
+        var roomID   : String
+        var key      : String
+        var vp8FPS      : Int?
+        var vp8BatchSize: Int?
+        // #303: seichannel tuning — only populated when transport == "seichannel".
+        // nil means "use OlcrtcConnection's defaults" (matches vp8FPS/vp8BatchSize
+        // convention above).
+        var seiFPS  : Int?
+        var seiBatch: Int?
+        var seiFrag : Int?
+        var seiACK  : Int?
+    }
+
+    enum RecoverConfigError: LocalizedError {
+        case missingYAML
+        case missingField(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .missingYAML:          return L10n.recoverErrorMissingYAML.localized()
+            case .missingField(let f):  return L10n.recoverErrorMissingField_fmt.formatted(f)
+            }
+        }
+    }
+
+    /// Parses the `OLCRTC_RECOVER_*` block emitted by `recoverConfigScript` into
+    /// a `RecoveredConfig`. The YAML between the BEGIN/END sentinels is the exact
+    /// `server.yaml` written by srv.sh (see scripts/srv.sh "Generate YAML config"):
+    /// a flat, 2-space-indented structure — no lists, no multi-line scalars — so a
+    /// line-based `key: "value"` scan is sufficient and avoids a YAML dependency.
+    static func parseRecoveredConfig(from output: String) throws -> RecoveredConfig {
+        guard let beginIdx = output.range(of: "OLCRTC_RECOVER_YAML_BEGIN"),
+              let endIdx   = output.range(of: "OLCRTC_RECOVER_YAML_END"),
+              endIdx.lowerBound > beginIdx.upperBound else {
+            throw RecoverConfigError.missingYAML
+        }
+        let yaml = String(output[beginIdx.upperBound..<endIdx.lowerBound])
+
+        // Strip surrounding quotes (server.yaml quotes all string scalars).
+        func unquote(_ s: String) -> String {
+            var v = s.trimmingCharacters(in: .whitespaces)
+            if v.hasPrefix("\"") && v.hasSuffix("\"") && v.count >= 2 {
+                v = String(v.dropFirst().dropLast())
+            }
+            return v
+        }
+
+        // Single-pass line scan. server.yaml keys are unique within their section
+        // and srv.sh never repeats a top-level key, so "last value wins" and
+        // "first value wins" are equivalent here — last is simplest.
+        var values: [String: String] = [:]
+        for line in yaml.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let colonIdx = trimmed.firstIndex(of: ":") else { continue }
+            let key = String(trimmed[trimmed.startIndex..<colonIdx]).trimmingCharacters(in: .whitespaces)
+            let val = unquote(String(trimmed[trimmed.index(after: colonIdx)...]))
+            values[key] = val
+        }
+
+        guard let carrier = values["provider"], !carrier.isEmpty else {
+            throw RecoverConfigError.missingField("auth.provider")
+        }
+        guard let roomID = values["id"], !roomID.isEmpty else {
+            throw RecoverConfigError.missingField("room.id")
+        }
+        guard let transport = values["transport"], !transport.isEmpty else {
+            throw RecoverConfigError.missingField("net.transport")
+        }
+        let recoveredKey = extract(key: "OLCRTC_RECOVER_KEY", from: output) ?? ""
+        let key = recoveredKey.isEmpty ? (values["key"] ?? "") : recoveredKey
+        guard !key.isEmpty else {
+            throw RecoverConfigError.missingField("crypto.key")
+        }
+
+        var vp8FPS: Int?
+        var vp8BatchSize: Int?
+        if transport == "vp8channel" {
+            vp8FPS       = values["fps"].flatMap(Int.init)
+            vp8BatchSize = values["batch_size"].flatMap(Int.init)
+        }
+
+        // #303: seichannel tuning (scripts/srv.sh "sei:" block) — same flat
+        // scan as vp8 above; the gate on transport keeps this from picking up
+        // unrelated "fps"/"batch_size" keys from a different transport block.
+        var seiFPS  : Int?
+        var seiBatch: Int?
+        var seiFrag : Int?
+        var seiACK  : Int?
+        if transport == "seichannel" {
+            seiFPS   = values["fps"].flatMap(Int.init)
+            seiBatch = values["batch_size"].flatMap(Int.init)
+            seiFrag  = values["fragment_size"].flatMap(Int.init)
+            seiACK   = values["ack_timeout_ms"].flatMap(Int.init)
+        }
+
+        return RecoveredConfig(carrier: carrier, transport: transport, roomID: roomID, key: key,
+                               vp8FPS: vp8FPS, vp8BatchSize: vp8BatchSize,
+                               seiFPS: seiFPS, seiBatch: seiBatch, seiFrag: seiFrag, seiACK: seiACK)
+    }
+
+    /// Reads the deployed `server.yaml` + `~/.olcrtc_key` for `containerName` and
+    /// returns the parsed config — read-only, no server mutation.
+    static func recoverConfig(host: ServerHost, password: String,
+                               containerName: String,
+                               onStep: @Sendable @escaping (String) -> Void) async throws -> RecoveredConfig {
+        onStep(L10n.provisioningRecovering.localized())
+        let output = try await _withConnection(host: host, password: password) { client in
+            try await execute(client: client, label: "recover-config",
+                              command: recoverConfigScript(containerName: containerName))
+        }
+        return try parseRecoveredConfig(from: output)
+    }
+
     // MARK: Uninstall script
 
     // Container name prefix used by `scripts/srv.sh` (`CONTAINER_NAME="olcrtc-server-$PODMAN_ID"`).

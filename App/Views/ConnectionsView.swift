@@ -306,10 +306,11 @@ struct ConnectionsView: View {
                 // #291: restore the measurement units next to the numbers — a bare
                 // "0.77" is ambiguous; DL/UL had lost their "Mbps" suffix (matches
                 // the existing hardcoded "ms" unit, the convention in this view).
-                OlcMetric(label: "Ping", value: speedValue(speed.lastResult?.pingMs, "%.0f ms"))
+                // #311: route labels and unit format strings through L10n.
+                OlcMetric(label: L10n.speedLabelPing.localized(), value: speedValue(speed.lastResult?.pingMs, L10n.speedPingValue_fmt.localized()))
                 // #291 was: "%.1f" (no unit)
-                OlcMetric(label: "DL",   value: speedValue(speed.lastResult?.downloadMbps, "%.1f Mbps"))
-                OlcMetric(label: "UL",   value: speedValue(speed.lastResult?.uploadMbps, "%.1f Mbps"))
+                OlcMetric(label: L10n.speedLabelDL.localized(),   value: speedValue(speed.lastResult?.downloadMbps, L10n.speedRateValue_fmt.localized()))
+                OlcMetric(label: L10n.speedLabelUL.localized(),   value: speedValue(speed.lastResult?.uploadMbps, L10n.speedRateValue_fmt.localized()))
             }
             Spacer(minLength: 8)
             OlcButton(L10n.speedTestRun.localized(), role: .secondary, isBusy: speed.isTesting) {

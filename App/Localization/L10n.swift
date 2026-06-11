@@ -106,6 +106,16 @@ enum L10n: String, CaseIterable {
     case rebootConfirmBody                // explanation that the entire VPS will reboot
     case carrierTransportMatrix             // "Carrier × Transport"
 
+    // MARK: #303 Recover connection from server
+    case actionRecoverConnection           // "Recover connection" (host overflow menu)
+    case recoverConfirmTitle               // "Recover connection from this server?"
+    case recoverConfirmBody                // explanation: reads server.yaml + key, adds a connection
+    case recoverConfirmAction              // "Recover" (confirm button)
+    case provisioningRecovering            // "Reading server config…" (status step)
+    case recoverResultSuccess_fmt          // "Recovered %@/%@ — connection added"
+    case recoverErrorMissingYAML           // "Server config not found"
+    case recoverErrorMissingField_fmt      // "Server config is missing '%@'"
+
     // MARK: Container status
     case containerRunning_fmt               // "Container running: %@"
     case containerStopped_fmt               // "Container stopped: %@"
@@ -143,13 +153,28 @@ enum L10n: String, CaseIterable {
     case noSearchResults                    // "Nothing found"
     case noSearchResultsHint_fmt            // "No matches for «%@»."
     case categoryConnection                 // "Connection"
-    case categoryIP                         // "IP"
-    case categorySpeed                      // "Speed test"
+    // #294 was: categoryIP ("IP") + categorySpeed ("Speed test") — merged
+    // into one Diagnostics tab/category.
+    case categoryDiagnostics                // "Diagnostics"
     case categoryProvisioning               // "VPS"
     case categoryContainerLogs              // "Container"
-    case logsAllSources                     // "All sources" — merged-stream filter default (#276)
-    case logsSourceLabel                    // "Source" — filter menu label/a11y (#276)
-    case logsRefreshFromServer              // "Refresh from server" — in-tab container pull (#278)
+
+    // MARK: #294 — per-source Logs tabs
+    case logsTabDescConnection              // "connection logs"
+    case logsTabDescDiagnostics             // "IP and speed test logs"
+    case logsTabDescVPS                     // "VPS provisioning logs"
+    case logsTabDescContainer               // "Server container extracted logs"
+    case logsFileNameLabel_fmt              // "File: %@"
+    case logsContainerSelectServer          // "Server" — picker label for the Container tab
+    case logsContainerNoServers             // "No servers configured" — Container tab with zero hosts
+
+    // MARK: #295 — per-server container log files
+    case duplicateServerNameError           // "A server with this name already exists"
+
+    // MARK: #296 — Container tab always-present load button
+    case logsDownloadFromServer             // "Download logs from server"
+    case logsCheckServer                    // "Check server" — mirrors vpsCheckServer, gated by readiness
+    case logsContainerEmptyHint             // "Logs need to be loaded from the server."
 
     // MARK: SettingsView
     case settingsTitle
@@ -166,7 +191,12 @@ enum L10n: String, CaseIterable {
     case checkPortAction                    // "Check port"
     case randomPortAction                   // "Random"
     case portFree, portBusy                 // "free" / "busy"
-    case logPortFree_fmt, logPortBusy_fmt   // "✓ Port %d free" / "✗ Port %d busy" — single key per concept (#287)
+    // MARK: #300 — three explicit port-check log lines (free / busy by
+    // someone else / busy because our own tunnel reserved it), replacing
+    // the old binary logPortBusy_fmt which couldn't tell those apart.
+    case logPortFree_fmt                    // "✓ Port %d free"
+    case logPortBusyOther_fmt               // "✗ Port %d busy"
+    case logPortBusyOlcrtc_fmt              // "✓ Port %d in use by olcrtc tunnel"
     case socksFooter
     case socksPortChangeNote                // "Port change takes effect on the next connection"
     case dnsFreeFormPlaceholder             // "IP:port"
@@ -315,13 +345,22 @@ enum L10n: String, CaseIterable {
     case ipCheckRun                         // "Check IP"
     case speedTestRun                       // "Run test"
 
+    // MARK: #311 — speed-tile metric labels/units + upload-fallback log line
+    case speedLabelPing, speedLabelDL, speedLabelUL  // "Ping"/"DL"/"UL" — universal abbreviations, ru = en
+    case speedPingValue_fmt                  // "%.0f ms" — unit stays Latin in both languages
+    case speedRateValue_fmt                  // "%.1f Mbps" — unit stays Latin in both languages
+    case speedUploadFallback_fmt             // "  upload: %@ has no upload endpoint — using %@" — diagnostic log line, deliberately English (ru = en)
+
     // MARK: #236/#237 — UI strings localized after the i18n pass
     case ipChecking                         // "Checking…"
     case ipNotChecked                       // "Not checked yet"
     case ipDnsLeak                          // "IPs differ — possible DNS leak"
     case ipSourcesAgree_fmt                 // "✓ %@ (%d sources)"
     case socksProxyAddr_fmt                 // "SOCKS5 proxy: 127.0.0.1:%@"
-    case portInUseByTunnel                  // "in use by tunnel"
+    // #300 was: portInUseByTunnel ("in use by tunnel") — relabeled to make
+    // explicit that *this app's* tunnel reserved the port (vs. some other
+    // process), and gated on live tunnel state at the call site.
+    case portInUseByOlcrtc                  // "in use by olcrtc tunnel"
     case roomPrefix_fmt                     // "room: %@"
     case qrCodeURIA11y                      // "Connection URI QR Code"
     case qrCodeHintA11y                     // "Scan this code to import the connection on another device"

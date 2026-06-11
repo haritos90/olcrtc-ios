@@ -47,20 +47,20 @@ final class IPChecker: ObservableObject {
         defer { isChecking = false }
 
         let chosen = sources
-        LogStore.shared.log(.ip, "---")
+        LogStore.shared.log(.diagnostics, "---")
         // #286: header records the connection type (direct/tunnel) + how many
         // sources are queried (the user can trim the list in Settings).
-        LogStore.shared.log(.ip, "→ IP check (\(mode.label)) — \(chosen.count) source(s)")
+        LogStore.shared.log(.diagnostics, "→ IP check (\(mode.label)) — \(chosen.count) source(s)")
 
         let session = SOCKSSession.make(mode: mode)
         for src in chosen {
-            LogStore.shared.log(.ip, "  GET \(src.url)")
+            LogStore.shared.log(.diagnostics, "  GET \(src.url)")
             let r = await Self.fetchIP(label: src.label, urlStr: src.url,
                                         mode: mode, session: session)
             if let ip = r.ip {
-                LogStore.shared.log(.ip, "  ✓ \(src.label): \(ip)")
+                LogStore.shared.log(.diagnostics, "  ✓ \(src.label): \(ip)")
             } else {
-                LogStore.shared.log(.ip, "  ✗ \(src.label): \(r.error ?? "unknown")")
+                LogStore.shared.log(.diagnostics, "  ✗ \(src.label): \(r.error ?? "unknown")")
             }
             results.append(r)
         }

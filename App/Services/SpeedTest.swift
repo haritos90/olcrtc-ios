@@ -77,12 +77,12 @@ final class SpeedTest: ObservableObject {
 
         let provider = AppConstants.SpeedTest.provider(id: SettingsStore.shared.speedTestProviderID)
 
-        LogStore.shared.startSession(.speed)
+        LogStore.shared.startSession(.diagnostics)
         // #285: header records the provider + connection type (direct/tunnel, and
         // carrier/transport when tunnelled) so a slow run is interpretable.
         var header = "→ Speed test via \(provider.label) (\(mode.label))"
         if mode == .tunnel, let c = carrier, let t = transport { header += " — \(c)/\(t)" }
-        LogStore.shared.log(.speed, header)
+        LogStore.shared.log(.diagnostics, header)
 
         // Suppress keep-alive probes for the duration — extra tunnel connections
         // mid-test add congestion and cause keep-alive false failures.
@@ -116,7 +116,7 @@ final class SpeedTest: ObservableObject {
         // attempted (Cloudflare fallback for no-upload providers), so nil means the
         // attempt failed ("n/a"), not "no endpoint" ("—").
         let upStr = u.map { String(format: "%.2fMbps", $0) } ?? "n/a"
-        LogStore.shared.log(.speed,
+        LogStore.shared.log(.diagnostics,
             "  ping=\(p.map { String(format: "%.0fms", $0) } ?? "n/a") " +
             "down=\(d.map { String(format: "%.2fMbps", $0) } ?? "n/a") " +
             "up=\(upStr)")
@@ -127,7 +127,7 @@ final class SpeedTest: ObservableObject {
         // a connectivity problem datachannel wouldn't fix).
         let videoTransports = ["vp8channel", "seichannel", "videochannel"]
         if mode == .tunnel, let t = transport, videoTransports.contains(t), let d, d < 5 {
-            LogStore.shared.log(.speed, L10n.speedDatachannelHint.localized())
+            LogStore.shared.log(.diagnostics, L10n.speedDatachannelHint.localized())
         }
     }
 
@@ -151,7 +151,7 @@ final class SpeedTest: ObservableObject {
             } catch {
                 // Tolerated (#285): one failed sample is skipped; we only return
                 // nil ("ping n/a") if *every* sample fails.
-                LogStore.shared.log(.speed, "  ping sample \(i): n/a (\(error.localizedDescription))")
+                LogStore.shared.log(.diagnostics, "  ping sample \(i): n/a (\(error.localizedDescription))")
             }
         }
         guard !samples.isEmpty else { return nil }
@@ -168,7 +168,7 @@ final class SpeedTest: ObservableObject {
             let elapsed = Date().timeIntervalSince(start)
             return Double(data.count) * 8 / elapsed / 1_000_000
         } catch {
-            LogStore.shared.log(.speed, "  download: n/a (\(error.localizedDescription))")
+            LogStore.shared.log(.diagnostics, "  download: n/a (\(error.localizedDescription))")
             return nil
         }
     }
@@ -180,8 +180,9 @@ final class SpeedTest: ObservableObject {
         // still measured against a real endpoint.
         let uploadProvider = AppConstants.SpeedTest.uploadProvider(for: provider)
         if uploadProvider.id != provider.id {
-            LogStore.shared.log(.speed,
-                "  upload: \(provider.label) has no upload endpoint — using \(uploadProvider.label)")
+            // #311: route through L10n instead of a hardcoded interpolated string.
+            LogStore.shared.log(.diagnostics,
+                L10n.speedUploadFallback_fmt.formatted(provider.label, uploadProvider.label))
         }
         guard let urlStr = uploadProvider.uploadURLString, let url = URL(string: urlStr) else {
             return nil   // no upload endpoint even after fallback → reported as "—"
@@ -202,7 +203,7 @@ final class SpeedTest: ObservableObject {
             let elapsed = Date().timeIntervalSince(start)
             return Double(body.count) * 8 / elapsed / 1_000_000
         } catch {
-            LogStore.shared.log(.speed, "  upload: n/a (\(error.localizedDescription))")
+            LogStore.shared.log(.diagnostics, "  upload: n/a (\(error.localizedDescription))")
             return nil
         }
     }

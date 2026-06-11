@@ -1,9 +1,13 @@
 import XCTest
 @testable import olcrtc_ios
 
-// #276/#277/#278: the merged Logs stream. Covers the pure pieces that back the
-// view — severity classification (colour-coding), chronological merge ordering,
-// the dated timestamp format, and parsing the Go-stamped container/server lines.
+// #294: Logs reverted to per-source tabs (Connection / Diagnostics / VPS /
+// Container) — there's no merged stream to test anymore. This file (kept
+// under its historical name so history stays linkable) now covers the pure
+// pieces that still back the per-tab views: severity classification
+// (colour-coding, #276), the dated timestamp format (#277), parsing the
+// Go-stamped container/server lines (#278), per-category buffers, and the
+// per-server container-log buffers/files (#295).
 
 @MainActor
 final class LogStoreMergedTests: XCTestCase {
@@ -82,40 +86,77 @@ final class LogStoreMergedTests: XCTestCase {
         XCTAssertNil(LogStore.parseExternalTimestamp(""))
     }
 
-    // MARK: merged ordering (#276/#277)
+    // MARK: per-category buffers (#294)
 
-    func testMergedSortsByDateAcrossCategories() {
-        let t = Date(timeIntervalSince1970: 1_700_000_000)
-        LogStore.shared.log(.connection, "first",  date: t)
-        LogStore.shared.log(.containerLogs, "second", date: t.addingTimeInterval(1))
-        // A back-dated container line (parsed from an old Go stamp) must sort
-        // *before* the earlier client lines, not cluster at fetch-time.
-        LogStore.shared.log(.connection, "older", date: t.addingTimeInterval(-10))
+    func testLogAppendsToItsOwnCategoryOnly() {
+        LogStore.shared.log(.connection, "conn line")
+        LogStore.shared.log(.diagnostics, "diag line")
+        LogStore.shared.log(.provisioning, "vps line")
 
-        XCTAssertEqual(LogStore.shared.merged.map(\.text), ["older", "first", "second"])
+        XCTAssertEqual(LogStore.shared.entries[.connection]?.map(\.text), ["conn line"])
+        XCTAssertEqual(LogStore.shared.entries[.diagnostics]?.map(\.text), ["diag line"])
+        XCTAssertEqual(LogStore.shared.entries[.provisioning]?.map(\.text), ["vps line"])
     }
 
-    func testMergedUsesSeqAsTiebreakerForSameTimestamp() {
-        let t = Date(timeIntervalSince1970: 1_700_000_500)
-        LogStore.shared.log(.ip, "a", date: t)
-        LogStore.shared.log(.speed, "b", date: t)
-        LogStore.shared.log(.ip, "c", date: t)
-        // Identical timestamps → insertion order preserved via the seq tiebreaker.
-        XCTAssertEqual(LogStore.shared.merged.map(\.text), ["a", "b", "c"])
-    }
-
-    // MARK: log() honours explicit level + carries source (#276)
+    // MARK: log() honours explicit level + carries category (#276)
 
     func testLogStoresExplicitLevelAndCategory() {
-        LogStore.shared.log(.speed, "forced error", level: .error)
-        let entry = LogStore.shared.merged.last
+        LogStore.shared.log(.diagnostics, "forced error", level: .error)
+        let entry = LogStore.shared.entries[.diagnostics]?.last
         XCTAssertEqual(entry?.text, "forced error")
         XCTAssertEqual(entry?.level, .error)
-        XCTAssertEqual(entry?.category, .speed)
+        XCTAssertEqual(entry?.category, .diagnostics)
     }
 
     func testLogInfersLevelWhenNotGiven() {
         LogStore.shared.log(.connection, "✗ MobileStart: boom")
-        XCTAssertEqual(LogStore.shared.merged.last?.level, .error)
+        XCTAssertEqual(LogStore.shared.entries[.connection]?.last?.level, .error)
+    }
+
+    // MARK: per-server container logs (#295)
+
+    func testLogContainerAppendsToItsOwnServerBuffer() {
+        LogStore.shared.startContainerSession(serverPrefix: "TWmsk1")
+        LogStore.shared.startContainerSession(serverPrefix: "TWspb2")
+        LogStore.shared.clearContainer(serverPrefix: "TWmsk1")
+        LogStore.shared.clearContainer(serverPrefix: "TWspb2")
+
+        LogStore.shared.logContainer(serverPrefix: "TWmsk1", "from msk1")
+        LogStore.shared.logContainer(serverPrefix: "TWspb2", "from spb2")
+
+        XCTAssertEqual(LogStore.shared.containerEntries["TWmsk1"]?.map(\.text), ["from msk1"])
+        XCTAssertEqual(LogStore.shared.containerEntries["TWspb2"]?.map(\.text), ["from spb2"])
+    }
+
+    func testClearAllAlsoClearsContainerBuffers() {
+        LogStore.shared.startContainerSession(serverPrefix: "TWmsk1")
+        LogStore.shared.logContainer(serverPrefix: "TWmsk1", "line")
+        XCTAssertFalse(LogStore.shared.containerEntries["TWmsk1"]?.isEmpty ?? true)
+
+        LogStore.shared.clearAll()
+        XCTAssertTrue(LogStore.shared.containerEntries["TWmsk1"]?.isEmpty ?? true)
+    }
+
+    func testNoteContainerTargetCarriesServerPrefix() {
+        let id = UUID()
+        LogStore.shared.noteContainerTarget(hostID: id, containerName: "olcrtc", serverPrefix: "TWmsk1")
+        XCTAssertEqual(LogStore.shared.lastContainerTarget?.hostID, id)
+        XCTAssertEqual(LogStore.shared.lastContainerTarget?.containerName, "olcrtc")
+        XCTAssertEqual(LogStore.shared.lastContainerTarget?.serverPrefix, "TWmsk1")
+    }
+
+    // MARK: LogRendering (#294 — replaces the old merged-stream rendering)
+
+    func testLogRenderingFiltersBySearchAndIsNewestFirst() {
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        let entries = [
+            LogEntry(date: t, category: .connection, text: "older"),
+            LogEntry(date: t.addingTimeInterval(1), category: .connection, text: "newer match"),
+        ]
+        let all = LogRendering.filtered(entries, search: "")
+        XCTAssertEqual(all.map(\.text), ["newer match", "older"])
+
+        let filtered = LogRendering.filtered(entries, search: "match")
+        XCTAssertEqual(filtered.map(\.text), ["newer match"])
     }
 }

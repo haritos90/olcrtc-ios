@@ -140,8 +140,16 @@ Work is tracked in `TODO.md`, which flows `Backlog → Open → Closed`. Its **H
 this file works** section is the source of truth for the lifecycle, columns, and
 priority scheme — don't restate it here. In short: new tasks start in Backlog with
 an optional detail block; closing a task moves its row to Closed, fills the
-**Resolution** column (how it was resolved, or `Won't Do` / `Duplicate`), and
-deletes its detail block.
+**Resolution** column (how it was resolved, or `Won't Do` / `Duplicate`) **and**
+the **Release note** column, and deletes its detail block.
+
+The two closing columns serve different readers (#315): **Resolution** is the
+engineering record — as detailed as it needs to be; **Release note** is one
+short, user-facing "what's new" sentence, because
+`scripts/closed-tasks-since.py` copies it verbatim into the GitHub Release notes
+(`release.yml`). Write it for someone who installs the app, not for someone who
+read the diff; put `—` when there's nothing to announce (the release notes then
+fall back to the task title).
 
 ---
 

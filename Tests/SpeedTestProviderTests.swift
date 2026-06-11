@@ -34,11 +34,31 @@ final class SpeedTestProviderTests: XCTestCase {
         XCTAssertEqual(ovh.pingURL(), "https://proof.ovh.net/files/1Mb.dat")    // HEAD on small file
     }
 
+    // #292: Hetzner is also a fixed-file provider, but unlike OVH it only
+    // publishes a single 100MB file — used for both tunnel and direct modes.
+    func testHetznerIsFixedFileDownloadOnly() {
+        let hetzner = provider("hetzner")
+        XCTAssertFalse(hetzner.parametric)
+        XCTAssertFalse(hetzner.supportsUpload)
+        XCTAssertNil(hetzner.uploadURLString)                                       // upload → n/a
+        XCTAssertEqual(hetzner.downloadURL(mode: .tunnel), "https://ash-speed.hetzner.com/100MB.bin")
+        XCTAssertEqual(hetzner.downloadURL(mode: .direct), "https://ash-speed.hetzner.com/100MB.bin")
+        XCTAssertEqual(hetzner.pingURL(), "https://ash-speed.hetzner.com/100MB.bin")  // HEAD on the same file
+    }
+
     // #291: a fixed-file provider (OVH) has no upload sink, so the upload leg
     // falls back to Cloudflare's parametric /__up; an upload-capable provider
     // keeps itself.
     func testUploadFallsBackToCloudflareForFixedFileProvider() {
         let up = AppConstants.SpeedTest.uploadProvider(for: provider("ovh"))
+        XCTAssertEqual(up.id, "cloudflare")
+        XCTAssertTrue(up.supportsUpload)
+        XCTAssertNotNil(up.uploadURLString)
+    }
+
+    // #292: Hetzner likewise has no upload sink, so it falls back too.
+    func testUploadFallsBackToCloudflareForHetzner() {
+        let up = AppConstants.SpeedTest.uploadProvider(for: provider("hetzner"))
         XCTAssertEqual(up.id, "cloudflare")
         XCTAssertTrue(up.supportsUpload)
         XCTAssertNotNil(up.uploadURLString)
