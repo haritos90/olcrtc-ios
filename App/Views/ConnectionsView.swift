@@ -120,6 +120,13 @@ struct ConnectionsView: View {
 
     // MARK: 1. Hero
 
+    // #342: fixed-footprint hero (design_handoff_logs_theme §6) — one size in
+    // all states. Structure: status row · always-rendered two-line server
+    // line · an always-present hairline · a fixed (≈44pt) footer slot that
+    // only swaps content. #342 was: the server line collapsed to a one-line
+    // hint without a primary, and the SOCKS line / failure row were appended
+    // conditionally under their own dividers — the card resized on every
+    // state change.
     private var heroCard: some View {
         OlcCard {
             VStack(alignment: .leading, spacing: 12) {
@@ -129,50 +136,83 @@ struct ConnectionsView: View {
                         .disabled(store.primary == nil || tunnel.state.isConnecting)
                 }
 
-                if let p = store.primary {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "server.rack")
-                                .font(.caption2)
-                                .foregroundStyle(Theme.Palette.textSecondary)
-                            Text(p.displayName)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Theme.Palette.textPrimary)
-                        }
-                        Text(p.subtitle)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(Theme.Palette.textSecondary)
-                    }
-                } else {
-                    Text(L10n.emptyNoConnectionsHint.localized())
-                        .font(.caption)
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                }
-
-                if tunnel.state.isConnected {
-                    Divider().overlay(Theme.Palette.separator)
-                    HStack(spacing: 8) {
-                        Image(systemName: "globe")
+                // Server line — always two lines; the mono subtitle reserves
+                // its line (single space) even with no primary connection.
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "server.rack")
                             .font(.caption2)
-                            .foregroundStyle(Theme.Palette.textTertiary)
-                        Text(L10n.socksProxyAddr_fmt.formatted(String(SettingsStore.shared.socksPort)))
-                            .font(.system(.caption2, design: .monospaced))
                             .foregroundStyle(Theme.Palette.textSecondary)
+                        Text(store.primary?.displayName ?? L10n.emptyNoConnections.localized())
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(store.primary != nil
+                                             ? Theme.Palette.textPrimary
+                                             : Theme.Palette.textSecondary)
+                            .lineLimit(1)
                     }
+                    Text(store.primary?.subtitle ?? " ")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .lineLimit(1)
                 }
 
-                if case .failed(let msg) = tunnel.state {
-                    Divider().overlay(Theme.Palette.separator)
-                    HStack(alignment: .center, spacing: 10) {
-                        Text(msg)
-                            .font(.caption)
-                            .foregroundStyle(Theme.Palette.red)
-                        Spacer(minLength: 4)
-                        if let p = store.primary {
-                            OlcButton(L10n.actionRetry.localized(), systemImage: "arrow.clockwise", role: .danger) {
-                                tunnel.connect(record: p)
-                            }
-                        }
+                Divider().overlay(Theme.Palette.separator)
+
+                heroFooter
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }
+            .animation(.easeInOut(duration: 0.25), value: tunnel.state)
+        }
+    }
+
+    /// #342: the footer slot's per-state content — exactly one of hint /
+    /// connect progress / SOCKS5 line / failure+Retry, swapped inside the
+    /// fixed frame above.
+    @ViewBuilder
+    private var heroFooter: some View {
+        switch tunnel.state {
+        case .disconnected:
+            Text(store.primary.map { L10n.heroDisconnectedHint_fmt.formatted($0.displayName) }
+                 ?? L10n.emptyNoConnectionsHint.localized())
+                .font(.caption)
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .lineLimit(2)
+        case .connecting:
+            // The tunnel exposes a single connecting state (no ICE/signaling
+            // sub-phases), so per the handoff this is a slow indeterminate
+            // fill — no fake step counts.
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.stateConnecting.localized())
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                HeroIndeterminateFill()
+            }
+        case .waitingForNetwork:
+            Text(L10n.stateWaitingForNetwork.localized())
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(Theme.Palette.textSecondary)
+        case .connected:
+            HStack(spacing: 8) {
+                Image(systemName: "globe")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+                Text(L10n.socksProxyAddr_fmt.formatted(String(SettingsStore.shared.socksPort)))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+            }
+        case .failed(let msg):
+            HStack(alignment: .center, spacing: 10) {
+                Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(Theme.Palette.red)
+                    .lineLimit(2)
+                Spacer(minLength: 4)
+                if let p = store.primary {
+                    // #342 was: full-height 44pt Retry — compact 32pt so it
+                    // fits the fixed footer slot.
+                    OlcButton(L10n.actionRetry.localized(), systemImage: "arrow.clockwise",
+                              role: .danger, compact: true) {
+                        tunnel.connect(record: p)
                     }
                 }
             }
@@ -304,13 +344,19 @@ struct ConnectionsView: View {
         HStack(alignment: .top, spacing: 12) {
             HStack(alignment: .top, spacing: 18) {
                 // #291: restore the measurement units next to the numbers — a bare
-                // "0.77" is ambiguous; DL/UL had lost their "Mbps" suffix (matches
-                // the existing hardcoded "ms" unit, the convention in this view).
-                // #311: route labels and unit format strings through L10n.
-                OlcMetric(label: L10n.speedLabelPing.localized(), value: speedValue(speed.lastResult?.pingMs, L10n.speedPingValue_fmt.localized()))
-                // #291 was: "%.1f" (no unit)
-                OlcMetric(label: L10n.speedLabelDL.localized(),   value: speedValue(speed.lastResult?.downloadMbps, L10n.speedRateValue_fmt.localized()))
-                OlcMetric(label: L10n.speedLabelUL.localized(),   value: speedValue(speed.lastResult?.uploadMbps, L10n.speedRateValue_fmt.localized()))
+                // "0.77" is ambiguous. #311: labels/formats through L10n.
+                // #342 was: unit baked into the value format ("%.0f ms") which
+                // inflated the mono number — now OlcMetric's `unit:` renders it
+                // as smaller secondary text, only next to a real number.
+                OlcMetric(label: L10n.speedLabelPing.localized(),
+                          value: speedValue(speed.lastResult?.pingMs, L10n.speedPingValue_fmt.localized()),
+                          unit: speedUnit(speed.lastResult?.pingMs, L10n.speedUnitMs.localized()))
+                OlcMetric(label: L10n.speedLabelDL.localized(),
+                          value: speedValue(speed.lastResult?.downloadMbps, L10n.speedRateValue_fmt.localized()),
+                          unit: speedUnit(speed.lastResult?.downloadMbps, L10n.speedUnitMbps.localized()))
+                OlcMetric(label: L10n.speedLabelUL.localized(),
+                          value: speedValue(speed.lastResult?.uploadMbps, L10n.speedRateValue_fmt.localized()),
+                          unit: speedUnit(speed.lastResult?.uploadMbps, L10n.speedUnitMbps.localized()))
             }
             Spacer(minLength: 8)
             OlcButton(L10n.speedTestRun.localized(), role: .secondary, isBusy: speed.isTesting) {
@@ -324,6 +370,11 @@ struct ConnectionsView: View {
         if speed.isTesting { return "…" }
         guard let v else { return "—" }
         return String(format: format, v)
+    }
+
+    /// #342: the unit only accompanies a real number — never "…" or "—".
+    private func speedUnit(_ v: Double?, _ unit: String) -> String? {
+        !speed.isTesting && v != nil ? unit : nil
     }
 
     // IP-check display helpers (unchanged logic).
@@ -559,3 +610,31 @@ struct ConnectionsView: View {
 }
 
 // #262: `olcCardRow()` now lives in DesignSystem.swift (shared with ServersView).
+
+/// #342: slow indeterminate fill for the hero's single `.connecting` state —
+/// asymptotic toward 90% over ~half a minute (the start timeout's order of
+/// magnitude), restarting per connect attempt. @State keeps the start across
+/// re-renders; the view leaves the hierarchy when the state changes.
+private struct HeroIndeterminateFill: View {
+    @State private var start = Date()
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 10)) { ctx in
+            let t = ctx.date.timeIntervalSince(start)
+            OlcProgressBar(fraction: 0.9 * (1 - exp(-t / 8)))
+        }
+    }
+}
+
+// #340: both appearance variants.
+#if DEBUG
+#Preview("Connections — Dark") {
+    ConnectionsView(store: ConnectionStore(), tunnel: TunnelManager(),
+                    ipCheck: IPChecker(), speed: SpeedTest())
+        .preferredColorScheme(.dark)
+}
+#Preview("Connections — Light") {
+    ConnectionsView(store: ConnectionStore(), tunnel: TunnelManager(),
+                    ipCheck: IPChecker(), speed: SpeedTest())
+        .preferredColorScheme(.light)
+}
+#endif

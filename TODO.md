@@ -53,7 +53,7 @@ When **Open** has no rows, keep the header + separator and leave a single placeh
 row — `| — | — | — | — | _(empty — promote one from Backlog)_ |` — instead of replacing
 the table with prose.
 
-**Next free ID:** 337
+**Next free ID:** 347
 
 ---
 
@@ -64,7 +64,6 @@ Current, actionable work.
 | ID | Pri | Eff | Theme | Title |
 |---|---|---|---|---|
 | 299 | P3 | L | ux | Theme = real colour schemes (Dark/Light/Gray), not tile borders — replace Refined/Console |
-| 316 | P2 | M | ux | LogsView (#294) nests a `TabView` inside MainTabView's `TabView` — verify rendering; likely replace with `OlcSegmented` (the pre-#276 pattern) |
 
 ---
 
@@ -94,7 +93,6 @@ Future / blocked / someday. Promote to Open when picked up.
 | 323 | P3 | S | ux | #295 (`d8d04df`): non-ASCII labels sanitize to the `"server"` log prefix — two Cyrillic-named hosts collide (confusing "duplicate name" error on add; pre-#295 hosts silently share one container log file) |
 | 324 | P3 | XS | observability | #294 (`d8d04df`): IPChecker never calls `startSession(.diagnostics)` — IP-check lines miss `diagnostics.log` until a speed test creates the writer, while the Logs tab header advertises that file |
 | 325 | P2 | M | parity | parity_check 2.0: two-way line-by-line check — rejected upstream lines stay in srv.sh commented with a reason marker; unaccounted upstream additions fail the check into a triage task |
-| 326 | P3 | XS | l10n | Connections tab: default group header says "Servers" — rename to "Connections"; "servers" wording stays Manage-VPS-only |
 | 327 | P2 | L | features | Routing switch (Connections tab) only reroutes diagnostics (IP check / speed test), not the actual tunnel — make "All direct" apply to the SOCKS path too (likely upstream) |
 | 328 | P2 | M | ux | Show the active carrier's hosts/IPs with one-tap copy — what to exclude in Shadowrocket-style apps to avoid the proxy loop |
 | 329 | P2 | L | features | On server stop: kick all participants + close the room, behind a setting (default ON) — likely needs core/upstream support |
@@ -105,6 +103,8 @@ Future / blocked / someday. Promote to Open when picked up.
 | 334 | P3 | S | ux | Container-log download shows no activity on the server card — add a progress/busy indicator |
 | 335 | P3 | S | ux | Server card progress bar start: text overlaps for ~0.5 s — fix the visual jank |
 | 336 | P2 | M | performance | App degrades over long sessions (suspected log growth) — profile to confirm; likely shares the #332 root |
+| 337 | P3 | S | ux | Hide IPs in the UI for screenshot-safe sharing — a Settings toggle masks Diagnostics (IP-check results) and Manage VPS (host addresses); logs excluded |
+| 346 | P3 | XS | l10n | #341 (build 248): VPS-card mini-stat labels "Ping"/"Disk"/"RAM"/"Up" are hardcoded — route through L10n like the #311 speed-tile labels (units like "ms" stay English, ru = en — operator decision); same for the pre-existing `"Restored: %@"` alert (#303) in ServersView |
 
 ---
 
@@ -250,19 +250,6 @@ is currently forced-dark (`UIUserInterfaceStyle=Dark` in project.yml) — Light/
 and authoring light + neutral-gray palettes while keeping the design-system component structure. Drop
 the shape/border-only "design direction" framing.
 
-### 316 — LogsView: nested TabView → verify / replace with OlcSegmented
-
-Review finding from the #294 batch integration. The rewritten `LogsView.body` is a `TabView`
-(Connection/Diagnostics/VPS/Container) but `LogsView` itself already sits inside `MainTabView`'s
-`TabView` — nested tab bars typically render as a second bar stacked above the main one. The pre-#276
-per-category UI used `OlcSegmented` (the design-system component, see git history of
-`App/Views/LogsView.swift` at `22ddab7`) inside a single `NavigationStack`. Run the app, look at the
-Logs tab; if the double bar shows, restructure: one `NavigationStack`, `OlcSegmented` selection,
-switch between the existing `LogCategoryTabView` / `ContainerLogsTabView` bodies (their own
-`NavigationStack`s + `.searchable` must then be lifted to the shared container).
-
----
-
 ### 321 — README: rewrite iPhone-install + merge build sections
 
 Two changes to `README.md`, ordered so a newbie hits "how do I get this on my iPhone"
@@ -332,16 +319,6 @@ Redesign, per operator decision (2026-06-12):
    ("what do we take, what do we skip, and why").
 4. Keep it a pre-build phase; update CONTRIBUTING.md → *srv.sh parity* and
    AGENTS.md §3 to describe the new marker and the two-way contract.
-
-### 326 — Connections tab: default group header "Servers" → "Connections"
-
-The connections list's default group renders as **"Servers"** —
-`L10n.groupDefault` (en `"Servers"` / ru `"Основная"`), applied via
-`ConnectionRecord.displayGroupName` (ConnectionsView.swift:364). Change the en
-value to `"Connections"` (decide whether ru `"Основная"` becomes
-`"Соединения"` to match) so "servers" terminology lives only in the Manage VPS
-tab. String-only — the stored `defaultGroupName` token must NOT change (#283:
-existing records aren't migrated).
 
 ### 327 — Routing switch: make "All direct" affect the actual tunnel
 
@@ -448,6 +425,16 @@ Proposal:
   disconnected ourselves within the last ~10 s, wait-and-retry the **same**
   port (poll ~every 250 ms, up to ~5 s, with a "waiting for port release…"
   status) before surfacing the typed busy error.
+
+### 337 — Hide IPs in the UI (screenshot-safe mode)
+
+A **Settings toggle** (off by default) that masks IP addresses in the UI so
+screenshots can be shared safely. Scope: the Diagnostics block on the
+Connections tab (IP-check result rows) and Manage VPS (host addresses on
+server cards / detail). **Logs are deliberately excluded** — they stay
+unmasked. Mask style up to the implementer (e.g. keep the last octet:
+`•••.•••.•.12`); masking is display-only — copy actions and the underlying
+stored values stay real.
 
 ---
 
@@ -756,6 +743,16 @@ release notes use; `—` on rows closed before #315 or with nothing to announce.
 | 311 | l10n | Route speed-tile metric labels/units + upload-fallback log line through L10n | `ConnectionsView.speedRow` labels (Ping/DL/UL) and `"%.0f ms"`/`"%.1f Mbps"` formats, plus `SpeedTest.measureUpload`'s fallback log line, now go through new `speedLabelPing/DL/UL`, `speedPingValue_fmt`, `speedRateValue_fmt`, `speedUploadFallback_fmt` (en+ru, ru=en — universal abbreviations / deliberately-English diagnostic line) | Speed tile labels and units are now localizable |
 | 312 | docs | README testing section drifted ("238 unit tests" + stale "port selection") | dropped the exact test count for "A broad suite of unit tests covers…"; replaced "port selection" with "port availability / busy-error mapping" (#308) | README: testing section brought up to date |
 | 315 | build | Closed table: Release note column for curated GitHub Release notes | new 5th Closed column **Release note** (one user-facing "what's new" line, filled on close; `—` = fall back to title); `closed-tasks-since.py` emits `- #ID note` instead of `- #ID title — resolution` (5-col regex + 4-col fallback for historic refs); all 294 prior rows backfilled with `—`; documented in TODO.md header, AGENTS.md §5, CONTRIBUTING.md → Task tracking | Release notes now show short "what's new" lines instead of verbose task resolutions |
+| 316 | ux | LogsView (#294) nests a `TabView` inside MainTabView's `TabView` — verify rendering; likely replace with `OlcSegmented` (the pre-#276 pattern) | rebuilt as a single `NavigationStack` (design_handoff_logs_theme §1): `OlcSegmented` category switch (short labels Conn/Diag/VPS/Container, full names via `accessibilityLabel`), ONE `.searchable` + ONE overflow menu, one file-header row (`doc.text` + monospaced file name + line count) attached to the log body; deleted the nested `TabView`, per-tab `NavigationStack`s, `LogTabHeader` (its description now opens the empty-state hint) and the unused `isActive` plumbing (App.swift call site included); per-server container picker/fetch (#295–#297) carried over unchanged | Logs tab redesigned: no more second tab bar — one header, a compact category switch, and a single file row with line count |
 | 318 | observability | Orphaned log files after #294/#295 linger in Documents/logs | `LogStore.init` now calls `cleanupOrphanedLogFiles()`, deleting `ip.log`/`speed.log` (merged into `diagnostics.log` by #294) and the old shared `containerLogs.log` (replaced by per-server files in #295), once per launch | — |
 | 319 | reliability | Integrate upstream olcrtc (e2c4b1e → 39cc3fa) | bumped submodule pin (13 commits): server.go `reinstallSession` now closes the old muxconn before the session swap (fixes "frame too large" when a client reconnects faster than the server can push new-session frames into the dying smux session); jitsi engine hardening — `RequireTargetedPeer` drops untargeted broadcast frames before the peer-latch (already wired via `internal/client`, no mobile.go API change), bounded 30s rejoin-join timeout, RTCP keepalive only runs when a PC carries media/SCTP bridge, `PeerConnectionStateFailed` now triggers a reconnect instead of `onEnded`; muxconn/smux retuning (`inboundQueue` 256→128, `fastSpinAttempts` 200→16, `MaxStreamBuffer` 1MiB→512KiB, frames up to 32KiB); vp8channel default fps 60→30 + smaller KCP queues (CPU-reduction pass). Default Jitsi server list changed (`meet.cryptopro.ru` removed, `meet.small-dm.ru`/`meet.handyweb.org` added) — our `AppConstants.defaultJitsiBaseURL` (`meet1.arbitr.ru`) is unaffected, still in the list. `parity_check.py` clean — the upstream interactive Jitsi-menu/room-options rewrite in `script/srv.sh` falls entirely outside our non-interactive boc patches. Rebuilt `Mobile.xcframework` via `build-framework.sh` (Mobile* API unchanged), app builds + 265 tests green. Follow-up: #320 (re-benchmark our 60fps vp8/sei srv.sh defaults against upstream's new 30fps recommendation) | Reconnects after a dropped session are more reliable |
 | 322 | build | Commit `bf48a75` message ("upstream parity update") is not Conventional Commits and omits the #297/#318 work — amend before push | amended before push | — |
+| 326 | l10n | Connections tab: default group header says "Servers" — rename to "Connections"; "servers" wording stays Manage-VPS-only | Duplicate — implemented as #344 in the build-248 commit (en "Connections", ru "Подключения"; stored `defaultGroupName` token unchanged per #283) | — |
+| 338 | ux | Logs: inline container fetch with progress (design_handoff_logs_theme §2) | Container source card in LogsView: host chips ≤3 (primary connection's host first, ★; `Menu` picker beyond 3) + secondary "Fetch"/"Check server" `OlcButton` with `isBusy`; monotonic 3-phase progress (Connecting… → `podman logs --tail N <name>` → Receiving output…) with k/n + new shared `OlcProgressBar(fraction:)` (also replaces the Manage VPS card's `ProgressView`); `Provisioner.containerLogs` emits the third phase signal and writes a `── podman logs --tail N · HH:mm ──` divider (`.debug`/tertiary) via `startContainerSession(divider:)` instead of the generic "── new session ──"; empty buffer → `OlcEmptyState` with primary "Fetch from {host}" CTA; scan-first fallback (#296/#297 alert) kept; removed orphaned `logsDownloadFromServer` key | Container logs now fetch right inside the Logs tab with live phase progress and a session divider |
+| 339 | ux | Logs: delete the container-logs popup; Manage VPS routes to the Logs tab (design_handoff_logs_theme §3) | deleted `ContainerLogsView.swift` + `ContainerLogsPayload` + ServersView's `logsPayload`/`.sheet`/`fetchLogs`; new `LogsRouter` (`@Published request: (hostID, autofetch)?`) owned by App.swift — ServersView's renamed "Container logs" item writes a request, MainTabView switches to the Logs tab, LogsView consumes it (Container category + host + auto-fetch via #338's phase UI, idempotent, skipped if a fetch is running); removed orphaned `emptyLogsTitle`/`emptyLogsHint_fmt`, `actionDownloadContainerLogs` → `actionContainerLogs` ("Container logs"); no SSH/Provisioner logic changes (stale doc comment fixed) | "Container logs" on a VPS card now opens the Logs tab and fetches right there — no more popup |
+| 340 | ux | Light/Dark theme with System/Light/Dark picker (design_handoff_logs_theme §4) | persisted `AppearanceMode` (system/light/dark, **default dark** so existing users see no change) in SettingsStore; "Appearance" picker above the Refined/Console picker; `.preferredColorScheme` on the root in App.swift; removed `UIUserInterfaceStyle: Dark` from project.yml (it would override the modifier); Theme.swift `bg`/`segActive`/Console `card` + new `cardBorder` token now dynamic via `UIColor` trait closures per the handoff token table (Console light values applied mechanically — no further Console design work per operator decision; #299 stays open for the full Refined/Console replacement); audit found one hardcoded surface (OlcCard hairline `Color.white.opacity(0.16)` → `Theme.Palette.cardBorder`); light `#Preview`s added for the component set + all five tabs; CLAUDE.md dark-only invariant rewritten | New Appearance setting: System, Light, or Dark theme (default stays dark) |
+| 341 | ux | Manage VPS card: fixed footprint + icon actions + compact metrics (design_handoff_logs_theme §5) | status region in a `minHeight: 58` container (pill / pill+bar / failed pill crossfade, no height change); metrics strip ALWAYS rendered — new one-line `OlcMiniStat` strip `PING 27ms · DISK 36/40G · RAM 241/2048M · UP 11d` ("—" placeholders, `.opacity(0.45)` during ops) replacing the conditional two-deck `OlcMetric` row; action bar = contextual primary + three 44×44 tinted `OlcIconButton`s (Check accent / Container logs green → #339 route / Reconfigure orange), logs+reconfigure disabled without a container, all disabled during ops, still a strict subset of `hostMenu`; `OlcMiniStat(label:value:tone:)` + `OlcIconButton(systemImage:tint:)` added to DesignSystem.swift; compact formatters `shortUsage`/`shortUptime` pinned by new `VPSStatFormattingTests` (269 tests) | VPS cards keep one fixed size in every state, with compact one-line metrics and three tinted quick-action buttons |
+| 342 | ux | Connections: fixed-footprint hero + connect progress + speed units (design_handoff_logs_theme §6) | hero restructured: status row · ALWAYS-rendered two-line server line (mono subtitle reserves its line) · always-present hairline · fixed `minHeight: 44` footer slot swapping hint ("Flip the switch to connect via %@") / connecting (mono text + `HeroIndeterminateFill` — single `.connecting` state, asymptotic 90% fill, no fake steps) / waiting-for-network / SOCKS5 line / failure (2-line clamp) + compact 32pt Retry; conditional divider+row appends deleted; `OlcButton` gained `compact:` (32pt, same roles); `OlcMetric` gained `unit:` (smaller secondary text) — speed formats become number-only (`speedPingValue_fmt` "%.0f", `speedRateValue_fmt` "%.1f") with new `speedUnitMs`/`speedUnitMbps`, unit only next to a real number; IP-check block untouched (growth on disagreement by design); no TunnelManager changes | Connections hero keeps one fixed size in every state, shows connect progress, and speed-test numbers carry their units cleanly |
+| 343 | ux | Settings regroup + DNS submenu + Appearance last (design_handoff_logs_theme §7) | section order now SOCKS5 (one section: port + Random + check + auth) → DNS → vp8channel → Connection (six sections merged into one) → Diagnostics (IP-sources link + speed provider, picker unchanged per operator decision) → Logs (three merged) → Appearance (language · Theme=System/Light/Dark · Direction=Refined/Console · font slider) → version footer; DNS chip wall → `NavigationLink` summary row ("Yandex · 77.88.8.8:53") + new `DNSSettingsView` subscreen (preset rows: name + mono address + checkmark, long dnsFooter moved there, free-form field + keyboard Done; also kills the MegaFon/Yota duplicate-ForEach-ID the chip wall had); one short footer per section (kept: socksPortChangeNote, footerKeepAlive, speedProviderFooter, footerLogBuffer, fontFooter); relabels: scheme picker "Appearance"→"Theme", Refined/Console "Theme"→new `directionLabel` "Direction", section header "Font"→"Appearance"; removed 10 orphaned L10n keys; every SettingsStore binding kept | Settings reorganized: cleaner sections, DNS picker moved to its own page, appearance options grouped at the bottom |
+| 344 | l10n | Connections tab: default list group says "Servers" — rename to "Connections" | `L10n.groupDefault` display value "Servers"→"Connections" (ru "Основная"→"Подключения"); display-only — the persisted raw `ConnectionRecord.defaultGroupName` stays "Servers", mapped via `displayGroupName` (#283), so no migration | The connection list on the Connections tab is now titled "Connections" instead of "Servers" |
+| 345 | build | Commit `05b3447` message ("no description yet") is not Conventional Commits — amend before push | amended before push (build-248 commit, `feat(ui): single-stack Logs tab…`). Policy fixed so this task type isn't refiled: a placeholder subject is the expected pre-review state — the local `/review-commits` command now hands the ready-to-run amend command instead of filing a task; the commit-review and batch sections (§7/§8) were removed from public AGENTS.md (operator-local workflow — contributors review their own way) | — |

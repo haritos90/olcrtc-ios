@@ -171,6 +171,7 @@ lerna-debug.log*
 .env.*
 !.env.example
 .local
+local/
 
 # Project-specific
 olcrtc-ios.xcodeproj/

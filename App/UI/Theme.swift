@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit  // #340: UIColor trait closures back the dynamic light/dark tokens
 
 // #258: Design-system tokens — the single source of truth for color, spacing,
 // shape, and type. App/UI/DesignSystem.swift and (later) every screen read from
@@ -7,10 +8,12 @@ import SwiftUI
 // Values come from design_handoff_ui_redesign, "Refined" direction (the handoff
 // default: pure-black ground, soft borderless cards). Where the handoff's hex
 // matches an iOS system color we use the *semantic* color — noted per token — so
-// Dynamic Type, contrast, and the dark palette keep working. The app is
-// dark-only; this palette is authored for the dark appearance and the previews
-// force it. Enforcing app-wide dark is a shell concern (App.swift), handled in a
-// later step — not here.
+// Dynamic Type, contrast, and the dark palette keep working.
+// #340 was: "The app is dark-only; this palette is authored for the dark
+// appearance" — light values come from design_handoff_logs_theme §4; the
+// appearance now follows SettingsStore.appearanceMode (System/Light/Dark)
+// via preferredColorScheme in App.swift. Semantic system colors adapt for
+// free; the handful of hardcoded grounds are dynamic via UIColor traits.
 //
 // To switch to the "Console" direction later, change only the values marked
 // `Console:` below (cooler ground, hairline card border, tighter radii).
@@ -21,13 +24,42 @@ enum Theme {
     // that differ read the live setting, so the Settings picker reskins the app.
     fileprivate static var console: Bool { SettingsStore.shared.designConsole }
 
+    /// #340: dark/light pair → one Color that resolves per the active trait.
+    fileprivate static func dynamic(dark: UIColor, light: UIColor) -> Color {
+        Color(UIColor { $0.userInterfaceStyle == .dark ? dark : light })
+    }
+
     // MARK: - Colors
     enum Palette {
-        // Grounds & surfaces (bg/card/segActive switch with the direction)
-        static var bg        : Color { Theme.console ? Color(hex: 0x0B0D10) : .black }                              // Refined #000000
-        static var card      : Color { Theme.console ? Color(hex: 0x15181D) : Color(.secondarySystemGroupedBackground) }
+        // Grounds & surfaces (bg/card/segActive switch with the direction).
+        // #340: light values per the handoff §4 token table.
+        // #340 was: bg = console ? Color(hex: 0x0B0D10) : .black (dark-only)
+        static var bg        : Color {
+            Theme.console
+                ? Theme.dynamic(dark: UIColor(hex: 0x0B0D10), light: UIColor(hex: 0xEDEFF2))
+                : Theme.dynamic(dark: .black, light: .systemGroupedBackground)   // light = #F2F2F7
+        }
+        // #340 was: card = console ? Color(hex: 0x15181D) : …(already adaptive)
+        static var card      : Color {
+            Theme.console
+                ? Theme.dynamic(dark: UIColor(hex: 0x15181D), light: .white)
+                : Color(.secondarySystemGroupedBackground)
+        }
         static let fill      = Color(.tertiarySystemFill)                // rgba(118,118,128,0.22) — secondary-button / chip fill
-        static var segActive : Color { Theme.console ? Color(hex: 0x2A2F37) : Color(hex: 0x48484A) }                // selected segment
+        // #340 was: segActive = console ? 0x2A2F37 : 0x48484A (dark-only);
+        // light = white in both directions (+ OlcSegmented's existing soft shadow)
+        static var segActive : Color {
+            Theme.console
+                ? Theme.dynamic(dark: UIColor(hex: 0x2A2F37), light: .white)
+                : Theme.dynamic(dark: UIColor(hex: 0x48484A), light: .white)
+        }
+        /// #340: Console card hairline — was hardcoded `Color.white.opacity(0.16)`
+        /// in OlcCard (#281 bumped dark from the handoff's 8% for visibility);
+        /// light uses the handoff's black 8%.
+        static var cardBorder: Color {
+            Theme.dynamic(dark: UIColor.white.withAlphaComponent(0.16),
+                          light: UIColor.black.withAlphaComponent(0.08))
+        }
         static let separator = Color(.separator)                         // rgba(84,84,88,0.5)
 
         // Text
@@ -95,5 +127,16 @@ extension Color {
                   green: Double((hex >> 8)  & 0xFF) / 255,
                   blue:  Double( hex        & 0xFF) / 255,
                   opacity: 1)
+    }
+}
+
+extension UIColor {
+    /// #340: UIColor twin of `Color(hex:)` — the dynamic light/dark tokens are
+    /// built from UIColor trait closures, which need UIColor end points.
+    convenience init(hex: UInt32) {
+        self.init(red:   CGFloat((hex >> 16) & 0xFF) / 255,
+                  green: CGFloat((hex >> 8)  & 0xFF) / 255,
+                  blue:  CGFloat( hex        & 0xFF) / 255,
+                  alpha: 1)
     }
 }

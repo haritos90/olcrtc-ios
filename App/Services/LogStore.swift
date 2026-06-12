@@ -36,7 +36,20 @@ enum LogCategory: String, CaseIterable, Identifiable {
         }
     }
 
-    /// #294: short description shown under each Logs tab title.
+    /// #316: abbreviated label for the Logs tab's segmented control — short
+    /// enough that four segments never wrap; `title` stays the VoiceOver name.
+    var segmentTitle: String {
+        switch self {
+        case .connection:    return L10n.logsSegConnection.localized()
+        case .diagnostics:   return L10n.logsSegDiagnostics.localized()
+        case .provisioning:  return L10n.logsSegVPS.localized()
+        case .containerLogs: return L10n.logsSegContainer.localized()
+        }
+    }
+
+    /// #294: short description of what the category contains.
+    /// #316 was: shown under each Logs tab title (LogTabHeader) — now feeds
+    /// the empty-state hint instead.
     var tabDescription: String {
         switch self {
         case .connection:    return L10n.logsTabDescConnection.localized()
@@ -57,8 +70,8 @@ enum LogCategory: String, CaseIterable, Identifiable {
 
     /// #294: the on-disk file name for the fixed (non-per-server) categories.
     /// `LogFileWriter`'s default filename for these matches this value —
-    /// `LogTabHeader` reads it from here so the displayed name can't drift
-    /// from what's actually written. Not meaningful for `.containerLogs`,
+    /// the Logs tab's file-header row reads it from here so the displayed
+    /// name can't drift from what's actually written (#316). Not meaningful for `.containerLogs`,
     /// which is per-server (#295) — see `ServerHost.logFilePrefix`.
     var logFileName: String { "\(rawValue).log" }
 }
@@ -238,12 +251,19 @@ final class LogStore: ObservableObject {
     /// #295: start (or resume) the per-server container-log file for
     /// `serverPrefix` (a sanitised `ServerHost.logFilePrefix`). Each server's
     /// container output accumulates in `<serverPrefix>_container.log`.
-    func startContainerSession(serverPrefix: String) {
+    /// #338: a caller-supplied `divider` (command + time, design_handoff §2)
+    /// replaces the generic "── new session ──" + version pair; logged at
+    /// `.debug` so the Logs tab renders it tertiary.
+    func startContainerSession(serverPrefix: String, divider: String? = nil) {
         let w = LogFileWriter(category: .containerLogs, filename: "\(serverPrefix)_container.log")
         containerWriters[serverPrefix] = w
         containerFileURLs[serverPrefix] = w.fileURL
         if containerEntries[serverPrefix] == nil {
             containerEntries[serverPrefix] = []
+        }
+        if let divider {
+            logContainer(serverPrefix: serverPrefix, divider, level: .debug)
+            return
         }
         if !(containerEntries[serverPrefix]?.isEmpty ?? true) {
             logContainer(serverPrefix: serverPrefix, "── new session ──────────────────────────")

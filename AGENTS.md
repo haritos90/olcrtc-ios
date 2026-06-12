@@ -107,7 +107,6 @@ built, report the new build number and test result
 (`BUILD SUCCEEDED — <marketing>.<build> | N/N tests passed`).
 
 Committing is the user's job — an agent commits only on explicit request.
-Before pushing, the user may ask for a **commit review**: see §7.
 
 ---
 
@@ -122,72 +121,3 @@ Before pushing, the user may ask for a **commit review**: see §7.
   the symbols the framework exports. Verify a function or flag exists before
   building on it — e.g. check the gomobile header at
   `App/Mobile.xcframework/ios-arm64/Mobile.framework/Headers/Mobile.objc.h`.
-
----
-
-## 7. Pre-push commit review
-
-The user commits locally and pushes only after a review — their own, or one
-they request from an agent. When asked to "review the commits":
-
-1. **Scope** — the unpushed commits: `git log origin/main..HEAD` (or the exact
-   range/hashes the user names). Review each commit's diff (`git show <hash>`)
-   on its own, then `git diff origin/main..HEAD` once for cross-commit effects.
-2. **Context** — only the repo: the diffs, the surrounding code, `TODO.md`
-   (which tasks the commits close), and these docs. A fresh session is the
-   point — judge what was committed, not what was meant.
-3. **Checklist** — correctness, regressions, and security first; then the
-   conventions: task markers (§2.1), every user-facing string through `L10n`,
-   English-only, Conventional Commit messages, no secrets in code/logs,
-   `srv.sh` parity discipline, tests for parsing/validation/wire-contract
-   changes, exactly one `CFBundleVersion` bump per built artifact.
-4. **Findings → tasks** — file each accepted finding as a new `TODO.md` row
-   (Backlog, or Open if it should block the push), `Pri` by severity, naming
-   the commit hash. Otherwise the review is read-only: no code edits, no
-   version bump, no commits. Running the test suite or
-   `python3 scripts/parity_check.py` to verify a suspicion is fine.
-5. **Verdict** — end with one line per commit:
-   `<hash> <subject> — OK to push` or `<hash> <subject> — fix first: #NNN`.
-
----
-
-## 8. Parallel-agent runs (batch)
-
-Agent tools can run several tasks at once — one isolated sub-agent per task,
-each in its own scratch git worktree on a local branch. (Where those worktrees
-live and what the branches are called is tool-specific and belongs in the
-operator's local tool config, not here.) Per §4, those sub-agents **leave
-their changes uncommitted in their worktrees** — no commits, no PRs, no
-pushes, no version bumps, no `TODO.md` edits. That is correct behaviour, but
-it means a parallel run is **not done when the agents finish**: someone must
-integrate, or the main checkout never sees the work.
-
-**The session that launched the run is the integrating session.** After the
-last sub-agent reports:
-
-1. **Apply** each worktree's changes to the main working tree (copy the changed
-   files over; where two tasks touched the same file, merge by hand and re-read
-   the result). The sub-agents' reports say what changed where.
-2. **One** `TODO.md` update for the whole run — close every row, fill
-   Resolution + Release note (§5). Sub-agents never edit `TODO.md`; their
-   prompts must say so and ask them to *report* proposed Resolution / Release
-   note text instead.
-3. **One** `CFBundleVersion` bump, one `xcodegen generate`, one test run (§3,
-   §4) for the whole run.
-4. Report per-task results + `BUILD SUCCEEDED — …`, then leave committing to
-   the user (§5). Offer the cleanup commands:
-
-   ```bash
-   git worktree list                            # find the scratch worktrees
-   git worktree remove --force <worktree-path>  # repeat per agent
-   git branch -D <its-branch>                   # the branch holds no commits
-   ```
-
-If the launching session is gone (crash, context loss), any fresh session can
-integrate: the worktrees on disk are the inputs; diff each against `HEAD`
-(`git -C <worktree-path> diff`) and run steps 1–4. A pre-commit review of an
-integrated-but-uncommitted run follows §7 with the working-tree diff
-(`git diff` + `git status`) as the scope instead of commit hashes.
-
-These branches and worktrees are local scratch space: never push them, never
-open PRs from them — the user publishes `main` only.

@@ -23,6 +23,9 @@ import SwiftUI
 struct ServersView: View {
     @ObservedObject var serverStore: ServerHostStore
     @ObservedObject var connections: ConnectionStore
+    /// #339: "Container logs" routes to the Logs tab through this app-level
+    /// router (write-only here — MainTabView switches the tab, LogsView consumes).
+    let logsRouter: LogsRouter
     /// Per-tab lifecycle, NOT a shared singleton — intentional split from
     /// `TunnelManager.shared` / `SettingsStore.shared` / `LogStore.shared`.
     @StateObject  private var provisioner = Provisioner()
@@ -31,7 +34,8 @@ struct ServersView: View {
     @State private var editHost       : ServerHost?
     @State private var installFor     : ServerHost?
     @State private var reconfigureFor : ServerHost?
-    @State private var logsPayload    : ContainerLogsPayload?
+    // #339 was: logsPayload (ContainerLogsPayload?) — the container-logs sheet
+    // is gone; the action routes to the Logs tab instead.
     // #258 was: readiness[id] + activeHostID (two competing display sources).
     // Now a single per-host display state; base is only ever set from a probe.
     @State private var display        : [UUID: HostDisplay] = [:]
@@ -105,9 +109,7 @@ struct ServersView: View {
                     Task { await reconfigure(host, options: options) }
                 }
             }
-            .sheet(item: $logsPayload) { payload in
-                ContainerLogsView(payload: payload)
-            }
+            // #339 was: .sheet(item: $logsPayload) { ContainerLogsView(payload:) }
             .sheet(item: $scanFor) { host in
                 containerScanSheet(host: host)
             }
@@ -380,10 +382,11 @@ struct ServersView: View {
 
                     statusRegion(host, state: state)
 
-                    // Metrics only when idle on a container-bearing base.
-                    if case .base(let b) = state, b.hasContainer {
-                        metricsRow(host)
-                    }
+                    // #341 was: metrics only when idle on a container-bearing
+                    // base — the card changed height with every state flip.
+                    // Fixed footprint now: the strip is ALWAYS rendered ("—"
+                    // placeholders, dimmed while an op runs).
+                    metricsStrip(host, state: state)
 
                     actionBar(host, state: state)
                 }
@@ -394,64 +397,114 @@ struct ServersView: View {
     }
 
     // Status region — exactly one of: operation / error / base.
+    // #341: fixed-height container (≈58pt) so the pill / pill+bar / failed
+    // pill swap never changes the card height; the existing `.animation`
+    // crossfades the content.
     @ViewBuilder
     private func statusRegion(_ host: ServerHost, state: HostDisplay) -> some View {
-        switch state {
-        case .running(let op, let phase, let note, _):
-            VStack(alignment: .leading, spacing: 12) {
-                OlcStatusPill(tone: .progress,
-                              title: "\(op.verb)…",
-                              subtitle: "\(note) · \(min(phase + 1, op.stepCount))/\(op.stepCount)") {
-                    ProgressView().controlSize(.small)
+        Group {
+            switch state {
+            case .running(let op, let phase, let note, _):
+                VStack(alignment: .leading, spacing: 12) {
+                    OlcStatusPill(tone: .progress,
+                                  title: "\(op.verb)…",
+                                  subtitle: "\(note) · \(min(phase + 1, op.stepCount))/\(op.stepCount)") {
+                        ProgressView().controlSize(.small)
+                    }
+                    // #338 was: ProgressView(value:total:).tint(amber) — extracted
+                    // into the shared OlcProgressBar (also used by the Logs fetch).
+                    OlcProgressBar(fraction: Double(min(phase + 1, op.stepCount))
+                                           / Double(max(op.stepCount, 1)))
                 }
-                ProgressView(value: Double(min(phase + 1, op.stepCount)),
-                             total: Double(max(op.stepCount, 1)))
-                    .tint(Theme.Palette.amber)
+            case .failed(let op, let phase, let message, _):
+                OlcStatusPill(tone: .error,
+                              title: L10n.vpsOpFailed_fmt.formatted(op.verb),
+                              subtitle: "\(phase.replacingOccurrences(of: "…", with: "")) · \(message)")
+            case .base(let b):
+                OlcStatusPill(tone: b.tone, title: b.title, subtitle: b.subtitle)
             }
-        case .failed(let op, let phase, let message, _):
-            OlcStatusPill(tone: .error,
-                          title: L10n.vpsOpFailed_fmt.formatted(op.verb),
-                          subtitle: "\(phase.replacingOccurrences(of: "…", with: "")) · \(message)")
-        case .base(let b):
-            OlcStatusPill(tone: b.tone, title: b.title, subtitle: b.subtitle)
         }
+        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
     }
 
-    private func metricsRow(_ host: ServerHost) -> some View {
-        HStack(alignment: .top, spacing: 18) {
-            pingMetric(host)
-            if let s = vpsStats[host.id] {
-                if !s.disk.isEmpty   { OlcMetric(label: "Disk",   value: s.disk) }
-                if !s.ram.isEmpty    { OlcMetric(label: "RAM",    value: s.ram) }
-                if !s.uptime.isEmpty { OlcMetric(label: "Uptime", value: s.uptime) }
-            }
+    // #341 was: metricsRow — a conditional 4×OlcMetric two-deck row (17pt mono).
+    // Now a one-line always-rendered strip: PING 27ms · DISK 36/40G · RAM
+    // 241/2048M · UP 11d, dimmed while an op runs.
+    private func metricsStrip(_ host: ServerHost, state: HostDisplay) -> some View {
+        let stats = vpsStats[host.id]
+        return HStack(spacing: 8) {
+            pingMiniStat(host)
+            statDot
+            OlcMiniStat(label: "Disk", value: Self.shortUsage(stats?.disk))
+            statDot
+            OlcMiniStat(label: "RAM",  value: Self.shortUsage(stats?.ram))
+            statDot
+            OlcMiniStat(label: "Up",   value: Self.shortUptime(stats?.uptime))
             Spacer(minLength: 0)
         }
+        .opacity(state.isRunning ? 0.45 : 1)
     }
 
-    private func pingMetric(_ host: ServerHost) -> OlcMetric {
+    private var statDot: some View {
+        Text("·").font(.caption2).foregroundStyle(Theme.Palette.textTertiary)
+    }
+
+    private func pingMiniStat(_ host: ServerHost) -> OlcMiniStat {
         switch pingLatencies[host.id] {
         case .some(.some(let ms)):
-            return OlcMetric(label: "Ping", value: String(format: "%.0f ms", ms),
-                             tone: ms < 100 ? Theme.Palette.green
-                                 : ms < 300 ? Theme.Palette.orange : Theme.Palette.red)
+            return OlcMiniStat(label: "Ping", value: String(format: "%.0fms", ms),
+                               tone: ms < 100 ? Theme.Palette.green
+                                   : ms < 300 ? Theme.Palette.orange : Theme.Palette.red)
         case .some(.none):
-            return OlcMetric(label: "Ping", value: "✕", tone: Theme.Palette.red)
+            return OlcMiniStat(label: "Ping", value: "✕", tone: Theme.Palette.red)
         case .none:
-            return OlcMetric(label: "Ping", value: "—", tone: Theme.Palette.textTertiary)
+            return OlcMiniStat(label: "Ping", value: "—", tone: Theme.Palette.textTertiary)
         }
     }
 
-    // Action bar — one contextual primary + a fixed Check secondary. Both are a
-    // subset of `menuItems`; nothing here is unique to the card.
+    /// #341: compact a `df`/`free` "36G/40G" pair to "36/40G" (shared unit
+    /// suffix hoisted to the right side); mixed units stay as-is. Internal
+    /// static so the unit tests can pin the edge cases.
+    static func shortUsage(_ s: String?) -> String {
+        guard let s, !s.isEmpty else { return "—" }
+        let parts = s.split(separator: "/")
+        guard parts.count == 2,
+              let u0 = parts[0].last, let u1 = parts[1].last,
+              u0 == u1, u0.isLetter else { return s }
+        return "\(parts[0].dropLast())/\(parts[1])"
+    }
+
+    /// #341: compact the `uptime` tail — "3 days" → "3d", "35 min" → "35m";
+    /// the "H:MM" (<1 day) form stays as-is.
+    static func shortUptime(_ s: String?) -> String {
+        guard let s, !s.isEmpty else { return "—" }
+        return s.replacingOccurrences(of: " days", with: "d")
+                .replacingOccurrences(of: " day",  with: "d")
+                .replacingOccurrences(of: " min",  with: "m")
+    }
+
+    // Action bar — one contextual primary + three fixed icon-only quick
+    // actions (#341: 44×44 tinted OlcIconButtons; was one antenna OlcButton).
+    // Everything here is a subset of `menuItems`; nothing is card-exclusive.
     @ViewBuilder
     private func actionBar(_ host: ServerHost, state: HostDisplay) -> some View {
         HStack(spacing: 8) {
             primaryButton(host, state: state)
-            OlcButton(systemImage: "antenna.radiowaves.left.and.right", role: .secondary) {
+            OlcIconButton(systemImage: "antenna.radiowaves.left.and.right") {
                 Task { await checkServer(host) }
             }
             .disabled(actionsDisabled)
+            .accessibilityLabel(L10n.vpsCheckServer.localized())
+            OlcIconButton(systemImage: "arrow.down.doc", tint: Theme.Palette.green) {
+                logsRouter.request = .init(hostID: host.id, autofetch: true)   // #339 route
+            }
+            .disabled(actionsDisabled || !hasContainer(host))
+            .accessibilityLabel(L10n.actionContainerLogs.localized())
+            OlcIconButton(systemImage: "slider.horizontal.3", tint: Theme.Palette.orange) {
+                reconfigureFor = host
+            }
+            .disabled(actionsDisabled || !hasContainer(host))
+            .accessibilityLabel(L10n.actionChangeRoomTransport.localized())
         }
     }
 
@@ -513,8 +566,11 @@ struct ServersView: View {
                     Task { await startContainer(host) }
                 })
             }
-            items.append(.action(L10n.actionDownloadContainerLogs.localized(), systemImage: "arrow.down.doc") {
-                Task { await fetchLogs(host) }
+            // #339 was: "Download container logs" → fetchLogs(host) + sheet.
+            // Now routes to the Logs tab (Container category, this host) and
+            // auto-starts the fetch there.
+            items.append(.action(L10n.actionContainerLogs.localized(), systemImage: "arrow.down.doc") {
+                logsRouter.request = .init(hostID: host.id, autofetch: true)
             })
             items.append(.action(L10n.actionChangeRoomTransport.localized(), systemImage: "slider.horizontal.3") {
                 reconfigureFor = host
@@ -759,24 +815,10 @@ struct ServersView: View {
         }
     }
 
-    // MARK: Container logs / scan (no base change → outside `run`)
-
-    private func fetchLogs(_ host: ServerHost) async {
-        guard let pw = password(for: host) else {
-            alertText = L10n.alertPasswordMissingShort.localized(); return
-        }
-        guard let cname = host.lastContainerName else {
-            alertText = L10n.containerNotInstalled.localized(); return
-        }
-        do {
-            let output = try await provisioner.containerLogs(
-                on: host, password: pw, containerName: cname,
-                tail: SettingsStore.shared.containerLogsTailLines)
-            logsPayload = ContainerLogsPayload(containerName: cname, output: output)
-        } catch {
-            alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription)
-        }
-    }
+    // MARK: Container scan (no base change → outside `run`)
+    // #339 was: fetchLogs(_:) — ran provisioner.containerLogs and presented the
+    // ContainerLogsPayload sheet; replaced by the Logs-tab route (the fetch now
+    // runs inside LogsView with phase progress, #338).
 
     // #303: read the deployed server.yaml + ~/.olcrtc_key for `host`'s linked
     // container and add a ConnectionRecord from it — recovers a usable
@@ -898,3 +940,17 @@ struct ServersView: View {
         alertText = "Restored: \(container.name)"
     }
 }
+
+// #340: both appearance variants.
+#if DEBUG
+#Preview("Manage VPS — Dark") {
+    ServersView(serverStore: ServerHostStore(), connections: ConnectionStore(),
+                logsRouter: LogsRouter())
+        .preferredColorScheme(.dark)
+}
+#Preview("Manage VPS — Light") {
+    ServersView(serverStore: ServerHostStore(), connections: ConnectionStore(),
+                logsRouter: LogsRouter())
+        .preferredColorScheme(.light)
+}
+#endif

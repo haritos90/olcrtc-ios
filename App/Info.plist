@@ -30,7 +30,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>241</string>
+	<string>248</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -44,7 +44,5 @@
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
-	<key>UIUserInterfaceStyle</key>
-	<string>Dark</string>
 </dict>
 </plist>

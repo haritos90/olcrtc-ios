@@ -27,12 +27,29 @@ struct OlcrtcApp: App {
     }
 }
 
+// MARK: - Logs routing (#339)
+//
+// Manage VPS's "Container logs" no longer presents a sheet — it routes to the
+// Logs tab (Container category, that host) and auto-starts the fetch there.
+// The router is the one piece of shared state: ServersView writes a request,
+// MainTabView (which owns the tab selection) switches to the Logs tab, and
+// LogsView consumes + clears the request.
+@MainActor
+final class LogsRouter: ObservableObject {
+    struct Request: Equatable {
+        let hostID: UUID
+        let autofetch: Bool
+    }
+    @Published var request: Request?
+}
+
 struct MainTabView: View {
     @StateObject  private var store       = ConnectionStore()
     @StateObject  private var tunnel      = TunnelManager()
     @StateObject  private var ipCheck     = IPChecker()
     @StateObject  private var speed       = SpeedTest()
     @StateObject  private var serverStore = ServerHostStore()
+    @StateObject  private var logsRouter  = LogsRouter()   // #339
     @ObservedObject private var settings  = SettingsStore.shared
 
     /// One-shot guard so the auto-connect setting only fires on cold start,
@@ -56,7 +73,8 @@ struct MainTabView: View {
                 .tabItem { Label(L10n.tabConnections.localized(), systemImage: "network") }
                 .tag(0)
 
-            ServersView(serverStore: serverStore, connections: store)
+            // #339: + logsRouter, so "Container logs" can route to the Logs tab.
+            ServersView(serverStore: serverStore, connections: store, logsRouter: logsRouter)
                 .tabItem { Label(L10n.tabServers.localized(), systemImage: "server.rack") }
                 .tag(1)
 
@@ -65,7 +83,12 @@ struct MainTabView: View {
                 .tabItem { Label(L10n.tabConfig.localized(), systemImage: "slider.horizontal.3") }
                 .tag(2)
 
-            LogsView(serverStore: serverStore, isActive: selectedTab == 3)
+            // #316 was: LogsView(serverStore: serverStore, isActive: selectedTab == 3)
+            // — the isActive flag had been unused since #294; dropped with the
+            // single-stack Logs rework.
+            // #338: + connections, so the container source card can star the
+            // primary connection's host. #339: + router (Manage VPS → Logs).
+            LogsView(serverStore: serverStore, connections: store, router: logsRouter)
                 .tabItem { Label(L10n.tabLogs.localized(), systemImage: "doc.text") }
                 .tag(3)
 
@@ -85,6 +108,16 @@ struct MainTabView: View {
         // font in the view tree — caption, headline, body, etc. — so this
         // single modifier rescales the whole app.
         .dynamicTypeSize(settings.resolvedTypeSize)
+        // #340: appearance from the Settings picker (nil = follow the system).
+        // The Info.plist UIUserInterfaceStyle=Dark enforcement is gone — it
+        // would have overridden this modifier.
+        .preferredColorScheme(settings.appearanceMode.colorScheme)
+        // #339: a logs request switches to the Logs tab; LogsView consumes the
+        // request itself (category + host + autofetch) and clears it to nil —
+        // which must not switch tabs again, hence the nil check.
+        .onChange(of: logsRouter.request) { _, req in
+            if req != nil { selectedTab = 3 }
+        }
         .onAppear {
             guard !didAutoConnect else { return }
             didAutoConnect = true
