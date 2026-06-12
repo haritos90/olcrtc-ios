@@ -327,4 +327,80 @@ final class TunnelManagerStateTests: XCTestCase {
         XCTAssertEqual(manager.state, .failed(L10n.validateClientIDEmpty.localized()))
         XCTAssertEqual(manager.connectEpoch, e0, "validation failure must not bump the epoch")
     }
+
+    // boc #313
+    // MARK: Bound port (#313)
+    //
+    // `boundPort` is the port the live attempt actually bound — the snapshot
+    // preflight reserved (#308: the engine binds exactly it or the attempt
+    // fails). The Settings port check compares against it, so its lifecycle is
+    // part of the UI contract: nil while idle, the snapshot while
+    // connecting/connected (even after a live Settings edit), nil again the
+    // moment the session ends. Like the epoch tests above, preflight runs
+    // synchronously on MainActor, so `boundPort` is observable right after
+    // connect() returns, before the detached engine task gets a turn.
+
+    // Preflight probes the configured port with PortAvailability.isFree and
+    // fails the attempt on a busy one, so the tests below must configure a
+    // genuinely free port first.
+    private func someFreePort() -> Int? {
+        for _ in 0..<20 {
+            let candidate = UInt16.random(in: 20_000...60_000)
+            if PortAvailability.isFree(candidate) { return Int(candidate) }
+        }
+        return nil
+    }
+
+    func testBoundPortIsNilOnFreshInstance() {
+        XCTAssertNil(makeManager().boundPort)
+    }
+
+    // The core #313 fix: the snapshot must NOT follow a later Settings edit.
+    // The old check assumed configured == bound, so while connected any value
+    // typed into the port field was labeled "in use by olcrtc tunnel".
+    func testBoundPortTracksTheSnapshotNotTheLiveSetting() throws {
+        let s = SettingsStore.shared
+        let saved = s.socksPort
+        defer { s.socksPort = saved }
+        let free = try XCTUnwrap(someFreePort(), "no free local port to test on")
+
+        s.socksPort = free
+        let manager = makeManager()
+        manager.connect(record: record(with: validParams()))
+        XCTAssertEqual(manager.state, .connecting)
+        XCTAssertEqual(manager.boundPort, free, "preflight must publish the reserved port")
+
+        // Live port edit while the attempt is up: the snapshot stands.
+        s.socksPort = free == 8808 ? 8809 : 8808
+        XCTAssertEqual(manager.boundPort, free,
+                       "boundPort must keep the connect-time snapshot, not track Settings")
+        manager.state = .disconnected
+    }
+
+    // Session over → no port held. All three terminal/holding transitions clear
+    // the snapshot: .disconnected, .failed, and .waitingForNetwork (the path
+    // monitor stops the engine before entering the hold, releasing the listener).
+    func testBoundPortClearsWhenTheSessionEnds() throws {
+        let s = SettingsStore.shared
+        let saved = s.socksPort
+        defer { s.socksPort = saved }
+
+        let manager = makeManager()
+        for terminal in [ConnectionState.disconnected,
+                         .failed("boom"),
+                         .waitingForNetwork] {
+            // A fresh free port per attempt: the previous iteration's detached
+            // engine task may still (briefly) hold its port, and preflight
+            // fails the attempt on a busy one.
+            s.socksPort = try XCTUnwrap(someFreePort(), "no free local port to test on")
+            manager.state = .disconnected     // connect() requires an idle state
+            manager.connect(record: record(with: validParams()))
+            XCTAssertNotNil(manager.boundPort, "attempt must publish a bound port")
+            manager.state = terminal
+            XCTAssertNil(manager.boundPort, "\(terminal) must clear boundPort")
+        }
+        // Tidy up: .waitingForNetwork keeps bgKeeper alive by design.
+        manager.state = .disconnected
+    }
+    // eoc #313
 }

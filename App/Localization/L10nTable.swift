@@ -135,6 +135,15 @@ enum L10nTable {
         .recoverErrorMissingYAML:    "Server config not found — the deployed server.yaml could not be read.",
         .recoverErrorMissingField_fmt: "Server config is missing '%@'",
 
+        // #314: generate-new-key fallback (server.yaml unreadable/unparseable)
+        .rotateKeyConfirmTitle:      "Server config unreadable — generate a new key?",
+        .rotateKeyConfirmBody:       "The deployed server.yaml could not be read, so the existing connection cannot be recovered. This generates a new encryption key on the server, repairs its config, restarts it, and adds the resulting connection here. Warning: all other devices using this server will lose access until they import the new connection.",
+        .rotateKeyConfirmAction:     "Generate new key",
+        .provisioningRotatingKey:    "Generating new server key…",
+        .rotateKeyResultSuccess:     "New encryption key active",
+        .rotateKeyResultAdded_fmt:   "New key generated — %@/%@ connection added",
+        .rotateKeyFailedNoURI:       "Key rotation finished but the server did not print a URI — check the provisioning log.",
+
         // Container status
         .containerRunning_fmt:       "Container running: %@",
         .containerStopped_fmt:       "Container stopped: %@",
@@ -220,6 +229,8 @@ enum L10nTable {
         .logsPhaseConnecting:        "Connecting…",
         .logsPhaseCommand_fmt:       "podman logs --tail %d %@",
         .logsPhaseReceiving:         "Receiving output…",
+        // #332: rendered-line cap notice
+        .logsRenderTruncated_fmt:    "Showing the newest %d lines — Share or Copy all exports the full history.",
 
         // SettingsView
         .settingsTitle:              "Settings",
@@ -462,6 +473,13 @@ enum L10nTable {
         .subDohFailed_fmt:           "DoH could not resolve %@",
         .subInvalidResponse_fmt:     "HTTP %d",
         .subNoAddress:               "DoH returned an empty address list",
+
+        // #111: subscription import (olcrtc-sub:// links)
+        .subImportTitle:             "Import subscription",
+        .subImportConfirm_fmt:       "Add %d connection(s) from “%@”?",
+        .subImportAddAction:         "Add",
+        .subInvalidLink:             "Subscription link must look like olcrtc-sub://host/path",
+        .subEmptyList:               "The subscription contains no valid connections",
     ]
 
     // MARK: Russian
@@ -579,6 +597,15 @@ enum L10nTable {
         .recoverErrorMissingYAML:    "Конфигурация сервера не найдена — не удалось прочитать развёрнутый server.yaml.",
         .recoverErrorMissingField_fmt: "В конфигурации сервера отсутствует поле «%@»",
 
+        // #314: generate-new-key fallback (server.yaml unreadable/unparseable)
+        .rotateKeyConfirmTitle:      "Конфигурация сервера нечитаема — создать новый ключ?",
+        .rotateKeyConfirmBody:       "Развёрнутый server.yaml не удалось прочитать, поэтому восстановить существующее подключение нельзя. Будет создан новый ключ шифрования на сервере, конфигурация восстановлена, сервер перезапущен, а полученное подключение добавлено здесь. Внимание: все другие устройства, использующие этот сервер, потеряют доступ, пока не импортируют новое подключение.",
+        .rotateKeyConfirmAction:     "Создать новый ключ",
+        .provisioningRotatingKey:    "Создание нового ключа сервера…",
+        .rotateKeyResultSuccess:     "Новый ключ шифрования активен",
+        .rotateKeyResultAdded_fmt:   "Новый ключ создан — подключение %@/%@ добавлено",
+        .rotateKeyFailedNoURI:       "Ротация ключа завершилась, но сервер не вывел URI — проверь журнал provisioning.",
+
         // Container status
         .containerRunning_fmt:       "Контейнер работает: %@",
         .containerStopped_fmt:       "Контейнер остановлен: %@",
@@ -665,6 +692,8 @@ enum L10nTable {
         // deliberately English — a literal command line, not translated
         .logsPhaseCommand_fmt:       "podman logs --tail %d %@",
         .logsPhaseReceiving:         "Получение вывода…",
+        // #332: rendered-line cap notice
+        .logsRenderTruncated_fmt:    "Показаны последние %d строк — «Поделиться» или «Копировать всё» выгружает полную историю.",
 
         // SettingsView
         .settingsTitle:              "Настройки",
@@ -907,5 +936,12 @@ enum L10nTable {
         .subDohFailed_fmt:           "DoH не смог разрешить %@",
         .subInvalidResponse_fmt:     "HTTP %d",
         .subNoAddress:               "DoH вернул пустой список адресов",
+
+        // #111: subscription import (olcrtc-sub:// links)
+        .subImportTitle:             "Импорт подписки",
+        .subImportConfirm_fmt:       "Добавить соединений: %d (из «%@»)?",
+        .subImportAddAction:         "Добавить",
+        .subInvalidLink:             "Ссылка подписки должна иметь вид olcrtc-sub://host/path",
+        .subEmptyList:               "Подписка не содержит действительных соединений",
     ]
 }

@@ -91,7 +91,10 @@ final class ConnectionStoreTests: XCTestCase {
         }
         XCTAssertEqual(loaded.id, r.id)
         XCTAssertEqual(loaded.name, "MyServer")
-        XCTAssertEqual(loaded.groupName, L10n.groupDefault.localized())
+        // #348 was: XCTAssertEqual(loaded.groupName, L10n.groupDefault.localized())
+        // #348: groupName persists the raw token ("Servers"); #344 changed only the
+        // *display* value (displayGroupName → "Connections"), so the two diverged.
+        XCTAssertEqual(loaded.groupName, ConnectionRecord.defaultGroupName)
         guard case .olcrtc(let p) = loaded.details else {
             XCTFail("Expected olcrtc details"); return
         }

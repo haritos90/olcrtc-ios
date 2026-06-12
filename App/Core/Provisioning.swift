@@ -522,6 +522,32 @@ final class Provisioner: ObservableObject {
         }
     }
 
+    // #314: "generate new key" fallback for #303 — when recoverConfig cannot
+    // read/parse the deployed server.yaml, this rotates `~/.olcrtc_key` via
+    // scripts/rotate-key.sh (srv.sh-parity script: same key-gen and YAML-write
+    // lines), restarts the container, and returns the resulting URI/container
+    // so the caller can add the connection like a fresh install.
+    func rotateKey(on host: ServerHost, password: String,
+                   containerName: String) async throws -> InstallResult {
+        status = .running(L10n.provisioningRotatingKey.localized())
+        LogStore.shared.startSession(.provisioning)
+        LogStore.shared.log(.provisioning, "→ Rotate key: \(containerName) on \(host.host)")
+        do {
+            try await ensureReachable(host)
+            let result = try await SSHRunner.rotateKey(host: host, password: password,
+                                                       containerName: containerName,
+                                                       onStep: stepHandler())
+            LogStore.shared.log(.provisioning,
+                "✓ Key rotated — new URI: \(LogStore.redactSecrets(result.uri))")
+            status = .success(L10n.rotateKeyResultSuccess.localized())
+            return result
+        } catch {
+            LogStore.shared.log(.provisioning, "✗ Rotate key failed: \(error.localizedDescription)")
+            status = .failure(error.localizedDescription)
+            throw error
+        }
+    }
+
     func reboot(on host: ServerHost, password: String) async throws {
         status = .running(L10n.provisioningRebootSSH.localized())
         LogStore.shared.startSession(.provisioning)

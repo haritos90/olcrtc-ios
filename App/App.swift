@@ -63,6 +63,14 @@ struct MainTabView: View {
     // `selectedTab` now only does normal `TabView` selection.
     @State private var selectedTab = 0
 
+    // boc #111: olcrtc-sub:// subscription links. A fetched-and-parsed list
+    // waits in `subPrompt` for the user's confirmation ("Add N connections
+    // from …?"); `subError` drives the failure alert.
+    @State private var subPrompt: OlcrtcSubscription?
+    @State private var subSource = ""   // host shown when the list has no #name
+    @State private var subError: String?
+    // eoc #111
+
     var body: some View {
         // #258 shell pass: every tab uses a large title + a single trailing slot
         // (Connections / VPS: +, Logs: ⋯ overflow, Settings: none). Dark-only is
@@ -94,7 +102,9 @@ struct MainTabView: View {
 
             // #300: SettingsView needs live tunnel state to gate the
             // "in use by olcrtc tunnel" port-check result on an actual
-            // connection, not just the configured port number.
+            // connection, not just the configured port number (#313: the
+            // gate compares against `tunnel.boundPort`, the port the live
+            // session actually bound).
             SettingsView(tunnel: tunnel)
                 .tabItem { Label(L10n.tabSettings.localized(), systemImage: "gearshape") }
                 .tag(4)
@@ -118,6 +128,30 @@ struct MainTabView: View {
         .onChange(of: logsRouter.request) { _, req in
             if req != nil { selectedTab = 3 }
         }
+        // boc #111: subscription links. olcrtc-sub://host/path → fetch
+        // https://host/path (SubscriptionFetcher), parse the sub.md body,
+        // then confirm before importing into the regular ConnectionStore.
+        .onOpenURL { handleIncomingURL($0) }
+        .alert(L10n.subImportTitle.localized(), isPresented: Binding(
+            get: { subPrompt != nil },
+            set: { if !$0 { subPrompt = nil } }
+        )) {
+            Button(L10n.subImportAddAction.localized()) { importSubscription() }
+            Button(L10n.cancel.localized(), role: .cancel) { subPrompt = nil }
+        } message: {
+            Text(L10n.subImportConfirm_fmt.formatted(
+                subPrompt?.entries.count ?? 0,
+                subPrompt?.name ?? subSource))
+        }
+        .alert(L10n.subImportTitle.localized(), isPresented: Binding(
+            get: { subError != nil },
+            set: { if !$0 { subError = nil } }
+        )) {
+            Button(L10n.ok.localized()) { subError = nil }
+        } message: {
+            Text(subError ?? "")
+        }
+        // eoc #111
         .onAppear {
             guard !didAutoConnect else { return }
             didAutoConnect = true
@@ -129,4 +163,61 @@ struct MainTabView: View {
             }
         }
     }
+
+    // boc #111: subscription-link handling
+
+    /// Entry point for URLs opened with the app's registered schemes.
+    /// Only `olcrtc-sub://` does anything today; a plain `olcrtc://` link
+    /// still goes through Add connection → Paste URI.
+    private func handleIncomingURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "olcrtc-sub" else { return }
+        Task {
+            do {
+                let source = try OlcrtcSubscription.httpsURL(from: url)
+                LogStore.shared.log(.connection,
+                    "⬇ subscription fetch → \(source.host ?? source.absoluteString)")
+                let body = try await SubscriptionFetcher.fetch(from: source)
+                let sub  = OlcrtcSubscription.parse(body)
+                guard !sub.entries.isEmpty else {
+                    throw OlcrtcSubscription.SubError.emptySubscription
+                }
+                if sub.skippedURIs > 0 {
+                    LogStore.shared.log(.connection,
+                        "⚠ subscription: skipped \(sub.skippedURIs) unparseable URI line(s)")
+                }
+                subSource = source.host ?? source.absoluteString
+                subPrompt = sub
+            } catch {
+                LogStore.shared.log(.connection,
+                    "✗ subscription import failed: \(error.localizedDescription)")
+                subError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Confirmed import: each subscription entry becomes a regular
+    /// ConnectionRecord (same store path as QR / Paste-URI). The list's
+    /// `#name` doubles as the group so a subscription's servers stay together.
+    private func importSubscription() {
+        guard let sub = subPrompt else { return }
+        let group = sub.name ?? ConnectionRecord.defaultGroupName
+        for entry in sub.entries {
+            let p = entry.parsed
+            let params = OlcrtcConnection(
+                carrier:      p.carrier,
+                transport:    p.transport,
+                roomID:       p.roomID,
+                key:          p.key,
+                clientID:     p.clientID,
+                vp8FPS:       p.vp8FPS,
+                vp8BatchSize: p.vp8BatchSize)
+            store.add(ConnectionRecord(name: entry.recordName,
+                                       groupName: group,
+                                       details: .olcrtc(params)))
+        }
+        LogStore.shared.log(.connection,
+            "⬇ subscription: imported \(sub.entries.count) connection(s) from \(subSource)")
+        subPrompt = nil
+    }
+    // eoc #111
 }

@@ -18,6 +18,8 @@ enum SSHRunner {
         static let script = "/tmp/olcrtc-ios-srv.sh"
         static let log    = "/tmp/olcrtc-install.log"
         static let exit   = "/tmp/olcrtc-install.exit"
+        // #314: key-rotation fallback script (see rotateKey below).
+        static let rotateScript = "/tmp/olcrtc-ios-rotate-key.sh"
     }
 
     private static let installMaxPolls: Int               = 100   // 100 × 15 s = 25 min max
@@ -83,24 +85,37 @@ enum SSHRunner {
         return try await pollUntilDone(host: host, password: password, onStep: onStep)
     }
 
+    // boc #314: generalize the srv.sh-only loader so rotate-key.sh ships and
+    // loads the same way (bundle resource, source-tree fallback for dev builds).
+    // was: loadScript() with the "srv" resource name hardcoded inside.
     /// Phase 1 — loads srv.sh from app bundle, falling back to the source tree
     /// for simulator / development builds. Pure: no network, no async.
     private static func loadScript() throws -> String {
-        let url: URL? = Bundle.main.url(forResource: "srv", withExtension: "sh")
+        try loadBundledScript(named: "srv")
+    }
+
+    /// Loads `<name>.sh` from the app bundle, falling back to the source tree
+    /// for simulator / development builds. Pure: no network, no async.
+    private static func loadBundledScript(named name: String) throws -> String {
+        let url: URL? = Bundle.main.url(forResource: name, withExtension: "sh")
             ?? {
                 let srcFile = URL(fileURLWithPath: #filePath)
+                // #314: third delete added — #filePath is App/Core/SSHRunner.swift,
+                // so two deletes landed on App/ and the dev-tree fallback never fired.
                 let projectRoot = srcFile
+                    .deletingLastPathComponent()  // App/Core/
                     .deletingLastPathComponent()  // App/
                     .deletingLastPathComponent()  // project root
-                let candidate = projectRoot.appendingPathComponent("scripts/srv.sh")
+                let candidate = projectRoot.appendingPathComponent("scripts/\(name).sh")
                 return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
             }()
         guard let url, let script = try? String(contentsOf: url, encoding: .utf8) else {
             throw ProvisionError.parseFailed(
-                "srv.sh not found — rebuild the app (xcodegen + clean build)")
+                "\(name).sh not found — rebuild the app (xcodegen + clean build)")
         }
         return script
     }
+    // eoc #314
 
     /// Phase 2 — uploads srv.sh to the VPS via base64-encoded printf.
     private static func uploadScript(host: ServerHost, password: String,
@@ -446,7 +461,10 @@ enum SSHRunner {
         }
         // NOTE: videochannel uses OLCRTC_VIDEO_{W,H,FPS,BITRATE,HW,CODEC,
         // QR_RECOVERY,QR_SIZE,TILE_MODULE,TILE_RS} per scripts/srv.sh.
-        // Server defaults apply — not yet exposed in the UI.
+        // #097 was: "Server defaults apply — not yet exposed in the UI."
+        // #097 decision: deliberately never exposed — ten niche knobs for a
+        // works-but-slow transport aren't worth the UI sprawl; the install
+        // sheet's videochannel footer tells the user server defaults apply.
         //
         // #093: OLCRTC_CACHE_DIR is another server-side knob (scripts/srv.sh:
         // CACHE_DIR="${OLCRTC_CACHE_DIR:-$HOME/.cache/olcrtc}") that relocates the Go
@@ -986,7 +1004,11 @@ enum SSHRunner {
             echo "ERROR: server.yaml not found for ${CNAME} (deploy dir: ${DEPLOY_DIR:-unknown})" >&2; exit 1
         fi
         echo "OLCRTC_RECOVER_YAML_BEGIN"
-        cat "$CONFIG"
+        # #314: tolerate an unreadable file (was: bare `cat "$CONFIG"`) — the
+        # sentinels then bracket an empty body, parseRecoveredConfig throws a
+        # typed RecoverConfigError, and the UI can offer the "generate new
+        # key" fallback instead of surfacing an opaque SSH exit-1 error.
+        cat "$CONFIG" 2>/dev/null || true
         echo "OLCRTC_RECOVER_YAML_END"
         echo "OLCRTC_RECOVER_KEY=$(cat ~/.olcrtc_key 2>/dev/null | tr -d '[:space:]' || echo "")"
         """#
@@ -1109,6 +1131,45 @@ enum SSHRunner {
                               command: recoverConfigScript(containerName: containerName))
         }
         return try parseRecoveredConfig(from: output)
+    }
+
+    // MARK: #314 — Rotate key ("generate new key" fallback for #303)
+    //
+    // When recoverConfig finds server.yaml unreadable/unparseable, the
+    // read-only path cannot extract the key/params. scripts/rotate-key.sh
+    // repairs the server instead: it rotates `~/.olcrtc_key` and rewrites
+    // server.yaml using srv.sh's verbatim key-generation / YAML-writing lines
+    // (parity guarded by Tests/RotateKeyScriptTests.swift), restarts the
+    // container, and prints the same OLCRTC_URI= / OLCRTC_CONTAINER= contract
+    // as srv.sh — so `parseInstallResult` is reused unchanged.
+    //
+    // Destructive by design: the new key cuts off every other client of that
+    // server. The UI confirms explicitly before calling this.
+    static func rotateKey(host: ServerHost, password: String, containerName: String,
+                          onStep: @Sendable @escaping (String) -> Void) async throws -> InstallResult {
+        onStep(L10n.provisioningRotatingKey.localized())
+        let script = try loadBundledScript(named: "rotate-key")
+        await MainActor.run { LogStore.shared.log(.provisioning,
+            "✓ rotate-key.sh \(script.count) bytes") }
+        let b64 = Data(script.utf8).base64EncodedString()
+        let safeCname = shellSafe(containerName)
+        // Upload over the same base64-printf channel as srv.sh (uploadScript),
+        // then run synchronously: openssl + config rewrite + podman restart
+        // take seconds (like reconfigureScript), so the nohup/poll install
+        // pipeline would be overkill. OLCRTC_CONFIG_NAME is set explicitly to
+        // keep the auto-provisioned marker unconditional (see installEnv).
+        let output = try await _withConnection(host: host, password: password) { client in
+            _ = try await execute(client: client, label: "upload rotate-key.sh",
+                command: "printf '%s' '\(b64)' | base64 -d > \(RemotePaths.rotateScript)" +
+                         " && chmod +x \(RemotePaths.rotateScript)")
+            return try await execute(client: client, label: "rotate key",
+                command: "OLCRTC_CONTAINER=\(safeCname) OLCRTC_CONFIG_NAME=auto-provisioned " +
+                         RemotePaths.rotateScript)
+        }
+        guard let result = parseInstallResult(from: output) else {
+            throw ProvisionError.parseFailed(L10n.rotateKeyFailedNoURI.localized())
+        }
+        return result
     }
 
     // MARK: Uninstall script

@@ -24,7 +24,18 @@ struct LogsView: View {
     /// #339: Manage VPS "Container logs" lands here — select Container + that
     /// host, optionally auto-start the fetch, then clear the request.
     @ObservedObject private var router: LogsRouter
-    @ObservedObject private var store = LogStore.shared
+    // #332 was: @ObservedObject private var store = LogStore.shared — every
+    // store publish re-evaluated this whole body (toolbar export string +
+    // filtered/attributed log text) even while another tab was selected.
+    // The store is now read directly; the body refreshes off the coalesced
+    // `revision` via `logRefreshTick`, gated on tab visibility below.
+    private let store = LogStore.shared
+    /// #332: bumped from `store.$revision` (≤4/s) while the tab is visible —
+    /// the only log-driven invalidation this view has left.
+    @State private var logRefreshTick = 0
+    /// #332: Logs is a persistent TabView child; without this gate a hidden
+    /// Logs tab would still rebuild on every revision bump.
+    @State private var isTabVisible = false
     @StateObject private var provisioner = Provisioner()
 
     @State private var selection: LogCategory = .connection
@@ -47,6 +58,9 @@ struct LogsView: View {
 
     var body: some View {
         NavigationStack {
+            // #332: reading the tick ties this body to the coalesced refresh
+            // (the store itself is no longer observed).
+            let _ = logRefreshTick
             VStack(spacing: 0) {
                 // #316: category switch — short labels so four segments never
                 // wrap; the full category names go to VoiceOver.
@@ -98,6 +112,14 @@ struct LogsView: View {
                     .disabled(currentEntries.isEmpty)
                 }
             }
+            // #332: visibility-gated refresh — hidden tabs skip the tick and
+            // catch up once in onAppear. `$revision` is already coalesced in
+            // LogStore (≤4 bumps/s), so a teardown log storm costs the UI at
+            // most four body re-evaluations per second, and zero when hidden.
+            .onReceive(store.$revision) { _ in
+                if isTabVisible { logRefreshTick &+= 1 }
+            }
+            .onDisappear { isTabVisible = false }  // #332
             // #339: consume a Manage VPS → Logs route. onChange covers the
             // already-mounted view; onAppear covers a LogsView first created
             // by the tab switch itself (request set before it existed).
@@ -105,6 +127,8 @@ struct LogsView: View {
                 consumeLogsRequest(req)
             }
             .onAppear {
+                isTabVisible = true     // #332
+                logRefreshTick &+= 1    // #332: render lines logged while hidden
                 consumeLogsRequest(router.request)
             }
             // #338: advance the fetch phase forward-only from the provisioner's
@@ -389,6 +413,20 @@ enum LogRendering {
         }
     }
 
+    // boc #332
+    /// Rendering cap, independent of the in-memory buffer cap
+    /// (`SettingsStore.logBufferSize`): the monolithic `attributed` rebuild is
+    /// O(rendered lines) per refresh, so capping what's rendered keeps each
+    /// refresh flat no matter how large the buffer grows. Share / Copy / the
+    /// on-disk files keep the full history.
+    static let renderCap = 500
+
+    /// Newest `renderCap` of an already newest-first list (`filtered` output).
+    static func capped(_ entries: [LogEntry]) -> [LogEntry] {
+        entries.count > renderCap ? Array(entries.prefix(renderCap)) : entries
+    }
+    // eoc #332
+
     static func attributed(_ entries: [LogEntry]) -> AttributedString {
         var attr = AttributedString()
         for e in entries {
@@ -447,13 +485,25 @@ struct LogBodyView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            // boc #332: render only the newest `renderCap` lines, with a
+            // truncation notice on top (the list is newest-first) pointing at
+            // Share/Copy for the full history.
+            let visible = LogRendering.capped(items)
             ScrollView {
-                Text(LogRendering.attributed(items))
-                    .font(.system(.caption2, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
+                VStack(alignment: .leading, spacing: 8) {
+                    if visible.count < items.count {
+                        Text(L10n.logsRenderTruncated_fmt.formatted(visible.count))
+                            .font(.caption2)
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                    }
+                    Text(LogRendering.attributed(visible))
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding()
             }
+            // eoc #332
         }
     }
 }

@@ -18,7 +18,9 @@ struct SettingsView: View {
     // #300: live tunnel state, needed to tell "port busy because our tunnel
     // reserved it" apart from "port busy because something else holds it" —
     // the old check compared configured ports only, so it reported "in use
-    // by tunnel" even while disconnected.
+    // by tunnel" even while disconnected. #313: the gate now reads
+    // `tunnel.boundPort` — the port the session actually bound — so a live
+    // port edit in Settings can't mislabel the check either.
     @ObservedObject var tunnel: TunnelManager
 
     @State private var portCheck: PortAvailability.PortState?
@@ -103,13 +105,15 @@ struct SettingsView: View {
 
             Button {
                 let port = UInt16(settings.socksPort)
-                // #300: gate "in use by olcrtc tunnel" on live tunnel state —
-                // only true when the tunnel is actually connected and bound to
-                // exactly this port, not just "this is the configured port"
-                // (that was always true and produced a false positive while
-                // disconnected).
-                let tunnelHoldsPort = tunnel.state.isConnected
-                    && TunnelManager.socksPort == settings.socksPort
+                // #313: compare against the port the tunnel actually bound
+                // (`tunnel.boundPort`, snapshotted at connect; nil unless a
+                // session is live). The #300 gate compared two reads of the
+                // *configured* port — always equal — so while connected, any
+                // value typed into the field was labeled "in use by olcrtc
+                // tunnel" even though the tunnel still holds the old port.
+                // #313 was: let tunnelHoldsPort = tunnel.state.isConnected
+                //     && TunnelManager.socksPort == settings.socksPort
+                let tunnelHoldsPort = tunnel.boundPort == settings.socksPort
                 let result = PortAvailability.state(port, tunnelHoldsPort: tunnelHoldsPort)
                 portCheck = result
                 // #287: one L10n key per concept instead of assembling the line
@@ -129,9 +133,11 @@ struct SettingsView: View {
                     Spacer()
                     if let r = portCheck {
                         switch r {
-                        case .free:      Text(L10n.portFree.localized()).foregroundStyle(.green)
-                        case .busyOurs:  Text(L10n.portInUseByOlcrtc.localized()).foregroundStyle(.green)
-                        case .busyOther: Text(L10n.portBusy.localized()).foregroundStyle(.red)
+                        // #317: ad-hoc .green/.red → Theme.Palette status tokens (#258 invariant)
+                        // #317 was: .foregroundStyle(.green) / .foregroundStyle(.red)
+                        case .free:      Text(L10n.portFree.localized()).foregroundStyle(Theme.Palette.green)
+                        case .busyOurs:  Text(L10n.portInUseByOlcrtc.localized()).foregroundStyle(Theme.Palette.green)
+                        case .busyOther: Text(L10n.portBusy.localized()).foregroundStyle(Theme.Palette.red)
                         }
                     }
                 }

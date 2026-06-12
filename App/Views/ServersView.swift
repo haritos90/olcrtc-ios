@@ -53,6 +53,10 @@ struct ServersView: View {
     // already-installed-but-unlinked host (#302 auto-detect with no
     // lastConnectionID).
     @State private var recoverConfirmHost      : ServerHost?
+    // #314: fallback when #303 recovery finds server.yaml unreadable or
+    // unparseable — confirm before rotating ~/.olcrtc_key (destructive for
+    // every other client of that server).
+    @State private var rotateKeyConfirmHost    : ServerHost?
     @State private var pingTimer       : Timer?
 
     @ObservedObject private var settings = SettingsStore.shared
@@ -211,6 +215,27 @@ struct ServersView: View {
                 Button(L10n.cancel.localized(), role: .cancel) { recoverConfirmHost = nil }
             } message: { _ in
                 Text(L10n.recoverConfirmBody.localized())
+            }
+            // #314: #303's fallback branch — server.yaml was unreadable or
+            // unparseable, so offer to generate a new key (rotate ~/.olcrtc_key,
+            // repair server.yaml, restart) instead of just failing. Destructive:
+            // the new key cuts off every other client of this server.
+            .confirmationDialog(
+                L10n.rotateKeyConfirmTitle.localized(),
+                isPresented: Binding(
+                    get: { rotateKeyConfirmHost != nil },
+                    set: { if !$0 { rotateKeyConfirmHost = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: rotateKeyConfirmHost
+            ) { host in
+                Button(L10n.rotateKeyConfirmAction.localized(), role: .destructive) {
+                    rotateKeyConfirmHost = nil
+                    Task { await rotateKey(host) }
+                }
+                Button(L10n.cancel.localized(), role: .cancel) { rotateKeyConfirmHost = nil }
+            } message: { _ in
+                Text(L10n.rotateKeyConfirmBody.localized())
             }
         }
     }
@@ -856,6 +881,53 @@ struct ServersView: View {
             updated.lastConnectionID = record.id
             serverStore.update(updated, password: nil)
             alertText = L10n.recoverResultSuccess_fmt.formatted(cfg.carrier, cfg.transport)
+        // boc #314: server.yaml unreadable/unparseable — the key/params can't
+        // be extracted read-only, so offer the "generate new key" fallback
+        // instead of a dead-end error alert. Other errors (SSH, network,
+        // missing container) keep the plain alert below.
+        } catch let error as SSHRunner.RecoverConfigError {
+            LogStore.shared.log(.provisioning,
+                "⚠ Recover unusable (\(error.localizedDescription)) — offering key rotation (#314)")
+            rotateKeyConfirmHost = host
+        // eoc #314
+        } catch {
+            alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription)
+        }
+    }
+
+    // #314: "generate new key" fallback for #303 — rotates ~/.olcrtc_key on the
+    // VPS via scripts/rotate-key.sh (repairs server.yaml with srv.sh's exact
+    // key/yaml semantics + restarts the container), then adds the resulting
+    // connection exactly like a fresh install does (parse OLCRTC_URI=).
+    private func rotateKey(_ host: ServerHost) async {
+        guard let pw = password(for: host) else {
+            alertText = L10n.alertPasswordMissingShort.localized(); return
+        }
+        guard let cname = host.lastContainerName else {
+            alertText = L10n.containerNotInstalled.localized(); return
+        }
+        do {
+            let result = try await provisioner.rotateKey(on: host, password: pw, containerName: cname)
+            let cfg = try OlcrtcURI.parse(result.uri)
+            // vp8 tuning comes from the URI payload (salvaged server values may
+            // differ from this app's global defaults). sei tuning can't round-trip
+            // through OlcrtcURI.Parsed — defaults apply, same as the install path.
+            let params = OlcrtcConnection(
+                carrier:      cfg.carrier,
+                transport:    cfg.transport,
+                roomID:       cfg.roomID,
+                key:          cfg.key,
+                clientID:     cfg.clientID,
+                vp8FPS:       cfg.vp8FPS,
+                vp8BatchSize: cfg.vp8BatchSize
+            )
+            let record = ConnectionRecord(name: host.label, details: .olcrtc(params))
+            connections.add(record)
+            var updated = host
+            updated.lastContainerName = result.containerName
+            updated.lastConnectionID  = record.id
+            serverStore.update(updated, password: nil)
+            alertText = L10n.rotateKeyResultAdded_fmt.formatted(cfg.carrier, cfg.transport)
         } catch {
             alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription)
         }

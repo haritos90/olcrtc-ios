@@ -62,7 +62,7 @@ struct AddServerHostView: View {
                     if isDuplicateLabel {
                         Text(L10n.duplicateServerNameError.localized())
                             .font(.caption)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.Palette.red) // #317 was: .foregroundStyle(.red) — status colors via Theme.Palette (#258 invariant)
                     }
                 }
                 Section(L10n.sshAccessHeader.localized()) {
@@ -92,7 +92,8 @@ struct AddServerHostView: View {
                             if let result = testResult {
                                 Text(result)
                                     .font(.caption)
-                                    .foregroundStyle(result.hasPrefix("✓") ? .green : .red)
+                                    // #317 was: result.hasPrefix("✓") ? .green : .red
+                                    .foregroundStyle(result.hasPrefix("✓") ? Theme.Palette.green : Theme.Palette.red)
                             }
                         }
                     }

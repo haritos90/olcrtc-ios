@@ -121,10 +121,14 @@ server↔client wire contract (URI format, env vars, `srv.sh` patches).
 ## srv.sh parity
 
 `scripts/srv.sh` is a verbatim copy of upstream `olcrtc-upstream/script/srv.sh` with our
-changes wrapped in `# boc olcrtc-ios` / `# eoc olcrtc-ios` markers.
-`scripts/parity_check.py` runs as an Xcode pre-build phase and fails the build if
-any line **outside** those markers drifts from upstream. After touching
-`srv.sh`, run it directly — it must pass:
+changes wrapped in `# boc olcrtc-ios` / `# eoc olcrtc-ios` markers, and upstream lines
+we deliberately do **not** adopt carried as commented-out copies inside
+`# boc olcrtc-ios-rejected: <reason>` / `# eoc olcrtc-ios-rejected` blocks (#325).
+`scripts/parity_check.py` runs as an Xcode pre-build phase and fails the build in
+**both directions**: if any line outside the markers drifts from upstream, or if an
+upstream line is neither adopted nor explicitly rejected — new upstream lines must be
+adopted or rejected-with-reason, plus a TODO.md task for the triage decision. After
+touching `srv.sh`, run it directly — it must pass:
 
 ```bash
 python3 scripts/parity_check.py

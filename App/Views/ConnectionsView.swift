@@ -23,7 +23,13 @@ struct ConnectionsView: View {
     @ObservedObject var ipCheck : IPChecker
     @ObservedObject var speed   : SpeedTest
 
-    @AppStorage("olcrtc_routing_mode") private var routingRaw = RoutingMode.allTunnel.rawValue
+    // boc #327: routing switch removed for now — it only rerouted the app's own
+    // diagnostics (IP check / speed test), never the actual SOCKS tunnel, and the
+    // real thing needs upstream/core support (no bypass mode in Mobile.objc.h).
+    // Not currently relevant; uncomment this block (and the section/binding below)
+    // when routing returns.
+    // @AppStorage("olcrtc_routing_mode") private var routingRaw = RoutingMode.allTunnel.rawValue
+    // eoc #327
 
     @State private var showAdd        = false
     @State private var editConn       : ConnectionRecord?
@@ -44,13 +50,16 @@ struct ConnectionsView: View {
         case done(ready: PingOutcome, rtt: PingOutcome)
     }
 
-    private var routingMode: RoutingMode { RoutingMode(rawValue: routingRaw) ?? .allTunnel }
+    // boc #327: routing switch removed for now (see the @AppStorage block above)
+    // private var routingMode: RoutingMode { RoutingMode(rawValue: routingRaw) ?? .allTunnel }
+    // eoc #327
 
     // #273: `.allDirect` forces the app's own traffic (IP check / speed test /
     // in-app SOCKSSession) off the tunnel even while connected — a global kill
     // switch; otherwise route through the tunnel only when it's actually up.
+    // #327 was: routingMode == .allDirect ? .direct : (tunnel.state.isConnected ? .tunnel : .direct)
     private var currentMode: RouteMode {
-        routingMode == .allDirect ? .direct : (tunnel.state.isConnected ? .tunnel : .direct)
+        tunnel.state.isConnected ? .tunnel : .direct
     }
 
     var body: some View {
@@ -58,15 +67,17 @@ struct ConnectionsView: View {
             List {
                 Section { heroCard.olcCardRow() }
 
-                Section {
-                    OlcCard {
-                        OlcSegmented(selection: routingBinding,
-                                     options: RoutingMode.allCases.map { ($0, $0.title) })
-                    }
-                    .olcCardRow()
-                } header: {
-                    Text(L10n.routingHeader.localized())
-                }
+                // boc #327: routing switch removed for now (see the @AppStorage block)
+                // Section {
+                //     OlcCard {
+                //         OlcSegmented(selection: routingBinding,
+                //                      options: RoutingMode.allCases.map { ($0, $0.title) })
+                //     }
+                //     .olcCardRow()
+                // } header: {
+                //     Text(L10n.routingHeader.localized())
+                // }
+                // eoc #327
 
                 Section {
                     OlcCard(padding: 0) {
@@ -254,19 +265,21 @@ struct ConnectionsView: View {
 
     // MARK: 2. Routing
 
-    private var routingBinding: Binding<RoutingMode> {
-        Binding(
-            get: { routingMode },
-            set: { newMode in
-                let prev = routingMode
-                routingRaw = newMode.rawValue
-                if prev != newMode {
-                    LogStore.shared.log(.connection,
-                        "↻ routing mode: \(prev.title) → \(newMode.title)")
-                }
-            }
-        )
-    }
+    // boc #327: routing switch removed for now (see the @AppStorage block)
+    // private var routingBinding: Binding<RoutingMode> {
+    //     Binding(
+    //         get: { routingMode },
+    //         set: { newMode in
+    //             let prev = routingMode
+    //             routingRaw = newMode.rawValue
+    //             if prev != newMode {
+    //                 LogStore.shared.log(.connection,
+    //                     "↻ routing mode: \(prev.title) → \(newMode.title)")
+    //             }
+    //         }
+    //     )
+    // }
+    // eoc #327
 
     // MARK: 3. Diagnostics (merged IP-check + speed-test)
 

@@ -17,6 +17,12 @@ import Foundation
 //
 // Stored in UserDefaults via @AppStorage in ConnectionsView. When more
 // fields are added we'll promote this to a proper AppSettings store.
+//
+// #327: the Routing switch is removed from ConnectionsView for now — it only
+// ever rerouted the app's own diagnostics, and a real `.allDirect` needs
+// upstream/core support (no bypass mode in Mobile.objc.h). This enum and its
+// L10n strings are kept for when routing returns; the commented-out UI lives
+// in ConnectionsView under `boc #327` markers.
 
 enum RoutingMode: String, CaseIterable, Identifiable {
     case allTunnel
