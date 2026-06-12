@@ -89,7 +89,6 @@ Future / blocked / someday. Promote to Open when picked up.
 | 314 | P2 | M | features | #303 "generate new key" fallback when server.yaml is unreadable/unparseable (rotate `~/.olcrtc_key`, write back via a new srv.sh-parity script, then add the resulting connection) |
 | 317 | P3 | S | ux | Unify ad-hoc `.red`/`.green` styles with `Theme.Palette` (#258 invariant) — AddServerHostView, AddConnectionView, SettingsView port check |
 | 320 | P3 | S | parity | srv.sh `VP8_FPS`/`VP8_BATCH` (60/8) and SEI fps default (60) predate upstream's CPU-reduction pass to `fps:30` (#260→#319 sync) — re-benchmark mobile throughput/CPU at 30fps before changing the boc defaults |
-| 321 | P2 | L | docs | README: rewrite the iPhone-install section around SideStore/LiveContainer + merge the build sections into one "Build it yourself" |
 | 323 | P3 | S | ux | #295 (`d8d04df`): non-ASCII labels sanitize to the `"server"` log prefix — two Cyrillic-named hosts collide (confusing "duplicate name" error on add; pre-#295 hosts silently share one container log file) |
 | 324 | P3 | XS | observability | #294 (`d8d04df`): IPChecker never calls `startSession(.diagnostics)` — IP-check lines miss `diagnostics.log` until a speed test creates the writer, while the Logs tab header advertises that file |
 | 325 | P2 | M | parity | parity_check 2.0: two-way line-by-line check — rejected upstream lines stay in srv.sh commented with a reason marker; unaccounted upstream additions fail the check into a triage task |
@@ -249,44 +248,6 @@ it with **Dark / Light / Gray** colour schemes that actually swap the palette (`
 is currently forced-dark (`UIUserInterfaceStyle=Dark` in project.yml) — Light/Gray require lifting that
 and authoring light + neutral-gray palettes while keeping the design-system component structure. Drop
 the shape/border-only "design direction" framing.
-
-### 321 — README: rewrite iPhone-install + merge build sections
-
-Two changes to `README.md`, ordered so a newbie hits "how do I get this on my iPhone"
-before any build talk, and a dev still finds "how do I build this" right after.
-
-**1. Rewrite "Install without Xcode (sideload)"** around the two most user-friendly
-sideloading apps, primary then alternative:
-
-- **Primary: [SideStore](https://sidestore.io)** — AltStore-based, refreshes apps over
-  Wi-Fi without a cable.
-- **Alternative: [LiveContainer](https://github.com/LiveContainer/LiveContainer)** — runs
-  sideloaded apps inside a container app, no per-app re-signing dance.
-- Link the **iLoader** repos for installing SideStore/LiveContainer themselves (the
-  no-computer-needed install path for the sideloading app).
-- Cover **LocalDevVPN** for auto-renewing the 7-day signature, with the concrete steps
-  for both SideStore and LiveContainer (where the option lives, what it needs).
-- Highlight the convenient flow: copy the `.ipa` asset link straight from the
-  [GitHub Release](../../releases) page and paste it into SideStore/LiveContainer's
-  "add from URL" — the app downloads and installs it directly, no manual `.ipa`
-  download/transfer step.
-- Keep the existing AltStore/Sideloadly + cable-based instructions too (still valid,
-  more familiar to some), but as the secondary/manual path — push detail into a
-  `<details>` block like the current "Build the .ipa yourself" does, so the section
-  stays scannable.
-
-**2. New "Build it yourself" section** — merge the current **Build and run**,
-**Updating**, and the two `<details>` blocks *Building `Mobile.xcframework` from
-source* and *Build the .ipa yourself* into one section covering: clone + submodule,
-fetch/build the framework, `xcodegen`, build & run in Xcode, building the unsigned
-`.ipa`, and pulling updates. Place it **after** the (rewritten) sideload section and
-**before** "Project structure" — sideload-only readers never need to scroll past it.
-Keep the `<details>` pattern for the toolchain-setup and from-source build steps so the
-top-level flow stays short.
-
-Throughout: optimize for a first-time reader to find the SideStore install path
-immediately, while a developer can still find "build it myself" right below — push
-anything more detailed than that into `<details>`, matching the existing README style.
 
 ### 325 — parity_check 2.0: two-way, line-classified srv.sh parity
 
@@ -746,6 +707,7 @@ release notes use; `—` on rows closed before #315 or with nothing to announce.
 | 316 | ux | LogsView (#294) nests a `TabView` inside MainTabView's `TabView` — verify rendering; likely replace with `OlcSegmented` (the pre-#276 pattern) | rebuilt as a single `NavigationStack` (design_handoff_logs_theme §1): `OlcSegmented` category switch (short labels Conn/Diag/VPS/Container, full names via `accessibilityLabel`), ONE `.searchable` + ONE overflow menu, one file-header row (`doc.text` + monospaced file name + line count) attached to the log body; deleted the nested `TabView`, per-tab `NavigationStack`s, `LogTabHeader` (its description now opens the empty-state hint) and the unused `isActive` plumbing (App.swift call site included); per-server container picker/fetch (#295–#297) carried over unchanged | Logs tab redesigned: no more second tab bar — one header, a compact category switch, and a single file row with line count |
 | 318 | observability | Orphaned log files after #294/#295 linger in Documents/logs | `LogStore.init` now calls `cleanupOrphanedLogFiles()`, deleting `ip.log`/`speed.log` (merged into `diagnostics.log` by #294) and the old shared `containerLogs.log` (replaced by per-server files in #295), once per launch | — |
 | 319 | reliability | Integrate upstream olcrtc (e2c4b1e → 39cc3fa) | bumped submodule pin (13 commits): server.go `reinstallSession` now closes the old muxconn before the session swap (fixes "frame too large" when a client reconnects faster than the server can push new-session frames into the dying smux session); jitsi engine hardening — `RequireTargetedPeer` drops untargeted broadcast frames before the peer-latch (already wired via `internal/client`, no mobile.go API change), bounded 30s rejoin-join timeout, RTCP keepalive only runs when a PC carries media/SCTP bridge, `PeerConnectionStateFailed` now triggers a reconnect instead of `onEnded`; muxconn/smux retuning (`inboundQueue` 256→128, `fastSpinAttempts` 200→16, `MaxStreamBuffer` 1MiB→512KiB, frames up to 32KiB); vp8channel default fps 60→30 + smaller KCP queues (CPU-reduction pass). Default Jitsi server list changed (`meet.cryptopro.ru` removed, `meet.small-dm.ru`/`meet.handyweb.org` added) — our `AppConstants.defaultJitsiBaseURL` (`meet1.arbitr.ru`) is unaffected, still in the list. `parity_check.py` clean — the upstream interactive Jitsi-menu/room-options rewrite in `script/srv.sh` falls entirely outside our non-interactive boc patches. Rebuilt `Mobile.xcframework` via `build-framework.sh` (Mobile* API unchanged), app builds + 265 tests green. Follow-up: #320 (re-benchmark our 60fps vp8/sei srv.sh defaults against upstream's new 30fps recommendation) | Reconnects after a dropped session are more reliable |
+| 321 | docs | README: rewrite the iPhone-install section around SideStore/LiveContainer + merge the build sections into one "Build it yourself" | README restructured: new lead section "Install on your iPhone (sideload)" — SideStore primary (one-time iLoader USB install, LocalDevVPN from the App Store for on-device 7-day refresh, install straight from the Release asset URL via `sidestore://install?url=`), LiveContainer alternative (LC+SideStore bundle via the same iLoader step, `livecontainer://install?url=`, apps inside the container never need re-signing), old AltStore/Sideloadly flow kept as a "Classic cable path" `<details>` block; Requirements + Build and run + Updating + the two build `<details>` blocks merged into one "Build it yourself" section (deps table → build & run in Xcode → unsigned `.ipa` → updating), placed after sideload and before Project structure; Troubleshooting `#build-and-run` anchor updated. All external links/claims verified against sidestore.io docs, LiveContainer docs, github.com/nab138/iloader and the LocalDevVPN App Store page | README: installing on your iPhone now leads with SideStore/LiveContainer — paste the Release link, no computer needed after one-time setup — and all build docs live in one "Build it yourself" section |
 | 322 | build | Commit `bf48a75` message ("upstream parity update") is not Conventional Commits and omits the #297/#318 work — amend before push | amended before push | — |
 | 326 | l10n | Connections tab: default group header says "Servers" — rename to "Connections"; "servers" wording stays Manage-VPS-only | Duplicate — implemented as #344 in the build-248 commit (en "Connections", ru "Подключения"; stored `defaultGroupName` token unchanged per #283) | — |
 | 338 | ux | Logs: inline container fetch with progress (design_handoff_logs_theme §2) | Container source card in LogsView: host chips ≤3 (primary connection's host first, ★; `Menu` picker beyond 3) + secondary "Fetch"/"Check server" `OlcButton` with `isBusy`; monotonic 3-phase progress (Connecting… → `podman logs --tail N <name>` → Receiving output…) with k/n + new shared `OlcProgressBar(fraction:)` (also replaces the Manage VPS card's `ProgressView`); `Provisioner.containerLogs` emits the third phase signal and writes a `── podman logs --tail N · HH:mm ──` divider (`.debug`/tertiary) via `startContainerSession(divider:)` instead of the generic "── new session ──"; empty buffer → `OlcEmptyState` with primary "Fetch from {host}" CTA; scan-first fallback (#296/#297 alert) kept; removed orphaned `logsDownloadFromServer` key | Container logs now fetch right inside the Logs tab with live phase progress and a session divider |
