@@ -94,7 +94,9 @@ enum L10n: String, CaseIterable {
     case hostField, portField, loginField, passwordField
     case actionInstall, actionUninstall, actionUpdate, actionReboot
     case actionChangeRoomTransport         // "Change Room / Transport"
-    case actionDownloadContainerLogs       // #278: was "Logs" — clarifies it pulls podman logs
+    // #339 was: actionDownloadContainerLogs ("Download container logs") — the
+    // action shows the logs in the Logs tab now, it doesn't download a file.
+    case actionContainerLogs                // "Container logs"
     case actionDone
     case actionRemoveFromList               // "Remove host from list"
     case removeHostConfirmTitle             // "Remove %@?"
@@ -140,9 +142,8 @@ enum L10n: String, CaseIterable {
     case vpsWorking                         // "Working…"
     case vpsOpFailed_fmt                    // "%@ failed"
 
-    // MARK: ContainerLogsView
-    case emptyLogsTitle                     // "Logs are empty"
-    case emptyLogsHint_fmt                  // "Container produced nothing on stdout/stderr in the last %@ lines."
+    // #339 was: MARK ContainerLogsView (emptyLogsTitle, emptyLogsHint_fmt) —
+    // the sheet is gone; closeAction stays (sheet chrome + ShareConnectionView).
     case closeAction
 
     // MARK: LogsView
@@ -172,15 +173,31 @@ enum L10n: String, CaseIterable {
     case duplicateServerNameError           // "A server with this name already exists"
 
     // MARK: #296 — Container tab always-present load button
-    case logsDownloadFromServer             // "Download logs from server"
+    // #338 was: logsDownloadFromServer ("Download logs from server") — the
+    // bare text button became the source card's "Fetch" OlcButton.
     case logsCheckServer                    // "Check server" — mirrors vpsCheckServer, gated by readiness
     case logsContainerEmptyHint             // "Logs need to be loaded from the server."
+
+    // MARK: #316 — single-stack Logs tab
+    case logsSegConnection                  // "Conn" — abbreviated segment label; full name in accessibilityLabel
+    case logsSegDiagnostics                 // "Diag"
+    case logsSegVPS                         // "VPS"
+    case logsSegContainer                   // "Container"
+    case logsLineCount_fmt                  // "%d lines" — file-header row, right-aligned
+
+    // MARK: #338 — inline container fetch with progress
+    case logsFetchAction                    // "Fetch" — source-card button
+    case logsFetchFromHost_fmt              // "Fetch from %@" — empty-state CTA
+    case logsPhaseConnecting                // "Connecting…" — fetch phase 1/3 (covers the scan-first fallback)
+    case logsPhaseCommand_fmt               // "podman logs --tail %d %@" — fetch phase 2/3
+    case logsPhaseReceiving                 // "Receiving output…" — fetch phase 3/3
 
     // MARK: SettingsView
     case settingsTitle
     case sectionSOCKS5, sectionDNS, sectionVP8, sectionConnection
-    case sectionKeepAlive
-    case sectionLogs, sectionFont
+    // #343 was: sectionKeepAlive, sectionFont — keep-alive folded into the
+    // Connection section, the font section header became "Appearance".
+    case sectionLogs
     case sectionIPSources                   // "IP-check sources" (#286)
     case ipSourcesFooter                    // explanation of the IP-source toggles (#286)
     case sectionSpeedProvider               // "Speed-test provider" (#285)
@@ -197,7 +214,7 @@ enum L10n: String, CaseIterable {
     case logPortFree_fmt                    // "✓ Port %d free"
     case logPortBusyOther_fmt               // "✗ Port %d busy"
     case logPortBusyOlcrtc_fmt              // "✓ Port %d in use by olcrtc tunnel"
-    case socksFooter
+    // #343 was: socksFooter — cut per the one-short-footer rule (§7)
     case socksPortChangeNote                // "Port change takes effect on the next connection"
     case dnsFreeFormPlaceholder             // "IP:port"
     case dnsFooter
@@ -208,11 +225,13 @@ enum L10n: String, CaseIterable {
     case tunnelCheckLabel                   // "Tunnel check"
     case keepAliveOff                       // "off"
     case backgroundAudioLabel
-    case localSocksAuthLabel, localSocksAuthFooter
+    case localSocksAuthLabel                // #343 was: + localSocksAuthFooter (footer cut, §7)
     case logLevelLabel
-    case footerStartTimeout, footerAutoConnect, footerAutoRemove
-    case footerKeepAlive, footerBackgroundAudio, footerDebugLogging
-    case footerLogBuffer, footerContainerTail
+    // #343 was: footerStartTimeout/AutoConnect/AutoRemove/BackgroundAudio/
+    // DebugLogging + footerContainerTail — per-row footers cut when the
+    // Connection and Logs groups merged into single sections (§7).
+    case footerKeepAlive
+    case footerLogBuffer
     case logBufferLabel, containerLogsTailLabel
     case clearAllLogsAction
     case copyAllAction                      // "Copy all" (#258 logs overflow)
@@ -221,6 +240,14 @@ enum L10n: String, CaseIterable {
     case fontFooter
     case languageLabel
     case themeLabel, themeRefined, themeConsole   // #267 design-direction picker
+    case directionLabel                     // #343: "Direction" — Refined/Console picker (themeLabel moved to the scheme picker)
+    // #340 — appearance scheme picker (System / Light / Dark)
+    case appearanceLabel                    // "Appearance"
+    case appearanceSystem                   // "System"
+    case appearanceLight                    // "Light"
+    case appearanceDark                     // "Dark"
+    // #342 — fixed-footprint hero footer
+    case heroDisconnectedHint_fmt           // "Flip the switch to connect via %@."
 
     // MARK: InstallOptionsView
     case installTitle                       // "Install olcrtc"
@@ -347,8 +374,12 @@ enum L10n: String, CaseIterable {
 
     // MARK: #311 — speed-tile metric labels/units + upload-fallback log line
     case speedLabelPing, speedLabelDL, speedLabelUL  // "Ping"/"DL"/"UL" — universal abbreviations, ru = en
-    case speedPingValue_fmt                  // "%.0f ms" — unit stays Latin in both languages
-    case speedRateValue_fmt                  // "%.1f Mbps" — unit stays Latin in both languages
+    // #342 was: units baked into the formats ("%.0f ms"/"%.1f Mbps") — now
+    // number-only, the unit renders separately via OlcMetric(unit:).
+    case speedPingValue_fmt                  // "%.0f"
+    case speedRateValue_fmt                  // "%.1f"
+    case speedUnitMs                         // "ms" — Latin in both languages
+    case speedUnitMbps                       // "Mbps" — Latin in both languages
     case speedUploadFallback_fmt             // "  upload: %@ has no upload endpoint — using %@" — diagnostic log line, deliberately English (ru = en)
 
     // MARK: #236/#237 — UI strings localized after the i18n pass

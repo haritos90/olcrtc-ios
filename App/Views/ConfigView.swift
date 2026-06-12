@@ -23,3 +23,13 @@ struct ConfigView: View {
         }
     }
 }
+
+// #340: both appearance variants.
+#if DEBUG
+#Preview("Config — Dark") {
+    ConfigView().preferredColorScheme(.dark)
+}
+#Preview("Config — Light") {
+    ConfigView().preferredColorScheme(.light)
+}
+#endif

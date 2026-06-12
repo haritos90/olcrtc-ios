@@ -44,13 +44,16 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
+                // #343: regrouped per design_handoff_logs_theme §7 — SOCKS5 →
+                // DNS (submenu) → vp8channel → Connection → Diagnostics →
+                // Logs → Appearance LAST → version footer; max one short
+                // footer per section.
                 Form {
                     socksSection
-                    dnsSection
+                    dnsRowSection
                     transportSection
                     connectionSection
-                    ipSourcesSection
-                    speedProviderSection
+                    diagnosticsSection
                     logsSection
                     appearanceSection
                     infoSection
@@ -77,6 +80,9 @@ struct SettingsView: View {
 
     // MARK: SOCKS
 
+    // #343 was: two sections (port+check / auth) with three stacked footers —
+    // one section now, one short footer (the long socksFooter/auth copy cut
+    // per the handoff's one-footer rule).
     @ViewBuilder
     private var socksSection: some View {
         Section {
@@ -130,18 +136,7 @@ struct SettingsView: View {
                     }
                 }
             }
-        } header: {
-            Text(L10n.sectionSOCKS5.localized())
-        } footer: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L10n.socksFooter.localized())
-                Text(L10n.socksPortChangeNote.localized())
-                    .foregroundStyle(.secondary)
-            }
-            .font(.caption2)
-        }
 
-        Section {
             Toggle(L10n.localSocksAuthLabel.localized(), isOn: $settings.localSocksAuthEnabled)
             if settings.localSocksAuthEnabled {
                 TextField(L10n.socksUserLabel.localized(), text: $settings.localSocksUser)
@@ -160,32 +155,44 @@ struct SettingsView: View {
                         settings.localSocksPass = v
                     }
             }
+        } header: {
+            Text(L10n.sectionSOCKS5.localized())
         } footer: {
-            Text(L10n.localSocksAuthFooter.localized())
+            Text(L10n.socksPortChangeNote.localized())
                 .font(.caption2)
         }
     }
 
-    private var dnsSection: some View {
+    // MARK: DNS (#343 — submenu)
+
+    // #343 was: dnsSection — a top-level OlcChipPicker "chip wall" over all
+    // presets + the free-form field (the MegaFon/Yota shared value also made
+    // duplicate ForEach IDs there). Now a summary NavigationLink row; the
+    // presets/footer live in DNSSettingsView, same pattern as the IP sources.
+    private var dnsRowSection: some View {
         Section {
-            // #258: one OlcChipPicker over all DNS presets (global + RU-carrier),
-            // replacing two rows of differently-styled .mini buttons.
-            OlcChipPicker(
-                selection: $settings.dnsServer,
-                options: AppConstants.dnsPresets.map { ($0.value, $0.label) }
-                       + AppConstants.ruCarrierDnsPresets.map { ($0.value, $0.label.localized()) }
-            )
-            // Free-form field
-            TextField(L10n.dnsFreeFormPlaceholder.localized(), text: $settings.dnsServer)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .font(.system(.body, design: .monospaced))
-        } header: {
-            Text(L10n.sectionDNS.localized())
-        } footer: {
-            Text(L10n.dnsFooter.localized())
-                .font(.caption2)
+            NavigationLink {
+                DNSSettingsView()
+            } label: {
+                HStack {
+                    Text(L10n.sectionDNS.localized())
+                    Spacer()
+                    Text(dnsSummary)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
         }
+    }
+
+    /// "Yandex · 77.88.8.8:53" when the value matches a preset, else the raw value.
+    private var dnsSummary: String {
+        let v = settings.dnsServer
+        let presets: [(String, String)] = AppConstants.dnsPresets.map { ($0.label, $0.value) }
+            + AppConstants.ruCarrierDnsPresets.map { ($0.label.localized(), $0.value) }
+        if let hit = presets.first(where: { $0.1 == v }) { return "\(hit.0) · \(v)" }
+        return v
     }
 
     // MARK: Numeric field helper
@@ -238,7 +245,10 @@ struct SettingsView: View {
 
     // MARK: Connection
 
-    @ViewBuilder
+    // #343 was: six separate sections (start timeout / auto-connect /
+    // auto-remove / keep-alive / background audio / log level), each with its
+    // own footer — one "Connection" section now, one short footer (keep-alive
+    // is the least self-explanatory row, its footer survives).
     private var connectionSection: some View {
         Section {
             numericField(L10n.startTimeoutLabel.localized(), value: $settings.startTimeoutSeconds,
@@ -246,83 +256,49 @@ struct SettingsView: View {
                                    Preset(value: 60,  label: "60"),
                                    Preset(value: 120, label: "120")],
                          unit: "s")
-        } header: {
-            Text(L10n.sectionConnection.localized())
-        } footer: {
-            Text(L10n.footerStartTimeout.localized()).font(.caption2)
-        }
-
-        Section {
             Toggle(L10n.autoConnectOnLaunchLabel.localized(), isOn: $settings.autoConnectOnLaunch)
-        } footer: {
-            Text(L10n.footerAutoConnect.localized()).font(.caption2)
-        }
-
-        Section {
             Toggle(L10n.autoRemoveConnectionOnUninstallLabel.localized(), isOn: $settings.autoRemoveConnectionOnUninstall)
-        } footer: {
-            Text(L10n.footerAutoRemove.localized()).font(.caption2)
-        }
-
-        Section {
             numericField(L10n.tunnelCheckLabel.localized(), value: $settings.keepAliveSeconds,
                          presets: [Preset(value: 0,  label: L10n.keepAliveOff.localized()),
                                    Preset(value: 30, label: "30"),
                                    Preset(value: 60, label: "60")],
                          unit: "s")
-        } header: {
-            Text(L10n.sectionKeepAlive.localized())
-        } footer: {
-            Text(L10n.footerKeepAlive.localized()).font(.caption2)
-        }
-
-        Section {
             Toggle(L10n.backgroundAudioLabel.localized(), isOn: $settings.backgroundAudio)
-        } footer: {
-            Text(L10n.footerBackgroundAudio.localized()).font(.caption2)
-        }
-
-        Section {
             Picker(L10n.logLevelLabel.localized(), selection: $settings.logLevel) {
                 ForEach(LogLevel.allCases, id: \.self) { level in
                     Text(level.label).tag(level)
                 }
             }
+        } header: {
+            Text(L10n.sectionConnection.localized())
         } footer: {
-            Text(L10n.footerDebugLogging.localized()).font(.caption2)
+            Text(L10n.footerKeepAlive.localized()).font(.caption2)
         }
     }
 
     // MARK: Logs
 
-    @ViewBuilder
+    // #343 was: three sections (buffer / container tail / clear-all) with two
+    // footers — one "Logs" section, one short footer.
     private var logsSection: some View {
         Section {
             numericField(L10n.logBufferLabel.localized(), value: $settings.logBufferSize,
                          presets: [Preset(value: 500,  label: "500"),
                                    Preset(value: 1000, label: "1k"),
                                    Preset(value: 5000, label: "5k")])
-        } header: {
-            Text(L10n.sectionLogs.localized())
-        } footer: {
-            Text(L10n.footerLogBuffer.localized()).font(.caption2)
-        }
-
-        Section {
             numericField(L10n.containerLogsTailLabel.localized(), value: $settings.containerLogsTailLines,
                          presets: [Preset(value: 100,  label: "100"),
                                    Preset(value: 200,  label: "200"),
                                    Preset(value: 1000, label: "1k")])
-        } footer: {
-            Text(L10n.footerContainerTail.localized()).font(.caption2)
-        }
-
-        Section {
             // #258: danger design-system button (was a plain destructive row).
             OlcButton(L10n.clearAllLogsAction.localized(), systemImage: "trash",
                       role: .danger, fillWidth: true) {
                 LogStore.shared.clearAll()
             }
+        } header: {
+            Text(L10n.sectionLogs.localized())
+        } footer: {
+            Text(L10n.footerLogBuffer.localized()).font(.caption2)
         }
     }
 
@@ -340,8 +316,19 @@ struct SettingsView: View {
                 }
             }
 
+            // #340: appearance scheme — System / Light / Dark (applied via
+            // preferredColorScheme in App.swift). #343: relabeled "Theme" —
+            // the section header carries "Appearance" now.
+            Picker(L10n.themeLabel.localized(), selection: $settings.appearanceMode) {
+                ForEach(AppearanceMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+
             // #267: design-direction picker (Refined / Console).
-            Picker(L10n.themeLabel.localized(), selection: $settings.designConsole) {
+            // #343 was: labeled "Theme" — that name now belongs to the
+            // System/Light/Dark scheme picker above; this one is "Direction".
+            Picker(L10n.directionLabel.localized(), selection: $settings.designConsole) {
                 Text(L10n.themeRefined.localized()).tag(false)
                 Text(L10n.themeConsole.localized()).tag(true)
             }
@@ -379,21 +366,22 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
                 .environment(\.dynamicTypeSize, SettingsStore.fontSizes[fontLiveIndex])
         } header: {
-            Text(L10n.sectionFont.localized())
+            // #343 was: sectionFont ("Font") — the section holds language +
+            // theme + direction + font now.
+            Text(L10n.appearanceLabel.localized())
         } footer: {
             Text(L10n.fontFooter.localized())
                 .font(.caption2)
         }
     }
 
-    // MARK: IP-check sources (#286)
+    // MARK: Diagnostics (#343 — merges the #293 IP-sources row + #285 provider)
 
-    // #293: the inline checkboxes (#286) crowded the main Settings list — moved
-    // behind a navigation row into their own sub-screen (IPSourcesSettingsView).
-    // The model (`enabledIPSources` + default subset + empty-set fallback) is
-    // unchanged; the row shows the count of selected sources.
-    @ViewBuilder
-    private var ipSourcesSection: some View {
+    // #343 was: two sections (ipSourcesSection / speedProviderSection) — one
+    // "Diagnostics" section now. The IP-sources footer already lives in its
+    // subscreen (IPSourcesSettingsView), so only the provider footer stays.
+    // The provider picker itself is unchanged (submenu, per operator decision).
+    private var diagnosticsSection: some View {
         Section {
             NavigationLink {
                 IPSourcesSettingsView()
@@ -406,24 +394,13 @@ struct SettingsView: View {
                         .monospacedDigit()
                 }
             }
-        } footer: {
-            Text(L10n.ipSourcesFooter.localized())
-                .font(.caption2)
-        }
-    }
-
-    // MARK: Speed-test provider (#285)
-
-    @ViewBuilder
-    private var speedProviderSection: some View {
-        Section {
             Picker(L10n.sectionSpeedProvider.localized(), selection: $settings.speedTestProviderID) {
                 ForEach(AppConstants.SpeedTest.providers) { p in
                     Text(p.label).tag(p.id)
                 }
             }
         } header: {
-            Text(L10n.sectionSpeedProvider.localized())
+            Text(L10n.diagnosticsTitle.localized())
         } footer: {
             Text(L10n.speedProviderFooter.localized())
                 .font(.caption2)
@@ -484,3 +461,77 @@ struct IPSourcesSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 }
+
+// MARK: - DNSSettingsView (#343)
+//
+// DNS presets as rows (name + monospaced address + checkmark) + the free-form
+// field, moved off the main Settings list into a subscreen — same pattern as
+// IPSourcesSettingsView (#293). The top-level row shows the current summary.
+
+struct DNSSettingsView: View {
+    @ObservedObject private var settings = SettingsStore.shared
+    @FocusState private var fieldFocused: Bool
+
+    /// Global presets + RU-carrier presets (labels localized). Keyed by label
+    /// — values are NOT unique (Yota shares MegaFon's resolver).
+    private var presets: [(label: String, value: String)] {
+        AppConstants.dnsPresets.map { ($0.label, $0.value) }
+            + AppConstants.ruCarrierDnsPresets.map { ($0.label.localized(), $0.value) }
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(presets, id: \.label) { preset in
+                    Button {
+                        settings.dnsServer = preset.value
+                    } label: {
+                        HStack {
+                            Text(preset.label)
+                                .foregroundStyle(Theme.Palette.textPrimary)
+                            Spacer()
+                            Text(preset.value)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                            if settings.dnsServer == preset.value {
+                                Image(systemName: "checkmark")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(Theme.Palette.accent)
+                            }
+                        }
+                    }
+                }
+            } footer: {
+                // The long explanation lives here now, off the main list (#343).
+                Text(L10n.dnsFooter.localized())
+                    .font(.caption2)
+            }
+
+            Section {
+                TextField(L10n.dnsFreeFormPlaceholder.localized(), text: $settings.dnsServer)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .font(.system(.body, design: .monospaced))
+                    .focused($fieldFocused)
+            }
+        }
+        .navigationTitle(L10n.sectionDNS.localized())
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button(L10n.done.localized()) { fieldFocused = false }
+            }
+        }
+    }
+}
+
+// #340: both appearance variants.
+#if DEBUG
+#Preview("Settings — Dark") {
+    SettingsView(tunnel: TunnelManager()).preferredColorScheme(.dark)
+}
+#Preview("Settings — Light") {
+    SettingsView(tunnel: TunnelManager()).preferredColorScheme(.light)
+}
+#endif

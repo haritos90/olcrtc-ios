@@ -23,6 +23,9 @@ struct OlcPressStyle: ButtonStyle {
 struct OlcOption<Value: Hashable>: Identifiable {
     let value: Value
     let label: String
+    /// #316: full name for VoiceOver when `label` is abbreviated (e.g. the
+    /// Logs categories "Conn"/"Diag"). Nil = `label` is already the full name.
+    var a11yLabel: String? = nil
     var id: Value { value }
 }
 
@@ -39,6 +42,9 @@ struct OlcButton: View {
     private let role: Role
     private let isBusy: Bool
     private let fillWidth: Bool
+    /// #342: 32pt inline-row variant (the hero's compact Retry) — same roles
+    /// and chrome, smaller type/height, so it stays inside the button system.
+    private let compact: Bool
     private let action: () -> Void
 
     @Environment(\.isEnabled) private var isEnabled
@@ -48,12 +54,14 @@ struct OlcButton: View {
          role: Role = .secondary,
          isBusy: Bool = false,
          fillWidth: Bool = false,
+         compact: Bool = false,
          action: @escaping () -> Void) {
         self.title = title
         self.systemImage = systemImage
         self.role = role
         self.isBusy = isBusy
         self.fillWidth = fillWidth
+        self.compact = compact
         self.action = action
     }
 
@@ -72,31 +80,36 @@ struct OlcButton: View {
                     .tint(foreground)
             } else if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: compact ? 13 : 17, weight: .semibold))
             }
             if let title { Text(title) }
         }
-        .font(Theme.Typography.button)
+        .font(compact ? Font.caption.weight(.semibold) : Theme.Typography.button)
         .foregroundStyle(foreground)
-        .modifier(Chrome(isIconOnly: title == nil, fillWidth: fillWidth, background: background))
+        .modifier(Chrome(isIconOnly: title == nil, fillWidth: fillWidth,
+                         height: compact ? 32 : Theme.Metrics.controlHeight,
+                         hPad: compact ? 12 : 16,
+                         background: background))
     }
 
-    /// Sizing + fill + corner radius. Icon-only buttons are a 44×44 square; text
-    /// buttons are 44pt tall with 16pt side padding, optionally full-width.
+    /// Sizing + fill + corner radius. Icon-only buttons are a height×height
+    /// square; text buttons are `height` tall with `hPad` side padding,
+    /// optionally full-width. (#342: height/hPad parameterized for `compact`.)
     private struct Chrome: ViewModifier {
         let isIconOnly: Bool
         let fillWidth: Bool
+        let height: CGFloat
+        let hPad: CGFloat
         let background: Color
         func body(content: Content) -> some View {
             Group {
                 if isIconOnly {
-                    content.frame(width: Theme.Metrics.controlHeight,
-                                  height: Theme.Metrics.controlHeight)
+                    content.frame(width: height, height: height)
                 } else {
                     content
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, hPad)
                         .frame(maxWidth: fillWidth ? .infinity : nil)
-                        .frame(height: Theme.Metrics.controlHeight)
+                        .frame(height: height)
                 }
             }
             .background(background)
@@ -146,8 +159,10 @@ struct OlcCard<Content: View>: View {
             .overlay {
                 // #281: at white@8% the Console hairline was invisible — bump it so
                 // the bordered direction actually reads (Refined width is 0 → no-op).
+                // #340 was: Color.white.opacity(0.16) — now a dynamic token so the
+                // hairline flips to black in light mode.
                 RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.16), lineWidth: Theme.Metrics.cardBorderWidth)
+                    .strokeBorder(Theme.Palette.cardBorder, lineWidth: Theme.Metrics.cardBorderWidth)
             }
     }
 }
@@ -361,6 +376,11 @@ struct OlcSegmented<Value: Hashable>: View {
         self._selection = selection
         self.options = options.map { OlcOption(value: $0.0, label: $0.1) }
     }
+    /// #316: (value, short label, full VoiceOver name) — for abbreviated segments.
+    init(selection: Binding<Value>, options: [(Value, String, String)]) {
+        self._selection = selection
+        self.options = options.map { OlcOption(value: $0.0, label: $0.1, a11yLabel: $0.2) }
+    }
 
     var body: some View {
         HStack(spacing: 3) {
@@ -384,6 +404,8 @@ struct OlcSegmented<Value: Hashable>: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                // #316: abbreviated labels stay readable to VoiceOver.
+                .accessibilityLabel(opt.a11yLabel ?? opt.label)
             }
         }
         .padding(3)
@@ -465,6 +487,87 @@ struct FlowLayout: Layout {
     }
 }
 
+// MARK: - OlcIconButton (#341)
+//
+// 44×44 icon-only button on the standard fill with a per-action tint, so a
+// row of quick actions reads apart at a glance (the Manage VPS card's
+// Check / Container logs / Reconfigure). Parent `.disabled` dims to 0.35.
+
+struct OlcIconButton: View {
+    let systemImage: String
+    var tint: Color = Theme.Palette.accent
+    let action: () -> Void
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: Theme.Metrics.controlHeight,
+                       height: Theme.Metrics.controlHeight)
+                .background(Theme.Palette.fill)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Metrics.controlRadius, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: Theme.Metrics.controlRadius, style: .continuous))
+        }
+        .buttonStyle(OlcPressStyle())
+        .opacity(isEnabled ? 1 : 0.35)
+    }
+}
+
+// MARK: - OlcMiniStat (#341)
+//
+// One-line compact metric for dense strips: caption2 uppercase label + a
+// footnote (≈13pt) monospaced value, side by side. The Manage VPS card uses
+// these where the two-deck OlcMetric row used to be.
+
+struct OlcMiniStat: View {
+    let label: String
+    let value: String
+    var tone: Color? = nil
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .textCase(.uppercase)
+                .tracking(0.4)
+                .foregroundStyle(Theme.Palette.textTertiary)
+            Text(value)
+                .font(.system(.footnote, design: .monospaced).weight(.semibold))
+                .foregroundStyle(tone ?? Theme.Palette.textPrimary)
+        }
+        .lineLimit(1)
+    }
+}
+
+// MARK: - OlcProgressBar (#338)
+//
+// The ONE determinate progress bar: a 4pt amber capsule on the standard fill,
+// shared by the Manage VPS card's operation progress and the Logs tab's
+// container fetch — one monotonic-phase visual contract in both places.
+
+struct OlcProgressBar: View {
+    /// 0…1; values outside the range are clamped.
+    let fraction: Double
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Theme.Palette.fill)
+                Capsule()
+                    .fill(Theme.Palette.amber)
+                    .frame(width: max(0, min(1, fraction)) * geo.size.width)
+            }
+        }
+        .frame(height: 4)
+        .animation(.easeInOut(duration: 0.3), value: fraction)
+        .accessibilityElement()
+        .accessibilityValue("\(Int((max(0, min(1, fraction))) * 100))%")
+    }
+}
+
 // MARK: - 8. OlcMetric
 //
 // Uppercase caption label above a monospaced value. Used for Ping/DL/UL and the
@@ -474,6 +577,9 @@ struct OlcMetric: View {
     let label: String
     let value: String
     var tone: Color? = nil
+    /// #342: optional unit ("ms"/"Mbps") rendered as smaller secondary text
+    /// after the value, so the unit doesn't inflate the mono number.
+    var unit: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -482,9 +588,16 @@ struct OlcMetric: View {
                 .font(Theme.Typography.metricLabel)
                 .textCase(.uppercase)
                 .foregroundStyle(Theme.Palette.textTertiary)
-            Text(value)
-                .font(Theme.Typography.metricValue)
-                .foregroundStyle(tone ?? Theme.Palette.textPrimary)
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(value)
+                    .font(Theme.Typography.metricValue)
+                    .foregroundStyle(tone ?? Theme.Palette.textPrimary)
+                if let unit {
+                    Text(unit)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+            }
         }
     }
 }
@@ -591,13 +704,14 @@ private struct PreviewState<Value, Content: View>: View {
 }
 
 private extension View {
-    /// Common dark ground for every component preview.
-    func olcPreview() -> some View {
+    /// Common ground for every component preview. #340 was: dark-only —
+    /// now parameterized so components get a light variant too.
+    func olcPreview(_ scheme: ColorScheme = .dark) -> some View {
         self
             .padding(20)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Theme.Palette.bg)
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(scheme)
     }
 }
 
@@ -689,6 +803,59 @@ private extension View {
         OlcMetric(label: "DL",   value: "88.4")
         OlcMetric(label: "RAM",  value: "1.2 GB")
         OlcMetric(label: "Uptime", value: "12d")
+    }
+    .olcPreview()
+}
+
+// #340: one representative light-mode pass over the component set (each
+// component keeps its detailed dark preview above).
+#Preview("Components — Light") {
+    PreviewState("a") { sel in
+        VStack(alignment: .leading, spacing: 16) {
+            OlcStatusPill(tone: .ok, title: "Connected", subtitle: "socks5 · 127.0.0.1:8808")
+            OlcCard {
+                Text("Card on light ground").foregroundStyle(Theme.Palette.textPrimary)
+            }
+            OlcSegmented(selection: sel, options: [("a", "Conn"), ("b", "Diag"), ("c", "VPS")])
+            OlcChipPicker(selection: sel, options: [("a", "Cloudflare"), ("b", "Google")])
+            HStack(spacing: 8) {
+                OlcButton("Connect", systemImage: "play.fill", role: .primary) {}
+                OlcButton("Check", role: .secondary) {}
+                OlcButton("Remove", role: .danger) {}
+            }
+            OlcProgressBar(fraction: 0.66)
+            HStack(spacing: 22) {
+                OlcMetric(label: "Ping", value: "42 ms", tone: Theme.Palette.green)
+                OlcMetric(label: "DL", value: "88.4")
+            }
+        }
+    }
+    .olcPreview(.light)
+}
+
+#Preview("OlcProgressBar") {
+    VStack(spacing: 16) {
+        OlcProgressBar(fraction: 0.33)
+        OlcProgressBar(fraction: 0.66)
+        OlcProgressBar(fraction: 1)
+    }
+    .olcPreview()
+}
+
+#Preview("OlcIconButton + OlcMiniStat") {
+    VStack(alignment: .leading, spacing: 20) {
+        HStack(spacing: 8) {
+            OlcIconButton(systemImage: "antenna.radiowaves.left.and.right") {}
+            OlcIconButton(systemImage: "arrow.down.doc", tint: Theme.Palette.green) {}
+            OlcIconButton(systemImage: "slider.horizontal.3", tint: Theme.Palette.orange) {}
+            OlcIconButton(systemImage: "slider.horizontal.3", tint: Theme.Palette.orange) {}.disabled(true)
+        }
+        HStack(spacing: 8) {
+            OlcMiniStat(label: "Ping", value: "27ms", tone: Theme.Palette.green)
+            OlcMiniStat(label: "Disk", value: "36/40G")
+            OlcMiniStat(label: "RAM", value: "241/2048M")
+            OlcMiniStat(label: "Up", value: "11d")
+        }
     }
     .olcPreview()
 }

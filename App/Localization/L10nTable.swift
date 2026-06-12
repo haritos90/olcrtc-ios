@@ -75,7 +75,10 @@ enum L10nTable {
         .nameField:                  "Label",
         .namePlaceholder:            "My server",
         .groupField:                 "Group",
-        .groupDefault:               "Servers",
+        // #344 was: "Servers" — the Connections tab lists *connections*, not
+        // servers (display-only; the persisted raw group value stays "Servers"
+        // and is mapped via ConnectionRecord.displayGroupName).
+        .groupDefault:               "Connections",
         .importByURI:                "Import from URI",
         .scanQRAction:               "Scan QR",
         .pasteURIAction:             "Paste URI",
@@ -110,7 +113,7 @@ enum L10nTable {
         .actionUpdate:               "Update binary (git pull + rebuild)",
         .actionReboot:               "Reboot",
         .actionChangeRoomTransport:  "Change Room / Transport",
-        .actionDownloadContainerLogs: "Download container logs",
+        .actionContainerLogs:        "Container logs",   // #339 was: "Download container logs"
         .actionDone:                 "Done",
         .actionRemoveFromList:       "Remove host from list",
         .removeHostConfirmTitle:     "Remove %@?",
@@ -171,15 +174,15 @@ enum L10nTable {
         .vpsOpFailed_fmt:         "%@ failed",
 
         // ContainerLogsView
-        .emptyLogsTitle:             "Logs are empty",
-        .emptyLogsHint_fmt:          "Container produced nothing on stdout/stderr in the last %@ lines.",
+        // #339 was: emptyLogsTitle + emptyLogsHint_fmt (ContainerLogsView sheet, deleted)
         .closeAction:                "Close",
 
         // LogsView
         .logsTitle:                  "Logs",
         .logsSearchPlaceholder:      "Search",
         .emptyLogsGeneric:           "Empty",
-        .emptyLogsGenericHint:       "Run an operation in the Connections or Servers tab",
+        // #316 was: "…Connections or Servers tab" — the VPS tab is named "Manage VPS".
+        .emptyLogsGenericHint:       "Run an operation in the Connections or Manage VPS tab",
         .noSearchResults:            "Nothing found",
         .noSearchResultsHint_fmt:    "No matches for «%@».",
         .categoryConnection:         "Connection",
@@ -188,7 +191,9 @@ enum L10nTable {
         .categoryContainerLogs:      "Container",
 
         // #294: per-source Logs tabs
-        .logsTabDescConnection:      "connection logs",
+        // #316 was: lowercase fragments shown under the tab title — now they
+        // open the empty-state hint, so they read as sentences.
+        .logsTabDescConnection:      "Connection logs",
         .logsTabDescDiagnostics:     "IP and speed test logs",
         .logsTabDescVPS:             "VPS provisioning logs",
         .logsTabDescContainer:       "Server container extracted logs",
@@ -200,9 +205,21 @@ enum L10nTable {
         .duplicateServerNameError:   "A server with this name already exists",
 
         // #296: Container tab always-present load button
-        .logsDownloadFromServer:     "Download logs from server",
+        // #338 was: logsDownloadFromServer ("Download logs from server")
         .logsCheckServer:            "Check server",
         .logsContainerEmptyHint:     "Logs need to be loaded from the server.",
+        // #316: single-stack Logs tab — segmented-control short labels + line count
+        .logsSegConnection:          "Conn",
+        .logsSegDiagnostics:         "Diag",
+        .logsSegVPS:                 "VPS",
+        .logsSegContainer:           "Container",
+        .logsLineCount_fmt:          "%d lines",
+        // #338: inline container fetch — source card + monotonic phases
+        .logsFetchAction:            "Fetch",
+        .logsFetchFromHost_fmt:      "Fetch from %@",
+        .logsPhaseConnecting:        "Connecting…",
+        .logsPhaseCommand_fmt:       "podman logs --tail %d %@",
+        .logsPhaseReceiving:         "Receiving output…",
 
         // SettingsView
         .settingsTitle:              "Settings",
@@ -211,7 +228,6 @@ enum L10nTable {
         .sectionVP8:                 "vp8channel",
         .sectionConnection:          "Connection",
         .sectionLogs:                "Logs",
-        .sectionFont:                "Font",
         .sectionIPSources:           "IP-check sources",
         .ipSourcesFooter:            "Services queried by the IP check. The RU-zone options stay reachable when public resolvers are blocked. If none are selected, the defaults are used.",
         .sectionSpeedProvider:       "Speed-test provider",
@@ -226,7 +242,6 @@ enum L10nTable {
         .logPortFree_fmt:            "✓ Port %d free",
         .logPortBusyOther_fmt:       "✗ Port %d busy",
         .logPortBusyOlcrtc_fmt:      "✓ Port %d in use by olcrtc tunnel",
-        .socksFooter:                "Local port the embedded SOCKS5 proxy listens on. If the port is busy, the connection will fail with «Port XXXX is busy, change the port».",
         .socksPortChangeNote:        "Port change takes effect on the next connection.",
         .dnsFreeFormPlaceholder:     "IP:port",
         .dnsFooter:                  "Passed to the Go runtime and to the server install script. Format: IP:port. RU carrier presets only resolve from inside that carrier's network.",
@@ -238,17 +253,9 @@ enum L10nTable {
         .keepAliveOff:               "off",
         .backgroundAudioLabel:       "Background work (audio)",
         .localSocksAuthLabel:        "Require proxy authentication",
-        .localSocksAuthFooter:       "When enabled, apps must supply the username and password to use the local SOCKS5 proxy. Protects against unauthorised use by other apps on the device.",
         .logLevelLabel:              "Log level",
-        .sectionKeepAlive:           "Keep-Alive",
-        .footerStartTimeout:         "Max time to wait for the olcrtc server to become ready after connecting.",
-        .footerAutoConnect:          "Automatically connects the primary server when the app opens.",
-        .footerAutoRemove:           "Removes the linked connection from the list when uninstalling olcrtc from a VPS.",
         .footerKeepAlive:            "Sends a periodic end-to-end probe through SOCKS5 every N seconds. On failure the tunnel reconnects automatically. Set to 0 to disable.",
-        .footerBackgroundAudio:      "Plays a silent audio buffer to prevent iOS from suspending the app in the background. Disable if it conflicts with music or podcasts.",
-        .footerDebugLogging:         "Enables verbose connection logging. Disable to reduce log noise in the Connection tab.",
         .footerLogBuffer:            "Maximum number of lines kept in memory per log category.",
-        .footerContainerTail:        "Number of lines fetched from the VPS container when tapping «Logs».",
         .logBufferLabel:             "Log buffer",
         .containerLogsTailLabel:     "Container logs (tail)",
         .clearAllLogsAction:         "Clear all logs",
@@ -261,6 +268,15 @@ enum L10nTable {
         .themeLabel:                 "Theme",
         .themeRefined:               "Refined",
         .themeConsole:               "Console",
+        .directionLabel:             "Direction",   // #343: Refined/Console picker label
+
+        // #340: appearance scheme picker
+        .appearanceLabel:            "Appearance",
+        .appearanceSystem:           "System",
+        .appearanceLight:            "Light",
+        .appearanceDark:             "Dark",
+        // #342: fixed-footprint hero footer
+        .heroDisconnectedHint_fmt:   "Flip the switch to connect via %@.",
 
         // InstallOptionsView
         .installTitle:               "Install olcrtc",
@@ -404,8 +420,11 @@ enum L10nTable {
         .speedLabelPing:             "Ping",
         .speedLabelDL:               "DL",
         .speedLabelUL:               "UL",
-        .speedPingValue_fmt:         "%.0f ms",
-        .speedRateValue_fmt:         "%.1f Mbps",
+        // #342 was: "%.0f ms" / "%.1f Mbps" — unit moved to OlcMetric(unit:)
+        .speedPingValue_fmt:         "%.0f",
+        .speedRateValue_fmt:         "%.1f",
+        .speedUnitMs:                "ms",
+        .speedUnitMbps:              "Mbps",
         .speedUploadFallback_fmt:    "  upload: %@ has no upload endpoint — using %@",
 
         // #236/#237 — UI strings localized after the i18n pass
@@ -503,7 +522,7 @@ enum L10nTable {
         .nameField:                  "Метка",
         .namePlaceholder:            "Мой сервер",
         .groupField:                 "Группа",
-        .groupDefault:               "Основная",
+        .groupDefault:               "Подключения",   // #344 was: "Основная"
         .importByURI:                "Импорт по ссылке",
         .scanQRAction:               "Сканировать QR",
         .pasteURIAction:             "Вставить URI",
@@ -538,7 +557,7 @@ enum L10nTable {
         .actionUpdate:               "Обновить бинарник (git pull + rebuild)",
         .actionReboot:               "Reboot",
         .actionChangeRoomTransport:  "Изменить Room / Transport",
-        .actionDownloadContainerLogs: "Скачать логи контейнера",
+        .actionContainerLogs:        "Логи контейнера",   // #339 was: "Скачать логи контейнера"
         .actionDone:                 "Готово",
         .actionRemoveFromList:       "Удалить из списка",
         .removeHostConfirmTitle:     "Удалить %@?",
@@ -599,15 +618,15 @@ enum L10nTable {
         .vpsOpFailed_fmt:         "Сбой: %@",
 
         // ContainerLogsView
-        .emptyLogsTitle:             "Логи пусты",
-        .emptyLogsHint_fmt:          "Контейнер ничего не написал в stdout/stderr за последние %@ строк.",
+        // #339 was: emptyLogsTitle + emptyLogsHint_fmt (ContainerLogsView sheet, deleted)
         .closeAction:                "Закрыть",
 
         // LogsView
         .logsTitle:                  "Логи",
         .logsSearchPlaceholder:      "Поиск",
         .emptyLogsGeneric:           "Пусто",
-        .emptyLogsGenericHint:       "Запусти операцию во вкладке Connections или VPS",
+        // #316 was: "…во вкладке Connections или VPS" — вкладка называется "Управление VPS".
+        .emptyLogsGenericHint:       "Запусти операцию во вкладке Connections или Управление VPS",
         .noSearchResults:            "Ничего не найдено",
         .noSearchResultsHint_fmt:    "По запросу «%@» совпадений нет.",
         .categoryConnection:         "Подключение",
@@ -616,10 +635,12 @@ enum L10nTable {
         .categoryContainerLogs:      "Контейнер",
 
         // #294: per-source Logs tabs
-        .logsTabDescConnection:      "логи подключения",
-        .logsTabDescDiagnostics:     "логи проверки IP и скорости",
-        .logsTabDescVPS:             "логи установки VPS",
-        .logsTabDescContainer:       "логи контейнера сервера",
+        // #316 was: lowercase fragments (под заголовком таба) — теперь
+        // открывают подсказку пустого состояния, читаются как предложения.
+        .logsTabDescConnection:      "Логи подключения",
+        .logsTabDescDiagnostics:     "Логи проверки IP и скорости",
+        .logsTabDescVPS:             "Логи установки VPS",
+        .logsTabDescContainer:       "Логи контейнера сервера",
         .logsFileNameLabel_fmt:      "Файл: %@",
         .logsContainerSelectServer:  "Сервер",
         .logsContainerNoServers:     "Нет настроенных серверов",
@@ -628,9 +649,22 @@ enum L10nTable {
         .duplicateServerNameError:   "Сервер с таким именем уже существует",
 
         // #296: Container tab always-present load button
-        .logsDownloadFromServer:     "Загрузить логи с сервера",
+        // #338 was: logsDownloadFromServer ("Загрузить логи с сервера")
         .logsCheckServer:            "Проверить сервер",
         .logsContainerEmptyHint:     "Логи нужно загрузить с сервера.",
+        // #316: single-stack Logs tab — короткие подписи сегментов + счётчик строк
+        .logsSegConnection:          "Подкл",
+        .logsSegDiagnostics:         "Диаг",
+        .logsSegVPS:                 "VPS",
+        .logsSegContainer:           "Контейнер",
+        .logsLineCount_fmt:          "%d стр.",
+        // #338: inline container fetch — карточка источника + фазы
+        .logsFetchAction:            "Загрузить",
+        .logsFetchFromHost_fmt:      "Загрузить с %@",
+        .logsPhaseConnecting:        "Подключение…",
+        // deliberately English — a literal command line, not translated
+        .logsPhaseCommand_fmt:       "podman logs --tail %d %@",
+        .logsPhaseReceiving:         "Получение вывода…",
 
         // SettingsView
         .settingsTitle:              "Настройки",
@@ -639,7 +673,6 @@ enum L10nTable {
         .sectionVP8:                 "vp8channel",
         .sectionConnection:          "Подключение",
         .sectionLogs:                "Логи",
-        .sectionFont:                "Шрифт",
         .sectionIPSources:           "Источники проверки IP",
         .ipSourcesFooter:            "Сервисы, опрашиваемые при проверке IP. Варианты из ru-зоны остаются доступны, когда публичные резолверы заблокированы. Если ничего не выбрано, используются значения по умолчанию.",
         .sectionSpeedProvider:       "Провайдер спидтеста",
@@ -654,7 +687,6 @@ enum L10nTable {
         .logPortFree_fmt:            "✓ Порт %d свободен",
         .logPortBusyOther_fmt:       "✗ Порт %d занят",
         .logPortBusyOlcrtc_fmt:      "✓ Порт %d занят туннелем olcrtc",
-        .socksFooter:                "Локальный порт, который слушает встроенный SOCKS5-прокси. При занятом порте подключение завершится сообщением «Порт XXXX занят, смените порт».",
         .socksPortChangeNote:        "Изменение порта применится при следующем подключении.",
         .dnsFreeFormPlaceholder:     "IP:port",
         .dnsFooter:                  "Передаётся в Go-рантайм и в скрипт установки сервера. Формат: IP:port. Пресеты RU-операторов резолвят только внутри сети соответствующего оператора.",
@@ -666,17 +698,9 @@ enum L10nTable {
         .keepAliveOff:               "выкл",
         .backgroundAudioLabel:       "Фоновая работа (audio)",
         .localSocksAuthLabel:        "Требовать аутентификацию прокси",
-        .localSocksAuthFooter:       "Другие приложения должны указать логин и пароль чтобы использовать локальный SOCKS5-прокси. Защищает от несанкционированного использования.",
         .logLevelLabel:              "Уровень логирования",
-        .sectionKeepAlive:           "Keep-Alive",
-        .footerStartTimeout:         "Максимальное время ожидания готовности сервера olcrtc после подключения.",
-        .footerAutoConnect:          "Автоматически подключает основной сервер при открытии приложения.",
-        .footerAutoRemove:           "Удаляет связанное подключение из списка при удалении olcrtc с VPS.",
         .footerKeepAlive:            "Раз в N секунд делает end-to-end запрос через SOCKS5. При неудаче туннель переподключается. 0 — отключить.",
-        .footerBackgroundAudio:      "Проигрывает беззвучный аудио-буфер чтобы iOS не усыпил приложение в фоне. Выключите, если мешает музыке или подкастам.",
-        .footerDebugLogging:         "Включает подробное логирование подключения. Выключите, чтобы уменьшить количество записей в логах.",
         .footerLogBuffer:            "Максимальное количество строк в памяти для каждой категории логов.",
-        .footerContainerTail:        "Сколько строк тянуть с VPS-контейнера при нажатии «Логи».",
         .logBufferLabel:             "Буфер логов",
         .containerLogsTailLabel:     "Логи контейнера (tail)",
         .clearAllLogsAction:         "Очистить все логи",
@@ -689,6 +713,15 @@ enum L10nTable {
         .themeLabel:                 "Тема",
         .themeRefined:               "Refined",
         .themeConsole:               "Console",
+        .directionLabel:             "Направление",   // #343: Refined/Console picker label
+
+        // #340: переключатель оформления
+        .appearanceLabel:            "Оформление",
+        .appearanceSystem:           "Системное",
+        .appearanceLight:            "Светлое",
+        .appearanceDark:             "Тёмное",
+        // #342: подсказка в подвале hero-карточки
+        .heroDisconnectedHint_fmt:   "Переведи переключатель, чтобы подключиться через %@.",
 
         // InstallOptionsView
         .installTitle:               "Установка olcrtc",
@@ -832,8 +865,11 @@ enum L10nTable {
         .speedLabelPing:             "Ping",
         .speedLabelDL:               "DL",
         .speedLabelUL:               "UL",
-        .speedPingValue_fmt:         "%.0f ms",
-        .speedRateValue_fmt:         "%.1f Mbps",
+        // #342 was: "%.0f ms" / "%.1f Mbps" — unit moved to OlcMetric(unit:)
+        .speedPingValue_fmt:         "%.0f",
+        .speedRateValue_fmt:         "%.1f",
+        .speedUnitMs:                "ms",
+        .speedUnitMbps:              "Mbps",
         .speedUploadFallback_fmt:    "  upload: %@ has no upload endpoint — using %@",
 
         // #236/#237 — UI strings localized after the i18n pass

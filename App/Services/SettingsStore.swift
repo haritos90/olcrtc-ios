@@ -25,6 +25,34 @@ enum LogLevel: Int, CaseIterable, Codable, Comparable {
     }
 }
 
+// MARK: - AppearanceMode (#340)
+
+/// App appearance: System follows iOS, Light/Dark force a scheme. Replaces
+/// the Info.plist `UIUserInterfaceStyle = Dark` enforcement (project.yml);
+/// applied via `.preferredColorScheme` on the root in App.swift.
+enum AppearanceMode: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: return L10n.appearanceSystem.localized()
+        case .light:  return L10n.appearanceLight.localized()
+        case .dark:   return L10n.appearanceDark.localized()
+        }
+    }
+
+    /// nil = follow the system appearance.
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+}
+
 // MARK: - SettingsStore
 //
 // Singleton ObservableObject for app-wide preferences. UserDefaults is the
@@ -180,6 +208,11 @@ final class SettingsStore: ObservableObject {
     @Published var designConsole: Bool {
         didSet { Self.persist(designConsole, forKey: Keys.designConsole) }
     }
+    /// #340: appearance (System/Light/Dark). Defaults to .dark — the app was
+    /// forced-dark until now, so existing users see no change on update.
+    @Published var appearanceMode: AppearanceMode {
+        didSet { Self.persist(appearanceMode.rawValue, forKey: Keys.appearanceMode) }
+    }
     @Published var keepAliveSeconds: Int {
         didSet {
             let v = keepAliveSeconds.clamped(to: Defaults.keepAliveRange)
@@ -226,6 +259,7 @@ final class SettingsStore: ObservableObject {
         localSocksUser           = (d.string(forKey: Keys.localSocksUser))                      ?? ""
         language                 = (d.string(forKey: Keys.language))                            ?? Self.defaultLanguage()
         designConsole            = (d.object(forKey: Keys.designConsole) as? Bool)              ?? false
+        appearanceMode           = AppearanceMode(rawValue: d.string(forKey: Keys.appearanceMode) ?? "") ?? .dark   // #340
         keepAliveSeconds    = (d.object(forKey: Keys.keepAlive)           as? Int)  .map { $0.clamped(to: Defaults.keepAliveRange) }         ?? Defaults.keepAliveSeconds
         vpsAutoPingEnabled  = (d.object(forKey: Keys.vpsAutoPingEnabled)  as? Bool)                                                          ?? Defaults.vpsAutoPingEnabled
         vpsAutoPingInterval = (d.object(forKey: Keys.vpsAutoPingInterval) as? Int)  .map { $0.clamped(to: Defaults.vpsAutoPingRange) }       ?? Defaults.vpsAutoPingInterval
@@ -256,6 +290,7 @@ final class SettingsStore: ObservableObject {
         localSocksAuthEnabled  = false
         localSocksUser         = ""
         language               = Self.defaultLanguage()
+        appearanceMode         = .dark   // #340
         keepAliveSeconds       = Defaults.keepAliveSeconds
         vpsAutoPingEnabled     = Defaults.vpsAutoPingEnabled
         vpsAutoPingInterval    = Defaults.vpsAutoPingInterval
@@ -304,6 +339,7 @@ final class SettingsStore: ObservableObject {
         static let localSocksUser            = "settings.localSocksUser"
         static let language                  = "settings.language"
         static let designConsole             = "settings.designConsole"
+        static let appearanceMode            = "settings.appearanceMode"   // #340
         static let keepAlive                 = "settings.keepAliveSeconds"
         static let vpsAutoPingEnabled        = "settings.vpsAutoPingEnabled"
         static let vpsAutoPingInterval       = "settings.vpsAutoPingInterval"

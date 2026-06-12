@@ -413,8 +413,9 @@ final class Provisioner: ObservableObject {
     /// Pulls `podman logs --tail N` over SSH. Returns the raw text and ALSO
     /// dumps each line into this server's per-host `.containerLogs` buffer/file
     /// (#295: `<host.logFilePrefix>_container.log`) so the user can scroll
-    /// through it in the Logs tab Container tab later. Returned string is
-    /// what the calling view shows in its sheet.
+    /// through it in the Logs tab's Container category. #339 was: "Returned
+    /// string is what the calling view shows in its sheet" — the sheet is
+    /// gone; callers read the buffer, the return value is unused today.
     func containerLogs(on host: ServerHost, password: String,
                         containerName: String, tail: Int = 200) async throws -> String {
         status = .running(L10n.provisioningLogsFetching.localized())
@@ -428,6 +429,10 @@ final class Provisioner: ObservableObject {
                 containerName: containerName, tail: tail,
                 onStep: stepHandler())
 
+            // #338: third real progress signal for the Logs tab's phase bar —
+            // the SSH output is downloaded, now being parsed into the buffer.
+            status = .running(L10n.logsPhaseReceiving.localized())
+
             // Persist into this server's own container-log file so it
             // survives the sheet being dismissed. #278: parse each line's Go
             // timestamp ("2006/01/02 15:04:05") into a real Date so the
@@ -437,7 +442,10 @@ final class Provisioner: ObservableObject {
             // (multi-line panics etc.). #295: per-server file/buffer, keyed
             // by the sanitised server-name prefix.
             let prefix = host.logFilePrefix
-            LogStore.shared.startContainerSession(serverPrefix: prefix)
+            // #338: session divider with the command + time before the fetched
+            // block (replaces the generic "── new session ──", design_handoff §2).
+            LogStore.shared.startContainerSession(serverPrefix: prefix,
+                divider: "── podman logs --tail \(tail) · \(Self.fetchStamp.string(from: Date())) ──")
             var carry = Date()
             for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
                 let raw = String(line)
@@ -528,6 +536,15 @@ final class Provisioner: ObservableObject {
             throw error
         }
     }
+
+    /// #338: HH:mm stamp for the container-fetch session divider (static —
+    /// per-call DateFormatter allocation is the #203 anti-pattern).
+    private static let fetchStamp: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm"
+        return f
+    }()
 
     private func stepHandler() -> @Sendable (String) -> Void {
         return { [weak self] step in
