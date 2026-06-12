@@ -53,7 +53,7 @@ When **Open** has no rows, keep the header + separator and leave a single placeh
 row — `| — | — | — | — | _(empty — promote one from Backlog)_ |` — instead of replacing
 the table with prose.
 
-**Next free ID:** 319
+**Next free ID:** 337
 
 ---
 
@@ -63,7 +63,6 @@ Current, actionable work.
 
 | ID | Pri | Eff | Theme | Title |
 |---|---|---|---|---|
-| 297 | P1 | S | reliability | Fix freeze when opening Container logs for a server not yet checked |
 | 299 | P3 | L | ux | Theme = real colour schemes (Dark/Light/Gray), not tile borders — replace Refined/Console |
 | 316 | P2 | M | ux | LogsView (#294) nests a `TabView` inside MainTabView's `TabView` — verify rendering; likely replace with `OlcSegmented` (the pre-#276 pattern) |
 
@@ -90,7 +89,22 @@ Future / blocked / someday. Promote to Open when picked up.
 | 313 | P3 | S | reliability | TunnelManager doesn't track the actually-bound SOCKS port — port-check can mislabel "in use by olcrtc tunnel" after a live port change |
 | 314 | P2 | M | features | #303 "generate new key" fallback when server.yaml is unreadable/unparseable (rotate `~/.olcrtc_key`, write back via a new srv.sh-parity script, then add the resulting connection) |
 | 317 | P3 | S | ux | Unify ad-hoc `.red`/`.green` styles with `Theme.Palette` (#258 invariant) — AddServerHostView, AddConnectionView, SettingsView port check |
-| 318 | P3 | S | observability | Orphaned log files after #294: `ip.log`/`speed.log` (now `diagnostics.log`) and the old shared `containerLogs.log` linger in Documents/logs — delete or migrate on startup |
+| 320 | P3 | S | parity | srv.sh `VP8_FPS`/`VP8_BATCH` (60/8) and SEI fps default (60) predate upstream's CPU-reduction pass to `fps:30` (#260→#319 sync) — re-benchmark mobile throughput/CPU at 30fps before changing the boc defaults |
+| 321 | P2 | L | docs | README: rewrite the iPhone-install section around SideStore/LiveContainer + merge the build sections into one "Build it yourself" |
+| 323 | P3 | S | ux | #295 (`d8d04df`): non-ASCII labels sanitize to the `"server"` log prefix — two Cyrillic-named hosts collide (confusing "duplicate name" error on add; pre-#295 hosts silently share one container log file) |
+| 324 | P3 | XS | observability | #294 (`d8d04df`): IPChecker never calls `startSession(.diagnostics)` — IP-check lines miss `diagnostics.log` until a speed test creates the writer, while the Logs tab header advertises that file |
+| 325 | P2 | M | parity | parity_check 2.0: two-way line-by-line check — rejected upstream lines stay in srv.sh commented with a reason marker; unaccounted upstream additions fail the check into a triage task |
+| 326 | P3 | XS | l10n | Connections tab: default group header says "Servers" — rename to "Connections"; "servers" wording stays Manage-VPS-only |
+| 327 | P2 | L | features | Routing switch (Connections tab) only reroutes diagnostics (IP check / speed test), not the actual tunnel — make "All direct" apply to the SOCKS path too (likely upstream) |
+| 328 | P2 | M | ux | Show the active carrier's hosts/IPs with one-tap copy — what to exclude in Shadowrocket-style apps to avoid the proxy loop |
+| 329 | P2 | L | features | On server stop: kick all participants + close the room, behind a setting (default ON) — likely needs core/upstream support |
+| 330 | P1 | M | reliability | Edit sheet of the current connection: app hangs on open and on close |
+| 331 | P3 | M | observability | Provisioning vs Container logs largely repeat each other — split by line origin (proposal in Details) |
+| 332 | P1 | M | performance | Log pipeline causes UI freezes: slow disconnect, laggy Logs screen (causes confirmed in code; proposal in Details) |
+| 333 | P1 | M | reliability | Port reads "busy" for seconds after disconnect, blocking reconnect on our own ghost — bounded same-port wait/retry, keep the #308 contract (proposal in Details) |
+| 334 | P3 | S | ux | Container-log download shows no activity on the server card — add a progress/busy indicator |
+| 335 | P3 | S | ux | Server card progress bar start: text overlaps for ~0.5 s — fix the visual jank |
+| 336 | P2 | M | performance | App degrades over long sessions (suspected log growth) — profile to confirm; likely shares the #332 root |
 
 ---
 
@@ -227,13 +241,6 @@ second precision, no millis) — #277/#278 must reformat + tolerate the missing 
 now the *wiring*: emit these coded lines from the right places (and detect the 🟡-planned ones), make the
 codes searchable in the merged Logs stream (#276), and cross-link from the README troubleshooting.
 
-### 297 — Fix freeze opening Container logs for an unchecked server
-
-Selecting Container logs for a server that hasn't been checked yet **hangs the app** — a blocking
-SSH/connect call on the main actor. Move the fetch/connect fully off the main thread, guard the
-not-yet-checked / unknown-host path, and show progress instead of freezing. Pairs with 296 (the
-"Check server" gating).
-
 ### 299 — Theme = real colour schemes (Dark / Light / Gray)
 
 **User wants this prioritised.** The current "Theme" picker (Refined/Console — #267/#281) only changes
@@ -253,6 +260,194 @@ per-category UI used `OlcSegmented` (the design-system component, see git histor
 Logs tab; if the double bar shows, restructure: one `NavigationStack`, `OlcSegmented` selection,
 switch between the existing `LogCategoryTabView` / `ContainerLogsTabView` bodies (their own
 `NavigationStack`s + `.searchable` must then be lifted to the shared container).
+
+---
+
+### 321 — README: rewrite iPhone-install + merge build sections
+
+Two changes to `README.md`, ordered so a newbie hits "how do I get this on my iPhone"
+before any build talk, and a dev still finds "how do I build this" right after.
+
+**1. Rewrite "Install without Xcode (sideload)"** around the two most user-friendly
+sideloading apps, primary then alternative:
+
+- **Primary: [SideStore](https://sidestore.io)** — AltStore-based, refreshes apps over
+  Wi-Fi without a cable.
+- **Alternative: [LiveContainer](https://github.com/LiveContainer/LiveContainer)** — runs
+  sideloaded apps inside a container app, no per-app re-signing dance.
+- Link the **iLoader** repos for installing SideStore/LiveContainer themselves (the
+  no-computer-needed install path for the sideloading app).
+- Cover **LocalDevVPN** for auto-renewing the 7-day signature, with the concrete steps
+  for both SideStore and LiveContainer (where the option lives, what it needs).
+- Highlight the convenient flow: copy the `.ipa` asset link straight from the
+  [GitHub Release](../../releases) page and paste it into SideStore/LiveContainer's
+  "add from URL" — the app downloads and installs it directly, no manual `.ipa`
+  download/transfer step.
+- Keep the existing AltStore/Sideloadly + cable-based instructions too (still valid,
+  more familiar to some), but as the secondary/manual path — push detail into a
+  `<details>` block like the current "Build the .ipa yourself" does, so the section
+  stays scannable.
+
+**2. New "Build it yourself" section** — merge the current **Build and run**,
+**Updating**, and the two `<details>` blocks *Building `Mobile.xcframework` from
+source* and *Build the .ipa yourself* into one section covering: clone + submodule,
+fetch/build the framework, `xcodegen`, build & run in Xcode, building the unsigned
+`.ipa`, and pulling updates. Place it **after** the (rewritten) sideload section and
+**before** "Project structure" — sideload-only readers never need to scroll past it.
+Keep the `<details>` pattern for the toolchain-setup and from-source build steps so the
+top-level flow stays short.
+
+Throughout: optimize for a first-time reader to find the SideStore install path
+immediately, while a developer can still find "build it myself" right below — push
+anything more detailed than that into `<details>`, matching the existing README style.
+
+### 325 — parity_check 2.0: two-way, line-classified srv.sh parity
+
+Today `parity_check.py` checks one direction only: every non-comment line of ours
+outside `# boc/eoc` must exist *somewhere* in upstream's srv.sh (set membership).
+Upstream **additions pass silently** — after the #319 bump, 156 upstream lines
+(the interactive carrier/Jitsi/room menus) are absent from our copy, all
+deliberately, but none of those decisions is recorded anywhere, and a future
+upstream addition (a new required env var, an install step) would stay invisible.
+Redesign, per operator decision (2026-06-12):
+
+1. **Rejected upstream lines stay in our file, commented, with the reason.**
+   Every upstream line we deliberately do NOT adopt is carried in
+   `scripts/srv.sh` as a commented-out verbatim copy inside a dedicated marker
+   pair, e.g. `# boc olcrtc-ios-rejected: <why we don't take this>` …each
+   upstream line prefixed `# `… `# eoc olcrtc-ios-rejected` (exact syntax TBD at
+   implementation; must stay shell-safe and distinct from plain `boc/eoc`).
+   Start by backfilling the current 156 lines (non-interactive install replaces
+   the menus — `OLCRTC_*` env vars).
+2. **Line-by-line loop instead of set membership.** The checker walks both
+   files and classifies every line of ours — `same-as-upstream` / `rejected`
+   (commented copy inside a rejected block) / `ours` (inside `boc/eoc`) — and
+   every upstream line — `adopted` / `rejected` / `unaccounted`. Order-aware
+   where possible: set membership today can't see moved or duplicated lines.
+3. **Fail in both directions.** Fail when (a) one of our base lines no longer
+   exists in upstream (today's check), or (b) an upstream line is
+   `unaccounted` — neither adopted nor explicitly rejected. The error text
+   tells the operator to adopt the new upstream lines OR wrap them as
+   rejected-with-reason, **and to file a TODO task for the triage decision**
+   ("what do we take, what do we skip, and why").
+4. Keep it a pre-build phase; update CONTRIBUTING.md → *srv.sh parity* and
+   AGENTS.md §3 to describe the new marker and the two-way contract.
+
+### 326 — Connections tab: default group header "Servers" → "Connections"
+
+The connections list's default group renders as **"Servers"** —
+`L10n.groupDefault` (en `"Servers"` / ru `"Основная"`), applied via
+`ConnectionRecord.displayGroupName` (ConnectionsView.swift:364). Change the en
+value to `"Connections"` (decide whether ru `"Основная"` becomes
+`"Соединения"` to match) so "servers" terminology lives only in the Manage VPS
+tab. String-only — the stored `defaultGroupName` token must NOT change (#283:
+existing records aren't migrated).
+
+### 327 — Routing switch: make "All direct" affect the actual tunnel
+
+The Routing segmented control on the Connections tab (`RoutingMode`:
+`.allTunnel` / `.allDirect`, #273) **only reroutes the app's own diagnostics
+traffic** — IP check and speed test via `currentMode`
+(ConnectionsView.swift:53) — while the actual tunnel is untouched: external
+apps pointed at the SOCKS port keep going through the carrier regardless of
+the switch. The UI promises a global kill switch ("tunnel off but stay
+connected", per the RoutingMode.swift design comment) that doesn't exist.
+
+Make `.allDirect` apply to the real SOCKS path: traffic entering the local
+SOCKS port relays **directly** instead of through the carrier, without
+dropping the carrier session. `Mobile.objc.h` exposes no direct/bypass mode
+(verified 2026-06-12), so this almost certainly needs an upstream/core
+addition (a runtime bypass toggle on the running client) — pairs with the
+#247 pattern (UPSTREAM-only work + xcframework rebuild). Until the core
+supports it, consider an interim honest-UX step: label the switch as
+affecting diagnostics only.
+
+### 328 — Carrier endpoints with one-tap copy (proxy-loop exclusions)
+
+When an external app (e.g. Shadowrocket) routes *all* traffic through the
+olcrtc SOCKS port, the tunnel's own carrier traffic (the Jitsi/telemost server)
+must bypass the proxy or it loops. Today it's hard to tell which addresses to
+exclude. Show, for the active connection, the carrier endpoints actually in
+use — at minimum the carrier base host (e.g. `meet1.arbitr.ru`), its currently
+resolved IPs (they rotate, so copy both host and IPs), and STUN/TURN hosts if
+used — each one-tap copyable, with a short "add these as DIRECT rules in your
+proxy app" hint. Sources: the `OlcrtcConnection` params + a resolver pass;
+check what `Mobile.objc.h` exposes about live ICE endpoints before promising
+IP-level accuracy.
+
+### 329 — Kick participants + close the room on server stop
+
+When the olcrtc server stops, the conference room currently stays open with
+stale participants. Wanted: on server stop the server kicks all participants
+and closes/ends the room — gated by a setting, **default ON**. Carrier-
+dependent (Jitsi: end conference; telemost/wbstream: TBD) and likely needs
+core/upstream support — check what the core exposes at shutdown before
+scoping. Probably splits into an upstream change + an iOS toggle (Settings +
+an `OLCRTC_*` env var through srv.sh, boc-patched).
+
+### 331 — Provisioning vs Container logs: split by line origin (proposal)
+
+Overlap: during install/start the provisioning stream carries the script's
+output, which includes the container's own startup lines; "Download logs"
+later re-pulls those same lines into the per-server container log — the two
+tabs largely repeat each other. Proposed split — classify by **origin**, not
+by operation:
+
+- **provisioning** keeps orchestration only: SSH steps, script phase markers,
+  ✓/✗ statuses, errors;
+- anything **produced by the container itself** (the `podman logs` output, the
+  container-startup tail inside the install output) always routes to the
+  per-server container log (#295), even when it arrives during provisioning;
+- at each hand-off, provisioning logs one pointer line ("container output →
+  Container tab") so the narrative stays followable.
+
+Implementation sketch: the install/start paths in `SSHRunner`/`Provisioning`
+detect the container-output section of the script output and feed it through
+`logContainer` instead of `.provisioning`. Once every line has exactly one
+home, no dedupe pass is needed.
+
+### 332 — Logs pipeline performance (proposal)
+
+Symptoms: disconnect takes seconds (teardown log storm), the Logs screen
+stutters, long sessions degrade (#336). Causes, confirmed in code:
+
+1. every appended line does two synchronous `FileHandle.write`s on the main
+   actor (`LogFileWriter.write`, LogStore.swift:152);
+2. `revision` bumps per line and **all four Logs tabs** observe the store —
+   `TabView` keeps off-screen tabs alive, so each line re-runs
+   `LogRendering.filtered` + `attributed` over the whole buffer ×4 (#294
+   retired the #289 visibility gate on the assumption off-screen tabs don't
+   re-render; `@ObservedObject` re-evaluates them anyway);
+3. each render rebuilds one monolithic `AttributedString` — O(buffer) per
+   appended line, no incremental diffing.
+
+Proposal, in payoff order:
+
+- **coalesce UI updates**: debounce `revision` so views see at most ~4
+  updates/s regardless of log rate — the storm-proofing that fixes disconnect;
+- **restore per-tab visibility gating** (`.onAppear`/`.onDisappear` per tab)
+  so only the visible tab rebuilds;
+- **move file writes off the main actor** (serial background queue or a small
+  buffered writer actor, flushed off-main);
+- **cap rendered lines** (newest ~500 with a "truncated — share/export for
+  full history" header) independent of the buffer cap; only if still needed,
+  switch to a `List` of per-line `Text` rows for incremental diffing.
+
+### 333 — Port "busy" right after disconnect (proposal)
+
+After stopping the tunnel, the SOCKS port reads busy for a few seconds (the
+core's listener teardown is asynchronous / the socket lingers), so an
+immediate reconnect fails on our own ghost. The #308 contract stays untouched:
+bind exactly the configured port, typed "port busy" error, **no port sliding**.
+Proposal:
+
+- first check the disconnect path: if we can await the core's listener close
+  before reporting "disconnected", the window disappears at the source (and
+  check whether the core can set `SO_REUSEADDR` upstream);
+- client-side mitigation: on connect, if the configured port is busy AND we
+  disconnected ourselves within the last ~10 s, wait-and-retry the **same**
+  port (poll ~every 250 ms, up to ~5 s, with a "waiting for port release…"
+  status) before surfacing the typed busy error.
 
 ---
 
@@ -546,6 +741,7 @@ release notes use; `—` on rows closed before #315 or with nothing to announce.
 | 294 | observability | Logs: revert merged stream → per-source tabs (Connection/Diagnostics/VPS/Container) | `LogsView` rewritten as a `TabView` with 4 tabs (Connection/Diagnostics/VPS via `LogCategoryTabView`, Container via `ContainerLogsTabView`); shared `LogRendering` (filter/newest-first/colour/plain export, `@MainActor`) + `LogTabHeader` (description + file name). `LogCategory.ip`/`.speed` → `.diagnostics` (`diagnostics.log`). Removed the `merged` stream and the #289 visibility-gate plumbing — `isActive` kept on `LogsView.init` for call-site compatibility but unused. Supersedes #290 (Won't Do). New L10n: `categoryDiagnostics`, `logsTabDesc*`, `logsFileNameLabel_fmt` (en+ru) | Logs tab redesigned: separate Connection / Diagnostics / VPS / Container views, each showing its description and log file name |
 | 295 | observability | Logs: per-server container log files with a unique server-name prefix | `LogStore` gained per-server container buffers/files keyed by `ServerHost.logFilePrefix` (new `sanitizeLogFilePrefix`: alphanumerics kept, rest collapse to `_`, falls back to `"server"`); `startContainerSession`/`logContainer`/`clearContainer`/`noteContainerTarget` all take `serverPrefix`. `Provisioning.containerLogs` writes through the per-host prefix. `AddServerHostView` rejects duplicate names/prefixes (`isDuplicateLabel`, new `duplicateServerNameError` L10n). `Tests/ServerHostTests.swift` (new) | Each server now keeps its own container log file |
 | 296 | ux | Container logs: always-present "Download from server" button + empty hint | `ContainerLogsTabView` (part of #294's `LogsView` rewrite) has a server picker (when >1 host) and an always-present "Download logs from server" / "Check server" (when offline) button, plus an empty-state hint that logs need loading from the server. New L10n: `logsDownloadFromServer`, `logsCheckServer`, `logsContainerEmptyHint`, `logsContainerSelectServer`, `logsContainerNoServers` (en+ru) | Container logs: "Download from server" is always available (or "Check server" while offline) |
+| 297 | reliability | Fix freeze when opening Container logs for a server not yet checked | `ContainerLogsTabView.primaryAction` (#296) called `probeReadiness(containerName: nil)`, but `parseReadiness` always returns `.imageReady` for `containerName == nil` — "Check server" could never discover/adopt a container, a silent dead end that read as a frozen button. Now mirrors #302: scans for an existing `olcrtc-server-*` via `scanContainers` and adopts the first match. Every remaining dead end (missing password, no container found, fetch error) sets a visible alert instead of returning silently | Container logs: "Check server" now finds and adopts an existing container, and shows an error instead of doing nothing |
 | 300 | ux | Port check: 3 states (free / used by another / used by olcrtc tunnel) | `PortAvailability.PortState` (`.free`/`.busyOther`/`.busyOurs`) gated on live `TunnelManager` state via `tunnelHoldsPort`, replacing the binary `isFree` heuristic in `SettingsView`'s port check; new `logPortBusyOther_fmt`/`logPortBusyOlcrtc_fmt` + relabeled `portInUseByOlcrtc` (en+ru). `Tests/PortAvailabilityTests.swift` +4. Follow-up: #313 | Port check now distinguishes free / busy by another app / in use by the olcrtc tunnel |
 | 301 | features | New "Config" tab between Manage VPS and Logs (placeholder "Coming soon") | new `ConfigView` (NavigationStack + `OlcEmptyState` "Coming soon") inserted at tab index 2; Logs/Settings shifted to tags 3/4 and the Logs visibility gate updated to `selectedTab == 3`. New L10n `tabConfig` + placeholder strings (en+ru) | — |
 | 302 | reliability | Server check: auto-detect existing olcrtc containers (no false "cached for reinstall") | `checkServer` now, when the readiness probe finds no *known* container on a host with `lastContainerName == nil`, folds in `scanContainers` and adopts the first `olcrtc-server-*` found — persists its name, sets the base to running/stopped from its status, logs `autoDetectedContainer` — so an existing container surfaces without the separate "Look for olcrtc containers" tap (still available for multi-container hosts) | — |
@@ -560,3 +756,6 @@ release notes use; `—` on rows closed before #315 or with nothing to announce.
 | 311 | l10n | Route speed-tile metric labels/units + upload-fallback log line through L10n | `ConnectionsView.speedRow` labels (Ping/DL/UL) and `"%.0f ms"`/`"%.1f Mbps"` formats, plus `SpeedTest.measureUpload`'s fallback log line, now go through new `speedLabelPing/DL/UL`, `speedPingValue_fmt`, `speedRateValue_fmt`, `speedUploadFallback_fmt` (en+ru, ru=en — universal abbreviations / deliberately-English diagnostic line) | Speed tile labels and units are now localizable |
 | 312 | docs | README testing section drifted ("238 unit tests" + stale "port selection") | dropped the exact test count for "A broad suite of unit tests covers…"; replaced "port selection" with "port availability / busy-error mapping" (#308) | README: testing section brought up to date |
 | 315 | build | Closed table: Release note column for curated GitHub Release notes | new 5th Closed column **Release note** (one user-facing "what's new" line, filled on close; `—` = fall back to title); `closed-tasks-since.py` emits `- #ID note` instead of `- #ID title — resolution` (5-col regex + 4-col fallback for historic refs); all 294 prior rows backfilled with `—`; documented in TODO.md header, AGENTS.md §5, CONTRIBUTING.md → Task tracking | Release notes now show short "what's new" lines instead of verbose task resolutions |
+| 318 | observability | Orphaned log files after #294/#295 linger in Documents/logs | `LogStore.init` now calls `cleanupOrphanedLogFiles()`, deleting `ip.log`/`speed.log` (merged into `diagnostics.log` by #294) and the old shared `containerLogs.log` (replaced by per-server files in #295), once per launch | — |
+| 319 | reliability | Integrate upstream olcrtc (e2c4b1e → 39cc3fa) | bumped submodule pin (13 commits): server.go `reinstallSession` now closes the old muxconn before the session swap (fixes "frame too large" when a client reconnects faster than the server can push new-session frames into the dying smux session); jitsi engine hardening — `RequireTargetedPeer` drops untargeted broadcast frames before the peer-latch (already wired via `internal/client`, no mobile.go API change), bounded 30s rejoin-join timeout, RTCP keepalive only runs when a PC carries media/SCTP bridge, `PeerConnectionStateFailed` now triggers a reconnect instead of `onEnded`; muxconn/smux retuning (`inboundQueue` 256→128, `fastSpinAttempts` 200→16, `MaxStreamBuffer` 1MiB→512KiB, frames up to 32KiB); vp8channel default fps 60→30 + smaller KCP queues (CPU-reduction pass). Default Jitsi server list changed (`meet.cryptopro.ru` removed, `meet.small-dm.ru`/`meet.handyweb.org` added) — our `AppConstants.defaultJitsiBaseURL` (`meet1.arbitr.ru`) is unaffected, still in the list. `parity_check.py` clean — the upstream interactive Jitsi-menu/room-options rewrite in `script/srv.sh` falls entirely outside our non-interactive boc patches. Rebuilt `Mobile.xcframework` via `build-framework.sh` (Mobile* API unchanged), app builds + 265 tests green. Follow-up: #320 (re-benchmark our 60fps vp8/sei srv.sh defaults against upstream's new 30fps recommendation) | Reconnects after a dropped session are more reliable |
+| 322 | build | Commit `bf48a75` message ("upstream parity update") is not Conventional Commits and omits the #297/#318 work — amend before push | amended before push | — |
