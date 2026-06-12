@@ -124,7 +124,7 @@ struct AddConnectionView: View {
                 }
 
             if !parseError.isEmpty {
-                Text(parseError).font(.caption).foregroundStyle(.red)
+                Text(parseError).font(.caption).foregroundStyle(Theme.Palette.red) // #317 was: .foregroundStyle(.red) — status colors via Theme.Palette (#258 invariant)
             }
         } header: {
             Text(L10n.importByURI.localized())

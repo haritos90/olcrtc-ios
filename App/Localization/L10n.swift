@@ -118,6 +118,15 @@ enum L10n: String, CaseIterable {
     case recoverErrorMissingYAML           // "Server config not found"
     case recoverErrorMissingField_fmt      // "Server config is missing '%@'"
 
+    // MARK: #314 Generate new key (fallback when #303 recovery can't read server.yaml)
+    case rotateKeyConfirmTitle             // "Server config unreadable — generate a new key?"
+    case rotateKeyConfirmBody              // warning: rotation cuts off all other clients
+    case rotateKeyConfirmAction            // "Generate new key" (destructive confirm button)
+    case provisioningRotatingKey           // "Generating new server key…" (status step)
+    case rotateKeyResultSuccess            // "New encryption key active" (provisioner status)
+    case rotateKeyResultAdded_fmt          // "New key generated — %@/%@ connection added"
+    case rotateKeyFailedNoURI              // rotation script printed no OLCRTC_URI=
+
     // MARK: Container status
     case containerRunning_fmt               // "Container running: %@"
     case containerStopped_fmt               // "Container stopped: %@"
@@ -191,6 +200,9 @@ enum L10n: String, CaseIterable {
     case logsPhaseConnecting                // "Connecting…" — fetch phase 1/3 (covers the scan-first fallback)
     case logsPhaseCommand_fmt               // "podman logs --tail %d %@" — fetch phase 2/3
     case logsPhaseReceiving                 // "Receiving output…" — fetch phase 3/3
+
+    // MARK: #332 — rendered-line cap
+    case logsRenderTruncated_fmt            // "Showing the newest %d lines…" — notice above a capped log body
 
     // MARK: SettingsView
     case settingsTitle
@@ -413,6 +425,13 @@ enum L10n: String, CaseIterable {
     case subDohFailed_fmt                   // "DoH could not resolve %@"
     case subInvalidResponse_fmt             // "HTTP %d"
     case subNoAddress                       // "DoH returned an empty address list"
+
+    // MARK: Subscription import (#111: olcrtc-sub:// links)
+    case subImportTitle                     // "Import subscription"
+    case subImportConfirm_fmt               // "Add %d connection(s) from “%@”?"
+    case subImportAddAction                 // "Add"
+    case subInvalidLink                     // bad olcrtc-sub:// link
+    case subEmptyList                       // fetched, but no valid olcrtc:// lines
 }
 
 extension L10n {

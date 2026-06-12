@@ -32,3 +32,30 @@ olcrtc://<carrier>?<transport>[<params>]@<roomID>#<key>[%<clientID>][$<mimo>]
 
 See `App/Models/OlcrtcURI.swift` for the encoder/parser and round-trip tests in
 `Tests/`.
+
+## Subscription links (`olcrtc-sub://`) <!-- #111 -->
+
+A subscription is a plain-text server list hosted over HTTPS; its payload
+format (global `#key: value` fields, one `olcrtc://` URI per line, per-server
+`##key: value` fields) is specified upstream in
+[`olcrtc-upstream/docs/sub.md`](../olcrtc-upstream/docs/sub.md). Upstream
+defines only the payload — the link scheme below is an olcrtc-ios convention.
+
+```
+olcrtc-sub://<host>[:port]/<path>[?query]
+```
+
+Opening such a link launches the app, which fetches the list from the same
+URL with the scheme swapped to `https` (only the scheme changes):
+
+```
+olcrtc-sub://pool.example.org/sub  →  https://pool.example.org/sub
+```
+
+The app shows how many connections the list contains and imports them on
+confirmation. The list's `#name` becomes the group of the imported records;
+each record is named after its `##name` (falling back to the URI's `$<mimo>`
+comment, then `carrier · transport`). Unknown fields are ignored; HTTP
+sources are not supported (the URIs carry encryption keys). Parser:
+`App/Models/OlcrtcSubscription.swift`, fetcher (with DoH fallback):
+`App/Services/SubscriptionFetcher.swift`.

@@ -26,11 +26,12 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>olcrtc</string>
+				<string>olcrtc-sub</string>
 			</array>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>248</string>
+	<string>250</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

@@ -120,7 +120,19 @@ struct LogEntry: Identifiable, Equatable {
 
 // Writes plain text lines to a per-category rotating file.
 // On simulator also mirrors to /tmp/olcrtc-ios-logs/ so Claude Code can read them.
+// #332: writes used to run synchronously on the caller's (main) thread, so a
+// teardown log storm stacked two disk writes per line inside UI updates —
+// the "slow disconnect" freeze. They now hop onto one shared serial
+// background queue; the caller hands over an already-redacted line
+// (LogStore redacts before calling `write`), so nothing unredacted can
+// reach disk from the queue either.
 final class LogFileWriter {
+    /// #332: a single serial queue shared by every writer keeps the exact
+    /// append order — within a file and across files (a replaced writer's
+    /// queued lines land before its successor's) — while keeping file I/O
+    /// off the main actor.
+    private static let ioQueue = DispatchQueue(label: "olcrtc.log-file-writer", qos: .utility)
+
     private var handle: FileHandle?
     private var mirrorHandle: FileHandle?
     private(set) var fileURL: URL?
@@ -164,15 +176,66 @@ final class LogFileWriter {
 
     func write(_ line: String) {
         let data = (line + "\n").data(using: .utf8) ?? Data()
-        handle?.write(data)
-        mirrorHandle?.write(data)
+        // #332 was: handle?.write(data) + mirrorHandle?.write(data) inline —
+        // synchronous disk I/O on the main actor, twice per log line.
+        Self.ioQueue.async { [handle, mirrorHandle] in
+            handle?.write(data)
+            mirrorHandle?.write(data)
+        }
     }
 
     deinit {
-        handle?.closeFile()
-        mirrorHandle?.closeFile()
+        // #332: close on the same serial queue so every queued write lands
+        // before the handle closes (writing to a closed FileHandle raises).
+        Self.ioQueue.async { [handle, mirrorHandle] in
+            handle?.closeFile()
+            mirrorHandle?.closeFile()
+        }
     }
 }
+
+// boc #332
+/// Leading+trailing throttle for the UI `revision` counter. Pure state
+/// machine — no clocks or tasks inside, the caller supplies `now` — so the
+/// coalescing rules are unit-testable: the first event after a quiet period
+/// fires immediately, a burst schedules exactly one trailing flush
+/// `minInterval` after the last fire, and everything in between is dropped.
+/// Net effect: observers see at most one update per `minInterval` regardless
+/// of the log rate, and the newest lines always surface within `minInterval`.
+struct LogUpdateCoalescer {
+    enum Action: Equatable {
+        case fireNow                          // bump the published value now
+        case scheduleFlush(after: Duration)   // bump once after this delay
+        case alreadyScheduled                 // a trailing flush is pending — drop
+    }
+
+    let minInterval: Duration
+    private var lastFire: ContinuousClock.Instant?
+    private var flushPending = false
+
+    init(minInterval: Duration) { self.minInterval = minInterval }
+
+    /// Record one event (an appended log line) and learn what to do about it.
+    mutating func recordEvent(now: ContinuousClock.Instant) -> Action {
+        if flushPending { return .alreadyScheduled }
+        if let last = lastFire {
+            let elapsed = last.duration(to: now)
+            if elapsed < minInterval {
+                flushPending = true
+                return .scheduleFlush(after: minInterval - elapsed)
+            }
+        }
+        lastFire = now
+        return .fireNow
+    }
+
+    /// The scheduled trailing flush has fired.
+    mutating func flushFired(now: ContinuousClock.Instant) {
+        flushPending = false
+        lastFire = now
+    }
+}
+// eoc #332
 
 /// Central log sink for the whole app. Maintains bounded in-memory buffers
 /// per `LogCategory` (for SwiftUI observation) and rotating on-disk files.
@@ -184,7 +247,11 @@ final class LogStore: ObservableObject {
     // Bounded buffers per category. UI scrolls these; older entries are dropped.
     // Cap comes from SettingsStore.logBufferSize so the user can tune it
     // in the Settings tab.
-    @Published var entries: [LogCategory: [LogEntry]] = Dictionary(
+    // #332 was: @Published — publishing per appended line invalidated the
+    // observing view on every line *in addition to* the `revision` bump,
+    // defeating any coalescing. The buffers are plain storage now; views
+    // refresh off the coalesced `revision` below.
+    private(set) var entries: [LogCategory: [LogEntry]] = Dictionary(
         uniqueKeysWithValues: LogCategory.allCases.map { ($0, []) }
     )
 
@@ -193,13 +260,19 @@ final class LogStore: ObservableObject {
     // #295: per-server container-log buffers, keyed by `ServerHost.logFilePrefix`.
     // `.containerLogs` no longer shares a single buffer/file across servers —
     // each server gets its own `<prefix>_container.log` and in-memory list.
-    @Published var containerEntries: [String: [LogEntry]] = [:]
+    // #332 was: @Published — same per-line invalidation as `entries`.
+    private(set) var containerEntries: [String: [LogEntry]] = [:]
     @Published var containerFileURLs: [String: URL] = [:]
 
-    // Bumped on every appended line so views can cheaply observe "something
-    // changed" — a count-diff alone misses same-cap appends (oldest dropped,
-    // newest added).
+    // Bumped when appended lines should reach the UI — a count-diff alone
+    // misses same-cap appends (oldest dropped, newest added). #332: bumps are
+    // coalesced (leading+trailing throttle, ≤4/s) so a log storm — e.g. the
+    // carrier teardown on disconnect — can't re-render the Logs tab per line.
     @Published private(set) var revision: Int = 0
+
+    // #332: throttle state behind `bumpRevisionCoalesced()`. 250 ms ⇒ at most
+    // ~4 UI updates per second however fast lines arrive.
+    private var revisionCoalescer = LogUpdateCoalescer(minInterval: .milliseconds(250))
 
     // Last container targeted by a logs fetch (#278); drives the Logs-tab refresh.
     @Published private(set) var lastContainerTarget: ContainerLogTarget?
@@ -217,6 +290,26 @@ final class LogStore: ObservableObject {
     private init() {
         Self.cleanupOrphanedLogFiles()
     }
+
+    // boc #332
+    /// Every per-line `revision` bump goes through here. The clears
+    /// (`clearAll` & co.) keep bumping `revision` directly — they're one-shot
+    /// user actions that want instant feedback, not part of a storm.
+    private func bumpRevisionCoalesced() {
+        switch revisionCoalescer.recordEvent(now: .now) {
+        case .fireNow:
+            revision &+= 1
+        case .scheduleFlush(let delay):
+            Task { @MainActor in
+                try? await Task.sleep(for: delay)
+                self.revisionCoalescer.flushFired(now: .now)
+                self.revision &+= 1
+            }
+        case .alreadyScheduled:
+            break
+        }
+    }
+    // eoc #332
 
     /// #318: delete pre-#294/#295 log files that nothing writes anymore —
     /// `ip.log`/`speed.log` (merged into `diagnostics.log` by #294) and the
@@ -349,8 +442,11 @@ final class LogStore: ObservableObject {
         entries[category] = list
         // The on-disk line keeps the timestamp inline so exported files stay
         // self-describing (the in-memory entry carries it as a real `Date`).
+        // #332: `safe` (redacted above) is what reaches the writer — redaction
+        // still precedes anything touching disk, even with async file I/O.
         writers[category]?.write("\(Self.format(date: date)) \(safe)")
-        revision &+= 1
+        // #332 was: revision &+= 1 — per-line UI invalidation.
+        bumpRevisionCoalesced()
     }
 
     /// #295: appends a line to the per-server container-log buffer/file for
@@ -370,7 +466,8 @@ final class LogStore: ObservableObject {
         if list.count > cap { list.removeFirst(list.count - cap) }
         containerEntries[serverPrefix] = list
         containerWriters[serverPrefix]?.write("\(Self.format(date: date)) \(safe)")
-        revision &+= 1
+        // #332 was: revision &+= 1 — per-line UI invalidation.
+        bumpRevisionCoalesced()
     }
 
     // #277: dated, millisecond timestamps everywhere (was time-only "HH:mm:ss.SSS"),

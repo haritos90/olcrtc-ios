@@ -108,6 +108,16 @@ final class TunnelManager: ObservableObject {
     /// takes effect on the next connect / next URLSession build.
     nonisolated static var socksPort: Int { SettingsStore.shared.socksPort }
 
+    // boc #313
+    /// The SOCKS port the live attempt actually bound — the snapshot `preflight`
+    /// reserved (#308 guarantees the engine binds exactly it or the attempt
+    /// fails). Non-nil while connecting/connected, nil once the session ends.
+    /// `socksPort` above re-reads SettingsStore on every access, so after a
+    /// live port edit in Settings it no longer answers "which port does the
+    /// tunnel hold?" — the Settings port check compares against this instead.
+    @Published private(set) var boundPort: Int?
+    // eoc #313
+
     @Published var state: ConnectionState = .disconnected {
         didSet {
             guard state != oldValue else { return }
@@ -142,9 +152,15 @@ final class TunnelManager: ObservableObject {
                 // a backgrounded app isn't suspended while it waits for the path
                 // to return (#269) — it must stay alive to reconnect on its own.
                 keepAliveTask?.cancel(); keepAliveTask = nil
+                // #313: a network hold releases the listener (`handlePathUpdate`
+                // stops the engine before entering this state), so the bound-port
+                // snapshot is stale. `.connecting` must NOT clear it — preflight
+                // sets the snapshot just before flipping to `.connecting`.
+                if state == .waitingForNetwork { boundPort = nil }
             case .disconnected, .failed:
                 keepAliveTask?.cancel(); keepAliveTask = nil
                 bgKeeper.stop()
+                boundPort = nil  // #313: session over — the engine no longer holds a port
             }
         }
     }
@@ -472,6 +488,10 @@ final class TunnelManager: ObservableObject {
             return nil
         }
         guard let (port, settings) = reservePortAndSettings(isReconnect: isReconnect) else { return nil }
+        // #313: record the port this attempt binds (#308: exactly the reserved
+        // snapshot, never slid) — set before `.connecting` so the didSet for
+        // that state can't observe a stale value.
+        boundPort = port
         // New attempt → new epoch (bumped before `.connecting` so the value
         // `runEngine` captures is the one live for this attempt, #272).
         connectEpoch &+= 1

@@ -67,8 +67,11 @@ python3 scripts/parity_check.py               # after touching scripts/srv.sh
 - `olcrtc-ios.xcodeproj` and `App/Info.plist` are **generated** from `project.yml`
   — never hand-edit them; regenerate with `xcodegen`.
 - `scripts/srv.sh` is a patched copy of upstream; keep all local changes inside
-  `# boc olcrtc-ios` / `# eoc olcrtc-ios` markers or `parity_check.py` fails the
-  build. CONTRIBUTING.md → *srv.sh parity*.
+  `# boc olcrtc-ios` / `# eoc olcrtc-ios` markers, and carry deliberately-skipped
+  upstream lines as commented copies inside `# boc olcrtc-ios-rejected: <reason>`
+  blocks (#325) — `parity_check.py` fails the build on drift in either direction
+  (our base lines must exist upstream; upstream lines must be adopted or
+  rejected). CONTRIBUTING.md → *srv.sh parity*.
 
 ---
 

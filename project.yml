@@ -27,6 +27,10 @@ targets:
           - "Mobile.xcframework/**"
       - path: scripts/srv.sh
         buildPhase: resources
+      # #314: rotate-key.sh ships alongside srv.sh — uploaded over SSH by the
+      # "generate new key" fallback of the #303 recover-connection flow.
+      - path: scripts/rotate-key.sh
+        buildPhase: resources
     info:
       path: App/Info.plist
       properties:
@@ -44,11 +48,15 @@ targets:
         # bundle id, container, OLCRTC_* env) stay lowercase olcrtc.
         CFBundleDisplayName: OlcRTC
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "248"
+        CFBundleVersion: "250"
         CFBundleURLTypes:
           - CFBundleURLName: olcrtc
             CFBundleURLSchemes:
               - olcrtc
+              # #111: subscription links — olcrtc-sub://host/path opens the
+              # app and imports the server list (docs/uri.md → Subscription
+              # links; payload format: olcrtc-upstream/docs/sub.md).
+              - olcrtc-sub
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alexk.olcrtc-ios

@@ -113,13 +113,25 @@ jobs:
               } >> notes.md
             fi
           fi
+          # 2c. #349: ready-to-paste SideStore/LiveContainer install links for the
+          #     .ipa asset. GitHub strips non-https schemes from markdown links,
+          #     so they are code spans the reader copies into Safari on the iPhone.
+          IPA_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/olcrtc-ios-unsigned.ipa"
+          {
+            echo
+            echo "**Install on iPhone** — copy the link for your sideloading app into Safari ([setup](https://github.com/${GITHUB_REPOSITORY}#install-on-your-iphone-sideload)):"
+            echo
+            echo "- SideStore: \`sidestore://install?url=$IPA_URL\`"
+            echo "- LiveContainer: \`livecontainer://install?url=$IPA_URL\`"
+          } >> notes.md
           # 3. Asset footer.
           {
             echo
             echo "---"
             echo "**Assets**"
             # #306: list the .ipa first — it leads on the Release page.
-            echo "- \`olcrtc-ios-unsigned.ipa\` — unsigned build for sideloading (AltStore / Sideloadly)."
+            # #349 was: … sideloading (AltStore / Sideloadly).
+            echo "- \`olcrtc-ios-unsigned.ipa\` — unsigned build for sideloading (SideStore / LiveContainer / AltStore / Sideloadly)."
             echo "- \`Mobile.xcframework.zip\` — prebuilt olcrtc core (device + simulator). Download: \`./scripts/fetch-framework.sh $TAG\`."
           } >> notes.md
 

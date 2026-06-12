@@ -72,55 +72,37 @@ Alpha software — not intended for production use. The author sells nothing: no
 ## Install on your iPhone (sideload)
 
 Every [GitHub Release](../../releases) ships a prebuilt **unsigned** `.ipa`
-(`olcrtc-ios-unsigned.ipa`). It is unsigned on purpose — a sideloading app re-signs it with
-*your own* Apple ID, and a free Apple ID is enough (the app needs no paid-only entitlements):
-the signature then lasts **7 days** and free accounts keep at most three sideloaded apps;
-a paid Apple Developer account extends the signature to a year. The two most user-friendly
-sideloading apps, in order:
+(`olcrtc-ios-unsigned.ipa`) — a sideloading app re-signs it with *your own* Apple ID.
+A free Apple ID is enough (no paid-only entitlements): the signature lasts **7 days**
+and free accounts keep at most three sideloaded apps.
 
 ### SideStore — recommended
 
-[SideStore](https://sidestore.io) is an AltStore fork that re-signs and refreshes apps
-**on the iPhone itself, over Wi-Fi** — you need a computer once, to install SideStore, and
-never again after that.
+[SideStore](https://sidestore.io) re-signs and refreshes apps on the iPhone itself —
+a computer is needed once, to install SideStore.
 
-1. **Once: install SideStore** with [iLoader](https://github.com/nab138/iloader)
-   (Windows / macOS / Linux): connect the iPhone over USB, sign in with your Apple ID, pick
-   *Install SideStore* — iLoader also places the pairing file SideStore needs. Step-by-step:
-   [SideStore install docs](https://docs.sidestore.io/docs/installation/install).
-2. **Install [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044)** (free,
-   on the App Store) — the on-device loopback VPN SideStore uses to install and refresh apps
-   without a computer.
-3. **Install olcrtc-ios straight from the Release URL** — no manual `.ipa` download or
-   transfer: on the [Release](../../releases) page, long-press the `olcrtc-ios-unsigned.ipa`
-   asset and copy its link, then open it through SideStore's
-   [install URL scheme](https://docs.sidestore.io/docs/advanced/url-schema) —
-   `sidestore://install?url=<asset link>` in Safari. SideStore downloads and installs the app
-   directly. (Fallback: download the `.ipa` and open it via SideStore ▸ *My Apps* ▸ **+**.)
-4. **Renew the 7-day signature**: open LocalDevVPN ▸ *Connect*, then SideStore ▸ *My Apps* ▸
-   *Refresh All* (or tap the *7 days* counter next to the app). With the VPN connected,
-   SideStore also refreshes apps in the background before they expire.
+1. Install SideStore with [iLoader](https://github.com/nab138/iloader)
+   (Windows / macOS / Linux, USB) — [guide](https://docs.sidestore.io/docs/installation/install).
+2. Install [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044) (free, App
+   Store) — SideStore needs it connected to install and refresh apps.
+3. Install the app: copy the ready-made install link from the [Release](../../releases)
+   notes into Safari, or download the `.ipa` and import it via *My Apps* ▸ **+**.
+4. Every 7 days: LocalDevVPN ▸ *Connect*, then SideStore ▸ *Refresh All*.
 
 ### LiveContainer — alternative
 
-[LiveContainer](https://github.com/LiveContainer/LiveContainer) runs sideloaded apps *inside*
-its own container, so the apps it hosts don't count against the three-app limit and never need
-per-app re-signing — only LiveContainer itself carries a 7-day signature, and its bundled
-SideStore renews it.
+[LiveContainer](https://github.com/LiveContainer/LiveContainer) runs sideloaded apps inside
+its own container — no three-app limit, no per-app re-signing; only LiveContainer itself
+needs the 7-day refresh, via its bundled SideStore.
 
-1. **Once: install the *LiveContainer + SideStore* bundle** with the same
-   [iLoader](https://github.com/nab138/iloader) USB step — pick *LiveContainer + SideStore*
-   in iLoader. Step-by-step:
-   [LiveContainer install docs](https://livecontainer.github.io/docs/installation/lc_sidestore).
-2. **Install [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044)** — same
-   role as above; the built-in SideStore needs it to install and refresh.
-3. **Install olcrtc-ios straight from the Release URL**: copy the `olcrtc-ios-unsigned.ipa`
-   asset link from the [Release](../../releases) page and open
-   `livecontainer://install?url=<asset link>` in Safari — LiveContainer fetches the `.ipa` and
-   installs it into the container. (Fallback: download the `.ipa` and import it from Files.)
-4. **Renew the 7-day signature**: LocalDevVPN ▸ *Connect*, then refresh LiveContainer through
-   its built-in SideStore — the apps inside the container are untouched and never expire on
-   their own.
+1. Install the *LiveContainer + SideStore* bundle with the same
+   [iLoader](https://github.com/nab138/iloader) step —
+   [guide](https://livecontainer.github.io/docs/installation/lc_sidestore).
+2. Install [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044) — same as above.
+3. Install the app: tap **+** in LiveContainer and paste the `.ipa` asset link from the
+   [Release](../../releases) page (or copy the install link from the Release notes into Safari).
+4. Every 7 days: LocalDevVPN ▸ *Connect*, then refresh LiveContainer through its built-in
+   SideStore.
 
 <details>
 <summary><b>Classic cable path</b> — AltStore or Sideloadly from a Mac / Windows PC</summary>
@@ -144,9 +126,6 @@ Per-version install counts are tracked in [download statistics](docs/download-st
 ---
 
 ## Build it yourself
-
-Everything needed to go from a clone to the app running on a device — or to your own
-unsigned `.ipa`.
 
 | Dependency | Needed for | Install |
 |------------|------------|---------|
@@ -290,7 +269,7 @@ for the AI-agent workflow.
 
 ## How srv.sh works
 
-`scripts/srv.sh` is a **full verbatim copy** of `olcrtc-upstream/script/srv.sh` with non-interactive patches applied inline. Patches are marked with `# boc olcrtc-ios` / `# eoc olcrtc-ios` markers so they can be audited easily:
+`scripts/srv.sh` is a **full verbatim copy** of `olcrtc-upstream/script/srv.sh` with non-interactive patches applied inline. Two kinds of markers keep every local decision auditable:
 
 ```bash
 # boc olcrtc-ios: read carrier from env instead of interactive prompt
@@ -298,7 +277,16 @@ CARRIER=${OLCRTC_CARRIER:-telemost}
 # eoc olcrtc-ios
 ```
 
-`scripts/parity_check.py` runs as an Xcode pre-build phase and verifies that every **unmarked** line in `srv.sh` still appears verbatim in the upstream `olcrtc-upstream/script/srv.sh`. If upstream changes a command we depend on, the build fails until `srv.sh` is deliberately updated.
+```bash
+# boc olcrtc-ios-rejected: interactive carrier menu — replaced by OLCRTC_CARRIER above
+# echo "Select carrier:"
+# read -p "Enter choice [1-3, default: 1]: " CARRIER_CHOICE
+# eoc olcrtc-ios-rejected
+```
+
+A **rejected block** (#325) carries upstream lines we deliberately do *not* adopt — commented out so they never run, verbatim so they stay machine-checkable, with the reason on the `boc` line.
+
+`scripts/parity_check.py` runs as an Xcode pre-build phase and classifies every line in **both directions**: each unmarked line of ours must still appear verbatim in upstream, and each executable upstream line must be either adopted (present in our copy) or explicitly rejected. If upstream changes a command we depend on **or adds lines we have no decision for**, the build fails until `srv.sh` is deliberately updated — adopt the new lines or reject them with a reason, and file a TODO.md task recording the triage.
 
 ### Updating the olcrtc-upstream submodule
 
@@ -308,7 +296,8 @@ git pull origin master
 cd ..
 # Rebuild srv.sh if upstream changed script/srv.sh:
 diff olcrtc-upstream/script/srv.sh scripts/srv.sh   # review differences
-# Re-apply boc/eoc patches as needed, then:
+# Re-apply boc/eoc patches, adopt or reject (with a reason) any new upstream
+# lines, prune stale rejected lines, then:
 python3 scripts/parity_check.py            # must pass before committing
 ```
 
@@ -388,13 +377,13 @@ The project targets iOS 17 and requires Xcode 15 or later. Check your version wi
 
 **Symptom:** the build stops at the srv.sh parity pre-build phase with a diff error.
 
-This means the upstream submodule (`olcrtc-upstream/script/srv.sh`) changed and your local `scripts/srv.sh` no longer matches it line-for-line outside the `# boc olcrtc-ios` / `# eoc olcrtc-ios` markers.
+This means the upstream submodule (`olcrtc-upstream/script/srv.sh`) and your local `scripts/srv.sh` disagree: either an unmarked local line no longer exists upstream, or upstream added lines that are neither adopted nor wrapped in a `# boc olcrtc-ios-rejected: <reason>` block (the check runs in both directions — see [How srv.sh works](#how-srvsh-works)).
 
 Fix:
 ```bash
 cd olcrtc-upstream && git pull origin master && cd ..
 diff olcrtc-upstream/script/srv.sh scripts/srv.sh   # review what changed
-# Re-apply boc/eoc patches as needed, then verify:
+# Re-apply boc/eoc patches, adopt or reject (with a reason) new upstream lines, then verify:
 python3 scripts/parity_check.py            # must pass before building
 ```
 

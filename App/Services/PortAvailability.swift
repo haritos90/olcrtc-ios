@@ -33,9 +33,9 @@ enum PortAvailability {
 
     /// Classifies `port` into one of three `PortState`s. `tunnelHoldsPort`
     /// must be supplied by the caller from live state — e.g.
-    /// `tunnel.state.isConnected && TunnelManager.socksPort == Int(port)` —
-    /// this function only probes the socket, it does not guess at the
-    /// tunnel's state.
+    /// `tunnel.boundPort == Int(port)` (#313: the port the tunnel actually
+    /// bound, not the live-editable configured one) — this function only
+    /// probes the socket, it does not guess at the tunnel's state.
     static func state(_ port: UInt16, tunnelHoldsPort: Bool) -> PortState {
         if tunnelHoldsPort { return .busyOurs }
         return isFree(port) ? .free : .busyOther

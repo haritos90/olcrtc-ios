@@ -181,11 +181,13 @@ struct InstallOptionsView: View {
         case .fail:        compat = L10n.matrixFail_fmt.formatted(carrier)
         case .unknown:     compat = L10n.matrixUnknown_fmt.formatted(carrier)
         }
-        // Only `vp8channel` has its tunables (FPS / batch) plumbed through
-        // SettingsStore → installEnv. `seichannel` / `videochannel` read
-        // server-side defaults from scripts/srv.sh — warn the user so they
-        // don't think the iOS Settings sliders affect those transports.
-        if transport == "seichannel" || transport == "videochannel" {
+        // #097 was: the warning also covered seichannel — stale since the install
+        // sheet gained the SEI steppers (seiSection → installEnv → OLCRTC_SEI_*).
+        // `vp8channel` tunes via the Settings sliders, `seichannel` via the
+        // steppers above; only `videochannel` still installs with the server-side
+        // defaults from scripts/srv.sh (OLCRTC_VIDEO_* deliberately has no UI —
+        // #097 decision: ten niche knobs aren't worth the sheet sprawl).
+        if transport == "videochannel" {
             return compat + "\n" + L10n.transportUsesServerDefaults_fmt.formatted(transport)
         }
         return compat
