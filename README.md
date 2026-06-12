@@ -69,7 +69,84 @@ Alpha software — not intended for production use. The author sells nothing: no
 ---
 
 
-## Requirements
+## Install on your iPhone (sideload)
+
+Every [GitHub Release](../../releases) ships a prebuilt **unsigned** `.ipa`
+(`olcrtc-ios-unsigned.ipa`). It is unsigned on purpose — a sideloading app re-signs it with
+*your own* Apple ID, and a free Apple ID is enough (the app needs no paid-only entitlements):
+the signature then lasts **7 days** and free accounts keep at most three sideloaded apps;
+a paid Apple Developer account extends the signature to a year. The two most user-friendly
+sideloading apps, in order:
+
+### SideStore — recommended
+
+[SideStore](https://sidestore.io) is an AltStore fork that re-signs and refreshes apps
+**on the iPhone itself, over Wi-Fi** — you need a computer once, to install SideStore, and
+never again after that.
+
+1. **Once: install SideStore** with [iLoader](https://github.com/nab138/iloader)
+   (Windows / macOS / Linux): connect the iPhone over USB, sign in with your Apple ID, pick
+   *Install SideStore* — iLoader also places the pairing file SideStore needs. Step-by-step:
+   [SideStore install docs](https://docs.sidestore.io/docs/installation/install).
+2. **Install [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044)** (free,
+   on the App Store) — the on-device loopback VPN SideStore uses to install and refresh apps
+   without a computer.
+3. **Install olcrtc-ios straight from the Release URL** — no manual `.ipa` download or
+   transfer: on the [Release](../../releases) page, long-press the `olcrtc-ios-unsigned.ipa`
+   asset and copy its link, then open it through SideStore's
+   [install URL scheme](https://docs.sidestore.io/docs/advanced/url-schema) —
+   `sidestore://install?url=<asset link>` in Safari. SideStore downloads and installs the app
+   directly. (Fallback: download the `.ipa` and open it via SideStore ▸ *My Apps* ▸ **+**.)
+4. **Renew the 7-day signature**: open LocalDevVPN ▸ *Connect*, then SideStore ▸ *My Apps* ▸
+   *Refresh All* (or tap the *7 days* counter next to the app). With the VPN connected,
+   SideStore also refreshes apps in the background before they expire.
+
+### LiveContainer — alternative
+
+[LiveContainer](https://github.com/LiveContainer/LiveContainer) runs sideloaded apps *inside*
+its own container, so the apps it hosts don't count against the three-app limit and never need
+per-app re-signing — only LiveContainer itself carries a 7-day signature, and its bundled
+SideStore renews it.
+
+1. **Once: install the *LiveContainer + SideStore* bundle** with the same
+   [iLoader](https://github.com/nab138/iloader) USB step — pick *LiveContainer + SideStore*
+   in iLoader. Step-by-step:
+   [LiveContainer install docs](https://livecontainer.github.io/docs/installation/lc_sidestore).
+2. **Install [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044)** — same
+   role as above; the built-in SideStore needs it to install and refresh.
+3. **Install olcrtc-ios straight from the Release URL**: copy the `olcrtc-ios-unsigned.ipa`
+   asset link from the [Release](../../releases) page and open
+   `livecontainer://install?url=<asset link>` in Safari — LiveContainer fetches the `.ipa` and
+   installs it into the container. (Fallback: download the `.ipa` and import it from Files.)
+4. **Renew the 7-day signature**: LocalDevVPN ▸ *Connect*, then refresh LiveContainer through
+   its built-in SideStore — the apps inside the container are untouched and never expire on
+   their own.
+
+<details>
+<summary><b>Classic cable path</b> — AltStore or Sideloadly from a Mac / Windows PC</summary>
+
+The original computer-based flow still works and may be more familiar:
+
+1. Download `olcrtc-ios-unsigned.ipa` from the latest [release](../../releases).
+2. On a Mac or Windows PC install a sideloading tool — [AltStore](https://altstore.io)
+   (installs over Wi-Fi via AltServer) or [Sideloadly](https://sideloadly.io) (installs over a
+   USB cable).
+3. Connect the iPhone, open the tool, sign in with **your** Apple ID, and drop in the `.ipa`.
+4. On the iPhone: **Settings ▸ General ▸ VPN & Device Management** → trust your developer
+   certificate, then launch the app.
+
+The same free-Apple-ID limits apply (7-day signature, three apps); re-run the tool on the
+computer to refresh the signature.
+</details>
+
+Per-version install counts are tracked in [download statistics](docs/download-stats.md).
+
+---
+
+## Build it yourself
+
+Everything needed to go from a clone to the app running on a device — or to your own
+unsigned `.ipa`.
 
 | Dependency | Needed for | Install |
 |------------|------------|---------|
@@ -78,7 +155,7 @@ Alpha software — not intended for production use. The author sells nothing: no
 | **GitHub CLI** (`gh`) | Downloading the prebuilt `Mobile.xcframework` | `brew install gh` |
 | **Go** | Only if you build `Mobile.xcframework` from source | `brew install go` |
 
-`Mobile.xcframework` — the gomobile-built olcrtc core (~228 MB) — is **not tracked in git**; you fetch or build it once, in step 3 below.
+`Mobile.xcframework` — the gomobile-built olcrtc core (~228 MB) — is **not tracked in git**; you fetch or build it once, in the build steps below.
 
 <details>
 <summary><b>First-time toolchain setup</b> — Homebrew, and pointing at the full Xcode</summary>
@@ -93,9 +170,7 @@ sudo xcodebuild -license accept
 ```
 </details>
 
----
-
-## Build and run
+### Build and run in Xcode
 
 ```bash
 git clone https://github.com/haritos90/olcrtc-ios.git
@@ -139,9 +214,21 @@ gomobile bind -target=ios -o ../App/Mobile.xcframework ./mobile
 `-target=ios` produces both the device and simulator slices. `gomobile: -target="ios" requires Xcode` means the toolchain is still on the Command Line Tools — see *First-time toolchain setup*.
 </details>
 
----
+### Build the unsigned .ipa
 
-## Updating
+Needs the **full Xcode** (same iOS SDK requirement as the framework build) and an existing
+`App/Mobile.xcframework`. One script builds the unsigned `.ipa` (compile for device without
+signing, then wrap into `Payload/`):
+
+```bash
+./scripts/package-ipa.sh                 # → olcrtc-ios-unsigned.ipa
+```
+
+You normally don't need to — every `v*` tag's [release workflow](.github/workflows/release.yml)
+builds and attaches `olcrtc-ios-unsigned.ipa` to the Release automatically, next to the framework.
+To attach one by hand: `gh release upload <tag> olcrtc-ios-unsigned.ipa`.
+
+### Updating
 
 Pull the latest app and core, then regenerate the project:
 
@@ -157,43 +244,6 @@ xcodegen generate --spec project.yml
 ./scripts/fetch-framework.sh                 # download the rebuilt one, or
 ./scripts/build-framework.sh                 # build it yourself
 ```
-
----
-
-## Install without Xcode (sideload)
-
-No Mac to build the app? Install a prebuilt **unsigned** `.ipa`
-(`olcrtc-ios-unsigned.ipa`) attached to a [GitHub Release](../../releases). It is unsigned on
-purpose — sideloading tools re-sign it with *your own* Apple ID, so you still need a computer
-(macOS **or** Windows) to run one of those tools once. This is not a one-tap install.
-
-1. Download `olcrtc-ios-unsigned.ipa` from the latest [release](../../releases).
-2. On a Mac or Windows PC install a sideloading tool — [AltStore](https://altstore.io)
-   (installs over Wi-Fi via AltServer) or [Sideloadly](https://sideloadly.io) (installs over a
-   USB cable).
-3. Connect the iPhone, open the tool, sign in with **your** Apple ID, and drop in the `.ipa`.
-4. On the iPhone: **Settings ▸ General ▸ VPN & Device Management** → trust your developer
-   certificate, then launch the app.
-
-With a free Apple ID the signature lasts **7 days** (re-run the tool to refresh it) and you can
-keep at most three sideloaded apps; a paid Apple Developer account extends this to a year. The
-app needs no paid-only entitlements, so a free Apple ID is enough.
-
-Per-version install counts are tracked in [download statistics](docs/download-stats.md).
-
-### Build the .ipa yourself
-
-Needs the **full Xcode** (same iOS SDK requirement as the framework build) and an existing
-`App/Mobile.xcframework`. One script builds the unsigned `.ipa` (compile for device without
-signing, then wrap into `Payload/`):
-
-```bash
-./scripts/package-ipa.sh                 # → olcrtc-ios-unsigned.ipa
-```
-
-You normally don't need to — every `v*` tag's [release workflow](.github/workflows/release.yml)
-builds and attaches `olcrtc-ios-unsigned.ipa` to the Release automatically, next to the framework.
-To attach one by hand: `gh release upload <tag> olcrtc-ios-unsigned.ipa`.
 
 ---
 
@@ -363,7 +413,7 @@ The framework is not in git — download or build it:
 ./scripts/build-framework.sh     # build from source (needs full Xcode + Go)
 ```
 
-See [Build and run](#build-and-run) for the full prerequisites — including the full-Xcode
+See [Build it yourself](#build-it-yourself) for the full prerequisites — including the full-Xcode
 requirement and the `gomobile … requires Xcode` fix.
 
 ---
