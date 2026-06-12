@@ -211,6 +211,7 @@ struct ContainerLogsTabView: View {
     @State private var searchText = ""
     @State private var selectedHostID: UUID?
     @State private var fetching = false
+    @State private var alertText: String?  // #297
 
     init(serverStore: ServerHostStore) {
         _serverStore = ObservedObject(wrappedValue: serverStore)
@@ -274,6 +275,16 @@ struct ContainerLogsTabView: View {
                     .disabled(entries.isEmpty)
                 }
             }
+            // #297: surface scan/download failures instead of a silent no-op
+            // that looked like the button had frozen.
+            .alert(L10n.okPrompt.localized(), isPresented: Binding(
+                get: { alertText != nil },
+                set: { if !$0 { alertText = nil } }
+            )) {
+                Button(L10n.ok.localized()) { alertText = nil }
+            } message: {
+                Text(alertText ?? "")
+            }
         }
     }
 
@@ -335,34 +346,40 @@ struct ContainerLogsTabView: View {
     }
 
     /// #296: the button never blocks the UI — it kicks off a `Task` and
-    /// returns immediately; `fetching` drives the spinner. The SSH calls
-    /// inside `Provisioner` are themselves `async`/non-blocking (full
-    /// freeze-on-unchecked-host fix is #297's territory).
+    /// returns immediately; `fetching` drives the spinner. #297: every dead
+    /// end now sets `alertText` instead of returning silently, so a tap
+    /// always ends in either new log lines or a visible reason it didn't.
     private func primaryAction(_ host: ServerHost) async {
-        guard let pw = serverStore.password(for: host) else { return }
+        guard let pw = serverStore.password(for: host) else {
+            alertText = L10n.alertPasswordMissingShort.localized(); return
+        }
         fetching = true
         defer { fetching = false }
 
         var target = host
         if target.lastContainerName == nil {
-            // "Check server": run the readiness probe first (mirrors the
-            // Manage VPS card's "Check server"), then adopt any container it
-            // finds so a subsequent tap can download logs directly.
-            if let (state, _) = try? await provisioner.probeReadiness(
-                on: target, password: pw, containerName: nil) {
-                switch state {
-                case .containerRunning(let name), .containerStopped(let name):
-                    target.lastContainerName = name
-                    serverStore.update(target, password: nil)
-                default:
-                    break
+            // "Check server": probeReadiness(containerName: nil) can never
+            // report a container name (#297 was: relied on it to do so, so
+            // this branch was a no-op dead end). Scan for an existing olcrtc
+            // container instead, mirroring #302's ServersView fold-in.
+            do {
+                guard let found = try await provisioner.scanContainers(on: target, password: pw).first else {
+                    alertText = L10n.scanNoContainers.localized(); return
                 }
+                target.lastContainerName = found.name
+                serverStore.update(target, password: nil)
+            } catch {
+                alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription); return
             }
         }
 
         guard let cname = target.lastContainerName else { return }
-        _ = try? await provisioner.containerLogs(
-            on: target, password: pw, containerName: cname,
-            tail: SettingsStore.shared.containerLogsTailLines)
+        do {
+            _ = try await provisioner.containerLogs(
+                on: target, password: pw, containerName: cname,
+                tail: SettingsStore.shared.containerLogsTailLines)
+        } catch {
+            alertText = L10n.stateErrorPrefix_fmt.formatted(error.localizedDescription)
+        }
     }
 }

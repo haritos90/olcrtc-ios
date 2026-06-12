@@ -201,7 +201,23 @@ final class LogStore: ObservableObject {
     // lines share the same timestamp (used by the per-tab newest-first sort).
     private var seqCounter = 0
 
-    private init() {}
+    private init() {
+        Self.cleanupOrphanedLogFiles()
+    }
+
+    /// #318: delete pre-#294/#295 log files that nothing writes anymore —
+    /// `ip.log`/`speed.log` (merged into `diagnostics.log` by #294) and the
+    /// old shared `containerLogs.log` (replaced by per-server
+    /// `<prefix>_container.log` by #295). Runs once per launch; `try?` since
+    /// a fresh install/Documents wipe has none of these to remove.
+    private static func cleanupOrphanedLogFiles() {
+        guard let docs = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let logsDir = docs.appendingPathComponent("logs", isDirectory: true)
+        for name in ["ip.log", "speed.log", "containerLogs.log"] {
+            try? FileManager.default.removeItem(at: logsDir.appendingPathComponent(name))
+        }
+    }
 
     /// Start a new log file for the given category.
     /// Called at the start of each operation (connect, ip check run, speed test run).
