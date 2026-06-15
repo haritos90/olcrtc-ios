@@ -31,6 +31,11 @@ struct AddConnectionView: View {
     /// Group names already used by other connections. The editor surfaces
     /// them in a quick-pick menu next to the freeform Group field.
     var existingGroups: [String] = []
+    /// #361: invoked when a pasted blob resolves to a subscription (an https URL
+    /// to fetch, or raw sub.md text) rather than a single connection. The host
+    /// routes it through the confirm-then-import + dedup flow. A single olcrtc://
+    /// link is handled in-place (fills the fields below), so it never calls this.
+    var onImport: ((OlcrtcSubscription.ImportInput) -> Void)? = nil
     var onSave: (ConnectionRecord) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -53,10 +58,19 @@ struct AddConnectionView: View {
     @State private var socksPass = ""
     @State private var vp8FPS      : Int? = nil
     @State private var vp8BatchSize: Int? = nil
+    // #355: sei params carried through paste/parse so a seichannel URI round-trips
+    // its tuning (no sei UI yet — these hold the parsed/edited values silently).
+    @State private var seiFPS  : Int = 30
+    @State private var seiBatch: Int = 10
+    @State private var seiFrag : Int = 1200
+    @State private var seiACK  : Int = 1
 
     private var isCreate: Bool { existing == nil }
 
     private var isVP8: Bool { transport == "vp8channel" }
+
+    // #365: sei params get a dedicated editor only for the seichannel transport.
+    private var isSEI: Bool { transport == "seichannel" }
 
     private var isValid: Bool {
         !name.isEmpty && !groupName.isEmpty && !carrier.isEmpty && !transport.isEmpty
@@ -100,8 +114,7 @@ struct AddConnectionView: View {
                 }
                 OlcButton(L10n.pasteURIAction.localized(), systemImage: "doc.on.clipboard",
                           role: .secondary, fillWidth: true) {
-                    uriText = UIPasteboard.general.string ?? ""
-                    parseURI()
+                    pasteAndImport(UIPasteboard.general.string ?? "")
                 }
             }
             .padding(.vertical, 4)
@@ -119,6 +132,7 @@ struct AddConnectionView: View {
                     carrier = cfg.carrier; transport = cfg.transport; roomID = cfg.roomID
                     key = cfg.key; clientID = cfg.clientID
                     vp8FPS = cfg.vp8FPS; vp8BatchSize = cfg.vp8BatchSize
+                    applySEI(cfg)   // #355: keep parsed sei params
                     if name.isEmpty { name = cfg.mimo.isEmpty ? "\(cfg.carrier) · \(cfg.transport)" : cfg.mimo }
                     parseError = ""
                 }
@@ -171,6 +185,10 @@ struct AddConnectionView: View {
 
         if isVP8 {
             vp8Section
+        }
+        // #365: sei tuning, mirroring the vp8 section but shown only for seichannel.
+        if isSEI {
+            seiSection
         }
         // SOCKS auth (socksUser/socksPass) is configured globally in Settings,
         // not per-connection — removed from here to avoid confusion.
@@ -248,6 +266,38 @@ struct AddConnectionView: View {
         }
     }
 
+    // MARK: SEI per-connection params (#365)
+
+    // Mirrors `vp8Section` but sei values are non-optional on OlcrtcConnection
+    // (defaults 30/10/1200/1, never "global"), so each row is a plain
+    // value + Stepper bound straight to the Int state — no nil/×-reset affordance.
+    private var seiSection: some View {
+        Section {
+            seiRow(L10n.seiFpsLabel.localized(),   value: $seiFPS,   range: 1...120)
+            seiRow(L10n.seiBatchLabel.localized(), value: $seiBatch, range: 1...64)
+            seiRow(L10n.seiFragLabel.localized(),  value: $seiFrag,  range: 1...8192, step: 100)
+            seiRow(L10n.seiAckLabel.localized(),   value: $seiACK,   range: 0...10000, step: 1)
+        } header: {
+            Text(L10n.seiParamsHeader.localized())
+        } footer: {
+            Text(L10n.seiParamsHint.localized())
+                .font(.caption2)
+        }
+    }
+
+    private func seiRow(_ label: String, value: Binding<Int>,
+                        range: ClosedRange<Int>, step: Int = 1) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(String(value.wrappedValue))
+                .foregroundStyle(.primary)
+                .monospacedDigit()
+            Stepper("", value: value, in: range, step: step)
+                .labelsHidden()
+        }
+    }
+
     // MARK: SOCKS auth
 
     private var socksAuthSection: some View {
@@ -268,6 +318,40 @@ struct AddConnectionView: View {
 
     // MARK: Logic
 
+    /// #355: copy parsed sei params into state, keeping the existing default
+    /// when a key was absent from the URI (parser returns nil for those).
+    private func applySEI(_ cfg: OlcrtcURI.Parsed) {
+        if let v = cfg.seiFPS   { seiFPS   = v }
+        if let v = cfg.seiBatch { seiBatch = v }
+        if let v = cfg.seiFrag  { seiFrag  = v }
+        if let v = cfg.seiACK   { seiACK   = v }
+    }
+
+    /// #361: paste-and-import. Detects what the pasted blob is and routes it:
+    ///   • a single olcrtc:// link → fill the fields here (the #354 single import);
+    ///   • an https:// / olcrtc-sub:// URL, or raw sub.md text → hand to `onImport`,
+    ///     which runs the confirm-then-import + dedup flow.
+    /// A QR scan reuses `parseURI` directly (a QR encodes one connection URI).
+    private func pasteAndImport(_ text: String) {
+        let detected = OlcrtcSubscription.detectImport(text)
+        switch detected {
+        case .connectionURI(let uri):
+            uriText = uri
+            parseURI()
+        case .subscriptionURL, .subscriptionBody:
+            if let onImport {
+                onImport(detected)
+            } else {
+                // No import host wired (e.g. edit mode) — fall back to field fill.
+                uriText = text
+                parseURI()
+            }
+        case .unrecognized:
+            uriText = text
+            parseURI()   // surfaces the parse error for an empty/garbage paste
+        }
+    }
+
     private func parseURI() {
         parseError = ""
         do {
@@ -279,6 +363,7 @@ struct AddConnectionView: View {
             clientID     = cfg.clientID
             vp8FPS       = cfg.vp8FPS
             vp8BatchSize = cfg.vp8BatchSize
+            applySEI(cfg)   // #355
             if name.isEmpty {
                 name = cfg.mimo.isEmpty ? "\(cfg.carrier) · \(cfg.transport)" : cfg.mimo
             }
@@ -300,7 +385,11 @@ struct AddConnectionView: View {
             vp8FPS:       vp8FPS,
             vp8BatchSize: vp8BatchSize,
             socksUser:    socksUser,
-            socksPass:    socksPass
+            socksPass:    socksPass,
+            seiFPS:       seiFPS,    // #355
+            seiBatch:     seiBatch,
+            seiFrag:      seiFrag,
+            seiACK:       seiACK
         )
         let trimmedGroup = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
         // #283: store the canonical default token when the user left the group at
@@ -325,6 +414,7 @@ struct AddConnectionView: View {
             carrier = "wbstream"; transport = CarrierTransportMatrix.defaultTransport(for: "wbstream")
             roomID = ""; key = ""; clientID = "default"
             socksUser = ""; socksPass = ""; vp8FPS = nil; vp8BatchSize = nil
+            seiFPS = 30; seiBatch = 10; seiFrag = 1200; seiACK = 1   // #355
             uriText = ""; parseError = ""
             return
         }
@@ -342,6 +432,10 @@ struct AddConnectionView: View {
             vp8BatchSize = p.vp8BatchSize
             socksUser    = p.socksUser
             socksPass    = p.socksPass
+            seiFPS       = p.seiFPS    // #355
+            seiBatch     = p.seiBatch
+            seiFrag      = p.seiFrag
+            seiACK       = p.seiACK
         }
     }
 }

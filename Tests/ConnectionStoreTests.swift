@@ -253,4 +253,54 @@ final class ConnectionStoreTests: XCTestCase {
                      "lingers indefinitely after the user thinks they deleted it")
         XCTAssertNil(ConnectionSecretStore.socksPass(for: r.id))
     }
+
+    // MARK: #375 — locked-vs-absent secret distinction + foreground re-hydration
+    //
+    // hydrateSecrets uses KeychainHelper.getResult to tell a genuine read ERROR
+    // (`.failure` — device locked before first unlock) from a genuinely-absent
+    // key (`.success(nil)`). The error case must trip `secretsLocked` (so the UI
+    // can prompt "unlock + reopen" instead of the misleading "key length 0") and
+    // be retried on foreground; the absent case must NOT. We can't deterministically
+    // force a Keychain read error in a unit test, but the critical regression guard
+    // is the no-false-positive direction: an absent key must NOT look "locked".
+
+    func testAbsentKeyDoesNotTripSecretsLocked() {
+        // A record persisted with an empty key writes no Keychain entry, so its
+        // hydrate sees `.success(nil)` — that is "absent", not "locked".
+        let store1 = ConnectionStore()
+        store1.add(makeRecord(key: "", socksPass: ""))
+
+        let store2 = ConnectionStore()   // cold start → load() → hydrateSecrets
+        XCTAssertFalse(store2.secretsLocked,
+                       "An absent key must NOT be reported as a locked-Keychain error")
+        guard case .olcrtc(let p) = store2.connections.first?.details else {
+            XCTFail("Expected one olcrtc record after reload"); return
+        }
+        XCTAssertEqual(p.key, "", "Absent key hydrates as empty (the genuine-absent case)")
+    }
+
+    func testSuccessfulHydrationLeavesSecretsUnlocked() {
+        let store1 = ConnectionStore()
+        store1.add(makeRecord(key: "abc123"))
+        let store2 = ConnectionStore()
+        XCTAssertFalse(store2.secretsLocked,
+                       "A readable key must leave secretsLocked == false")
+    }
+
+    func testRehydrateSecretsIsANoOpWhenNotLocked() {
+        // When nothing was locked, foreground re-hydration must not clobber the
+        // already-correct in-memory key (and skips the work entirely). A unit test
+        // can't force the real locked-Keychain read error, so this covers the
+        // common, deterministic side: the no-op path keeps the loaded key intact.
+        let store1 = ConnectionStore()
+        store1.add(makeRecord(key: "abc123"))
+        let store2 = ConnectionStore()
+        XCTAssertFalse(store2.secretsLocked)
+        store2.rehydrateSecrets()   // no-op (not locked)
+        guard case .olcrtc(let p) = store2.connections.first?.details else {
+            XCTFail("Expected olcrtc record"); return
+        }
+        XCTAssertEqual(p.key, "abc123", "re-hydrate must not drop a readable key")
+        XCTAssertFalse(store2.secretsLocked)
+    }
 }

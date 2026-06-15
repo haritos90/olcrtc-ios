@@ -133,6 +133,16 @@ final class LogFileWriter {
     /// off the main actor.
     private static let ioQueue = DispatchQueue(label: "olcrtc.log-file-writer", qos: .utility)
 
+    /// #352: hard ceiling for a single on-disk log file. Each `LogFileWriter`
+    /// (one per category, one per server's container log) is opened in append
+    /// mode and never truncated by #332, so across many sessions a file grew
+    /// without bound — the residual long-session degradation #336 flagged.
+    /// 2 MiB ≈ tens of thousands of lines: plenty of forensic history, but
+    /// bounded. A file over the cap is truncated *at session start* (init) to
+    /// its newest `keepBytes` so recent context survives a rotation.
+    static let maxFileBytes  = 2 * 1024 * 1024   // 2 MiB ceiling
+    static let keepBytes     = 1 * 1024 * 1024   // keep newest ~1 MiB on rotate
+
     private var handle: FileHandle?
     private var mirrorHandle: FileHandle?
     private(set) var fileURL: URL?
@@ -157,6 +167,11 @@ final class LogFileWriter {
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }
+        // #352: bound on-disk growth — truncate an over-cap file to its newest
+        // `keepBytes` before we open it in append mode. Runs once per session
+        // (each session creates a fresh writer), so the cost is one stat + at
+        // most one rewrite per operation start, never per line.
+        Self.rotateIfNeeded(at: url)
         handle = try? FileHandle(forWritingTo: url)
         _ = try? handle?.seekToEnd()
         fileURL = url
@@ -169,9 +184,27 @@ final class LogFileWriter {
         if !FileManager.default.fileExists(atPath: mirrorPath) {
             FileManager.default.createFile(atPath: mirrorPath, contents: nil)
         }
+        Self.rotateIfNeeded(at: URL(fileURLWithPath: mirrorPath))   // #352
         mirrorHandle = try? FileHandle(forWritingTo: URL(fileURLWithPath: mirrorPath))
         _ = try? mirrorHandle?.seekToEnd()
         #endif
+    }
+
+    /// #352: if the file at `url` exceeds `maxFileBytes`, rewrite it keeping
+    /// only its newest `keepBytes` (rounded up to the next newline so the first
+    /// retained line isn't a fragment). Best-effort: any I/O failure leaves the
+    /// original file untouched — a rotation miss only means a too-large file,
+    /// never lost logging. Exposed `internal` so a unit test can drive it.
+    static func rotateIfNeeded(at url: URL) {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        guard let size = (attrs?[.size] as? NSNumber)?.intValue, size > maxFileBytes,
+              let data = try? Data(contentsOf: url) else { return }
+        var tail = data.suffix(keepBytes)
+        // Drop a leading partial line so the kept block starts on a line boundary.
+        if let nl = tail.firstIndex(of: 0x0A), nl + 1 < tail.endIndex {
+            tail = tail[(nl + 1)...]
+        }
+        try? Data(tail).write(to: url, options: .atomic)
     }
 
     func write(_ line: String) {
@@ -276,6 +309,12 @@ final class LogStore: ObservableObject {
 
     // Last container targeted by a logs fetch (#278); drives the Logs-tab refresh.
     @Published private(set) var lastContainerTarget: ContainerLogTarget?
+
+    // #367: latest server-reported peer count per server prefix, parsed from the
+    // container log's "Current peers count: N" lines (upstream PR #96). Updated
+    // only when such a line arrives (rare — on a session open/close), so it does
+    // not re-introduce the per-line UI invalidation #332 removed from the buffers.
+    @Published private(set) var peerCounts: [String: Int] = [:]
 
     private var writers: [LogCategory: LogFileWriter] = [:]
 
@@ -419,8 +458,12 @@ final class LogStore: ObservableObject {
     /// Appends a line to `category`. `level` defaults to a text-inferred severity
     /// (#276); `date` defaults to now but callers ingesting external logs pass the
     /// line's own parsed timestamp so it interleaves chronologically (#278).
+    /// #279: an optional diagnostic `code` (e.g. "OLC-1004", catalogued in
+    /// docs/diagnostic-messages.md) is prefixed as `[CODE] ` so it shows in the
+    /// line and is matched by the Logs search — `OlcCode.tag` builds the prefix.
     @MainActor func log(_ category: LogCategory, _ msg: String,
-                        level: LogLineLevel? = nil, date: Date = Date()) {
+                        level: LogLineLevel? = nil, code: OlcCode? = nil,
+                        date: Date = Date()) {
         let verbosity = SettingsStore.shared.logLevel
 
         // Off — drop everything (file writes also suppressed)
@@ -432,14 +475,30 @@ final class LogStore: ObservableObject {
             if Self.pionNoisePatterns.contains(where: { lower.contains($0.lowercased()) }) { return }
         }
 
-        let safe = Self.redactSecrets(msg)
-        let lvl = level ?? Self.classify(safe)
+        // #279: prepend the catalogued code (e.g. "[OLC-1004] ") so it's part of
+        // the stored + searchable line text. Severity is classified from the
+        // message alone (the code tag carries no keywords, but classifying the
+        // bare text keeps the rule obvious); `safe` is what's stored/written.
+        let redacted = Self.redactSecrets(msg)
+        let safe = (code.map { $0.tag } ?? "") + redacted
+        let lvl = level ?? Self.classify(redacted)
         seqCounter &+= 1
-        var list = entries[category] ?? []
-        list.append(LogEntry(date: date, category: category, level: lvl, text: safe, seq: seqCounter))
+        // #358 was: `var list = entries[category] ?? []; list.append(…);
+        // entries[category] = list` — the local `list` plus the dictionary's own
+        // slot were two references to the same array, so `append` triggered a
+        // full CoW deep copy of up to `logBufferSize` (5000) elements on every
+        // line. The `default:`-subscript modify accessor mutates the stored array
+        // in place at refcount 1, so a log storm no longer copies the buffer per
+        // line. Trim through the same accessor so the trim stays in place too.
+        // #358: removeFirst(n) still shifts the tail once when the cap is hit;
+        // that's a single O(cap) move per overflow line, not the O(n) copy the
+        // double-reference forced on *every* line — the dominant cost is gone.
         let cap = max(50, SettingsStore.shared.logBufferSize)
-        if list.count > cap { list.removeFirst(list.count - cap) }
-        entries[category] = list
+        entries[category, default: []].append(
+            LogEntry(date: date, category: category, level: lvl, text: safe, seq: seqCounter))
+        if let count = entries[category]?.count, count > cap {
+            entries[category]?.removeFirst(count - cap)
+        }
         // The on-disk line keeps the timestamp inline so exported files stay
         // self-describing (the in-memory entry carries it as a real `Date`).
         // #332: `safe` (redacted above) is what reaches the writer — redaction
@@ -460,12 +519,18 @@ final class LogStore: ObservableObject {
         let safe = Self.redactSecrets(msg)
         let lvl = level ?? Self.classify(safe)
         seqCounter &+= 1
-        var list = containerEntries[serverPrefix] ?? []
-        list.append(LogEntry(date: date, category: .containerLogs, level: lvl, text: safe, seq: seqCounter))
+        // #358: mutate the stored per-server buffer in place (modify accessor)
+        // instead of the double-reference `var list = …; … = list` pattern that
+        // deep-copied the whole array per line — see `log(_:_:)` for the detail.
         let cap = max(50, SettingsStore.shared.logBufferSize)
-        if list.count > cap { list.removeFirst(list.count - cap) }
-        containerEntries[serverPrefix] = list
+        containerEntries[serverPrefix, default: []].append(
+            LogEntry(date: date, category: .containerLogs, level: lvl, text: safe, seq: seqCounter))
+        if let count = containerEntries[serverPrefix]?.count, count > cap {
+            containerEntries[serverPrefix]?.removeFirst(count - cap)
+        }
         containerWriters[serverPrefix]?.write("\(Self.format(date: date)) \(safe)")
+        // #367: track the latest server-reported peer count (a rare line).
+        if let n = Self.peerCount(in: safe) { peerCounts[serverPrefix] = n }
         // #332 was: revision &+= 1 — per-line UI invalidation.
         bumpRevisionCoalesced()
     }
@@ -533,24 +598,55 @@ final class LogStore: ObservableObject {
         return .info
     }
 
-    // Redacts encryption credentials before anything lands in the in-memory
-    // buffer or on disk. Two passes:
+    // #367: upstream PR #96 prints "Current peers count: N, Devices: [...]" on
+    // every session open/close. Parse N so the Logs tab can show a live peer
+    // count with no binding/wire change (the count is server-log-only).
+    private static let _peerCountRegex = try! NSRegularExpression(
+        pattern: #"Current peers count:\s*(\d+)"#)
+    static func peerCount(in line: String) -> Int? {
+        let r = NSRange(line.startIndex..<line.endIndex, in: line)
+        guard let m = _peerCountRegex.firstMatch(in: line, range: r),
+              let range = Range(m.range(at: 1), in: line) else { return nil }
+        return Int(line[range])
+    }
+
+    // Redacts credentials before anything lands in the in-memory buffer or on
+    // disk. Three passes:
     //   1. The post-`#` key segment of any olcrtc:// URI is stripped.
     //      URI shape: olcrtc://carrier?transport@roomID#KEY[%clientID][$mimo].
     //      We replace KEY (everything up to %/$/whitespace) but keep the URI
     //      prefix readable so install-log dumps remain debuggable.
     //   2. Any standalone 64-hex run is redacted to catch srv.sh banners that
     //      print the key on its own line ("Encryption key: <64hex>").
-    // Ordering: URI pass runs first so its specific replacement wins; the
-    // hex pass mops up the bare-line cases. Both passes are idempotent.
+    //   3. #377: a `password=`/`pass:`-style credential VALUE is scrubbed
+    //      (marker kept, value → <redacted>). Defense-in-depth: SOCKS5/SSH
+    //      passwords are passed as parameters and are NOT interpolated into log
+    //      lines today (verified — no log site prints them), but this nets the
+    //      case if a future Citadel error string or command preview ever echoes
+    //      one. Prose without a value ("password changed") is left untouched.
+    // Ordering: URI pass runs first so its specific replacement wins; the hex
+    // pass mops up bare-line cases; the password pass is independent. All passes
+    // are idempotent.
     private static let _uriKeyRegex = try! NSRegularExpression(pattern: #"(olcrtc://[^\s#]+#)[^\s%$]+"#)
     private static let _hexKeyRegex = try! NSRegularExpression(pattern: #"\b[0-9a-fA-F]{64}\b"#)
+    // #377: `pass`/`passwd`/`password` + `=`/`:` + a value token → redact the value.
+    // #385: the leading `\b` anchors the marker to a word boundary so interior
+    // `pass` substrings — `bypass=`, `compass:`, `surpass=` — keep their value.
+    // (#385 was: no `\b`, so those got their value <redacted> on every line.)
+    private static let _passwordRegex = try! NSRegularExpression(pattern: #"(?i)\b(pass(?:wd|word)?\s*[=:]\s*)\S+"#)
     static func redactSecrets(_ s: String) -> String {
         var out = s
         let r = NSRange(out.startIndex..<out.endIndex, in: out)
         out = _uriKeyRegex.stringByReplacingMatches(in: out, range: r, withTemplate: "$1<redacted>")
         let r2 = NSRange(out.startIndex..<out.endIndex, in: out)
         out = _hexKeyRegex.stringByReplacingMatches(in: out, range: r2, withTemplate: "<redacted-key>")
+        // #385: cheap pre-check — skip the password NSRegularExpression unless the
+        // line actually carries a "pass" substring (case-insensitive). The vast
+        // majority of ingested lines (incl. 200-line container fetches) don't.
+        if out.range(of: "pass", options: .caseInsensitive) != nil {
+            let r3 = NSRange(out.startIndex..<out.endIndex, in: out)
+            out = _passwordRegex.stringByReplacingMatches(in: out, range: r3, withTemplate: "$1<redacted>")
+        }
         return out
     }
 }

@@ -113,6 +113,30 @@ final class LogStoreMergedTests: XCTestCase {
         XCTAssertEqual(LogStore.shared.entries[.connection]?.last?.level, .error)
     }
 
+    // MARK: diagnostic code prefix (#279)
+
+    func testLogPrefixesDiagnosticCodeAndKeepsItSearchable() {
+        LogStore.shared.log(.connection, "✓ SOCKS5 proxy ready on port 8808", code: .socksReady)
+        let entry = LogStore.shared.entries[.connection]?.last
+        XCTAssertEqual(entry?.text, "[OLC-1004] ✓ SOCKS5 proxy ready on port 8808")
+        // The code is part of the stored text, so the Logs search matches it.
+        XCTAssertTrue(LogStore.shared.entries[.connection]!.contains {
+            $0.text.localizedStandardContains("OLC-1004")
+        })
+    }
+
+    func testCodePrefixDoesNotAlterInferredSeverity() {
+        // A neutral "I"-type code on an error line must not downgrade the level —
+        // severity is classified from the message, not the code tag.
+        LogStore.shared.log(.connection, "✗ Tunnel not responding", code: .tunnelDown)
+        XCTAssertEqual(LogStore.shared.entries[.connection]?.last?.level, .error)
+    }
+
+    func testNoCodeMeansNoBracketPrefix() {
+        LogStore.shared.log(.connection, "plain line")
+        XCTAssertEqual(LogStore.shared.entries[.connection]?.last?.text, "plain line")
+    }
+
     // MARK: per-server container logs (#295)
 
     func testLogContainerAppendsToItsOwnServerBuffer() {
@@ -145,6 +169,46 @@ final class LogStoreMergedTests: XCTestCase {
         XCTAssertEqual(LogStore.shared.lastContainerTarget?.serverPrefix, "TWmsk1")
     }
 
+    // MARK: on-disk rotation (#352)
+
+    func testRotateLeavesSmallFileUntouched() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("olcrtc-rotate-small-\(UUID().uuidString).log")
+        let small = Data("line one\nline two\n".utf8)
+        try small.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        LogFileWriter.rotateIfNeeded(at: url)
+        XCTAssertEqual(try Data(contentsOf: url), small,
+                       "a file under the cap must not be rewritten")
+    }
+
+    func testRotateTruncatesOverCapFileToNewestKeepBytesOnLineBoundary() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("olcrtc-rotate-big-\(UUID().uuidString).log")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Build a file comfortably over the cap out of fixed-width numbered lines.
+        let line = String(repeating: "x", count: 99) + "\n"   // 100 bytes/line
+        let lineCount = (LogFileWriter.maxFileBytes / 100) + 5000   // > cap
+        var big = ""
+        big.reserveCapacity(lineCount * 100)
+        for _ in 0..<lineCount { big += line }
+        try Data(big.utf8).write(to: url)
+
+        LogFileWriter.rotateIfNeeded(at: url)
+
+        let rotated = try Data(contentsOf: url)
+        XCTAssertLessThanOrEqual(rotated.count, LogFileWriter.keepBytes,
+                                 "rotated file must be at most keepBytes")
+        XCTAssertGreaterThan(rotated.count, 0, "rotation must keep recent history")
+        // First retained byte starts a whole line (no leading fragment): every
+        // line is "x"*99 + "\n", so the kept block must begin with 'x'.
+        XCTAssertEqual(rotated.first, UInt8(ascii: "x"))
+        // …and the very last bytes are an intact final line.
+        XCTAssertEqual(rotated.suffix(line.utf8.count), Data(line.utf8))
+    }
+
     // MARK: LogRendering (#294 — replaces the old merged-stream rendering)
 
     func testLogRenderingFiltersBySearchAndIsNewestFirst() {
@@ -158,5 +222,13 @@ final class LogStoreMergedTests: XCTestCase {
 
         let filtered = LogRendering.filtered(entries, search: "match")
         XCTAssertEqual(filtered.map(\.text), ["newer match"])
+    }
+
+    // #367: peer-count parser over the server's "Current peers count:" lines (PR #96).
+    func testPeerCountParsing() {
+        XCTAssertEqual(LogStore.peerCount(in: "2026/06/15 14:00:00 Current peers count: 3, Devices: [a b]"), 3)
+        XCTAssertEqual(LogStore.peerCount(in: "Current peers count: 0"), 0)
+        XCTAssertNil(LogStore.peerCount(in: "session opened: id=7 device=ios"))
+        XCTAssertNil(LogStore.peerCount(in: "peers count is high"))
     }
 }

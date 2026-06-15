@@ -735,9 +735,13 @@ enum SSHRunner {
                                onStep: @Sendable @escaping (String) -> Void) async throws -> String {
         onStep("podman logs --tail \(tail)…")
         // Container name comes from our own install script so single-quoting is safe.
+        // #331: `logBody: false` — this output IS the container's own log, so the
+        // caller (Provisioner.containerLogs) routes it to the per-server Container
+        // tab; provisioning keeps just the pointer line instead of duplicating it.
         return try await _withConnection(host: host, password: password) { client in
-            try await execute(client: client, label: "container logs",
-                              command: "podman logs --tail \(tail) '\(containerName)'")
+            try await _execute(client: client, label: "container logs",
+                               command: "podman logs --tail \(tail) '\(containerName)'",
+                               logBody: false)
         }
     }
 
@@ -823,7 +827,17 @@ enum SSHRunner {
     @discardableResult
     static func _execute(client: SSHClient,
                           label: String,
-                          command: String) async throws -> String {
+                          command: String,
+                          // #331: classify the body by ORIGIN. Orchestration
+                          // commands (the default) dump their output into the
+                          // .provisioning stream as before. A command whose
+                          // output is *container-produced* (e.g. `podman logs`)
+                          // passes `logBody: false`: the caller routes that body
+                          // to the per-server container log (logContainer, #295),
+                          // and provisioning records only a single pointer line
+                          // so the orchestration narrative stays followable
+                          // without repeating the container output in two tabs.
+                          logBody: Bool = true) async throws -> String {
         // Wrap in a brace group so the redirect applies to everything.
         // Trim long previews in the input log entry so we don't dump
         // 50 lines of shell into the buffer.
@@ -843,8 +857,13 @@ enum SSHRunner {
             let output = String(decoding: bytes, as: UTF8.self)
             await MainActor.run {
                 LogStore.shared.log(.provisioning, "← \(output.count) bytes:")
-                for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
-                    LogStore.shared.log(.provisioning, "    \(line)")
+                if logBody {
+                    for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
+                        LogStore.shared.log(.provisioning, "    \(line)")
+                    }
+                } else {
+                    // #331: hand-off pointer — the body lives in the Container tab.
+                    LogStore.shared.log(.provisioning, "    → container output → Container tab")
                 }
             }
             return output

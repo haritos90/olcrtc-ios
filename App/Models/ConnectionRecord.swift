@@ -63,6 +63,24 @@ struct ConnectionRecord: Identifiable, Codable, Equatable {
     var groupName : String = ConnectionRecord.defaultGroupName // users can rename
     var details   : ConnectionDetails
 
+    // boc #356: subscription provenance. Set only on records imported from an
+    // olcrtc-sub:// link; nil for manually added ones. `subSourceURL` is the
+    // canonical sub link (so re-opening it diffs instead of duplicating);
+    // `subNodeKey` is the stable per-node identity (OlcrtcSubscription.Entry
+    // .nodeKey) used to match a record to its line on re-import.
+    var subSourceURL: String? = nil
+    var subNodeKey  : String? = nil
+    // eoc #356
+
+    // boc #363: per-node subscription metadata carried through from the `##`
+    // fields of the sub.md line (server-provided free text — render defensively).
+    // Synthesised Codable: old records decode these as nil with no migration.
+    var subIP       : String? = nil   // ##ip
+    var subComment  : String? = nil   // ##comment
+    var subUsed     : String? = nil   // ##used (e.g. "500mb/10gb")
+    var subAvailable: String? = nil   // ##available
+    // eoc #363
+
     /// Canonical default group token. Stored verbatim (locale-stable); rendered
     /// via `displayGroupName` so it localises (#283) without migrating existing
     /// records when the UI language changes.

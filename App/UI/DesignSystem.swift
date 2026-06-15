@@ -138,7 +138,8 @@ struct OlcButton: View {
 // MARK: - 2. OlcCard
 //
 // Rounded container: card fill, card radius, 16pt padding, optional hairline
-// (Console only — `cardBorderWidth` is 0 in Refined, so the overlay is a no-op).
+// (#299: `cardBorderWidth` is 0, so the stroke overlay is a no-op — kept as a
+// hook in case a future scheme wants a bordered card).
 
 struct OlcCard<Content: View>: View {
     private let padding: CGFloat
@@ -157,10 +158,8 @@ struct OlcCard<Content: View>: View {
             .background(Theme.Palette.card)
             .clipShape(RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius, style: .continuous))
             .overlay {
-                // #281: at white@8% the Console hairline was invisible — bump it so
-                // the bordered direction actually reads (Refined width is 0 → no-op).
-                // #340 was: Color.white.opacity(0.16) — now a dynamic token so the
-                // hairline flips to black in light mode.
+                // #299: card border width is 0, so this stroke is a no-op today;
+                // the dynamic token (#340) is kept for a future bordered scheme.
                 RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius, style: .continuous)
                     .strokeBorder(Theme.Palette.cardBorder, lineWidth: Theme.Metrics.cardBorderWidth)
             }
@@ -304,6 +303,11 @@ struct OlcMenuItem: Identifiable {
     enum Kind {
         case button(role: ButtonRole?, action: () -> Void)
         case share(String)                       // renders a system ShareLink(item:)
+        // #353: the share text is built lazily inside the Menu's content
+        // closure — which SwiftUI only evaluates when the menu is opened — so a
+        // large export string (e.g. the whole Logs buffer) isn't constructed on
+        // every body refresh of the view that *holds* the menu.
+        case shareLazy(() -> String)
         case divider
     }
     let id = UUID()
@@ -319,6 +323,11 @@ struct OlcMenuItem: Identifiable {
     }
     static func share(_ title: String, systemImage: String? = nil, item: String) -> OlcMenuItem {
         OlcMenuItem(title: title, systemImage: systemImage, kind: .share(item))
+    }
+    /// #353: deferred-content share — `item` is only called when the menu opens.
+    static func shareLazy(_ title: String, systemImage: String? = nil,
+                          item: @escaping () -> String) -> OlcMenuItem {
+        OlcMenuItem(title: title, systemImage: systemImage, kind: .shareLazy(item))
     }
     static var divider: OlcMenuItem { OlcMenuItem(kind: .divider) }
 }
@@ -347,13 +356,25 @@ struct OlcOverflowMenu: View {
                     } else {
                         ShareLink(item: text) { Text(item.title) }
                     }
+                case let .shareLazy(makeText):
+                    // #353: `makeText()` runs here, inside the Menu content the
+                    // system evaluates lazily on open — not on the holder's body.
+                    let text = makeText()
+                    if let img = item.systemImage {
+                        ShareLink(item: text) { Label(item.title, systemImage: img) }
+                    } else {
+                        ShareLink(item: text) { Text(item.title) }
+                    }
                 }
             }
         } label: {
             Image(systemName: systemImage)
                 .font(.title3)
                 .foregroundStyle(Theme.Palette.textSecondary)
-                .frame(width: 32, height: 32)
+                // #370 was: .frame(width: 32, height: 32) was the hit region —
+                // below Apple's 44pt minimum. The glyph keeps its size; the
+                // TOUCH region grows to 44×44 (the contentShape covers it).
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
@@ -539,6 +560,11 @@ struct OlcMiniStat: View {
                 .foregroundStyle(tone ?? Theme.Palette.textPrimary)
         }
         .lineLimit(1)
+        // #369: the label + value were two separate Text nodes, so VoiceOver
+        // read e.g. "Disk" and "36/40G" as disconnected fragments. Speak each
+        // mini-stat as one element ("Disk 36/40G").
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) \(value)")
     }
 }
 
@@ -599,6 +625,11 @@ struct OlcMetric: View {
                 }
             }
         }
+        // #369: label / value / unit were three separate Text nodes, so the
+        // Ping·DL·UL trio read as disconnected fragments to VoiceOver. Speak
+        // each metric as one element ("Ping 42 ms").
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([label, value, unit].compactMap { $0 }.joined(separator: " "))
     }
 }
 

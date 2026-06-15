@@ -9,16 +9,25 @@ import SwiftUI
 // suite). Legend mapping: `+` (pass) → .ok, the per-carrier best/default → .recommended,
 // `~` (unstable, may work) → .question, `-` (fail / unsupported) → .fail.
 //
+// #357: re-synced to the upstream E2E ground truth (the realE2ECaseExpectation
+// table in `olcrtc-upstream/internal/e2e/tunnel_test.go` @ pin 9822def), which is
+// now more current than docs/settings.md for jitsi: the two jitsi keepalive fixes
+// (upstream 2614169 "keep byte-stream sessions alive with RTP" + 1f72c87 "remove
+// RTCP keepalive reconnect loop") flipped jitsi/vp8channel to ExpectPass (95dc660),
+// and be6428b set jitsi's non-datachannel transports to ExpectFail. E2E mapping:
+// ExpectPass → .ok, ExpectUnstable → .question, ExpectFail → .fail.
+//
 //   | transport    | telemost | wbstream | jitsi |
 //   | datachannel  |    -     |    ~     |   +   |
-//   | vp8channel   |    +     |    +     |   ~   |
-//   | seichannel   |    -     |    +     |   ~   |
-//   | videochannel |    +     |    +     |   ~   |
+//   | vp8channel   |    +     |    +     |   +   |
+//   | seichannel   |    -     |    +     |   -   |
+//   | videochannel |    +     |    +     |   -   |
 //
 // Upstream notes: Telemost dropped DataChannel (fail) and never supported sei;
 // videochannel works but is slow. WBStream runs everything except datachannel
 // (guest tokens set canPublishData=false → unstable). Jitsi's datachannel is the
-// one stable, recommended combo; its video transports flap (Jicofo routing).
+// one stable, recommended combo; vp8channel is now a stable fallback (#357), while
+// seichannel and videochannel are expected-fail on jitsi per the E2E suite.
 
 /// Compatibility level between a carrier and a transport, based on observed test results.
 enum Compat {
@@ -38,12 +47,28 @@ enum Compat {
         }
     }
 
+    /// #369: words for VoiceOver — the glyph (★/✓/?/✗/—) is decorative and
+    /// reads as nothing useful, so each matrix cell speaks this instead, via
+    /// the existing matrixStatus* legend keys.
+    var spokenStatus: String {
+        switch self {
+        case .recommended: return L10n.matrixStatusRecommended.localized()
+        case .ok:          return L10n.matrixStatusOK.localized()
+        case .question:    return L10n.matrixStatusQuestion.localized()
+        case .fail:        return L10n.matrixStatusFail.localized()
+        case .unknown:     return L10n.matrixStatusUnknown.localized()
+        }
+    }
+
+    // #350: route the matrix status colours through Theme.Palette (the #258
+    // status vocabulary) instead of bare SwiftUI colours.
+    // #350 was: .green / .orange / .red / Color(.systemGray)
     var color: Color {
         switch self {
-        case .recommended, .ok: return .green
-        case .question:         return .orange
-        case .fail:             return .red
-        case .unknown:          return Color(.systemGray)
+        case .recommended, .ok: return Theme.Palette.green
+        case .question:         return Theme.Palette.orange
+        case .fail:             return Theme.Palette.red
+        case .unknown:          return Theme.Palette.textTertiary
         }
     }
 }
@@ -89,9 +114,10 @@ enum CarrierTransportMatrix {
         ],
         "jitsi": [
             "datachannel":  .recommended,  // the one stable combo upstream recommends everywhere
-            "vp8channel":   .question,     // Jicofo video routing flaps (unstable)
-            "seichannel":   .question,     // SEI passenger frames flap on self-hosted Jicofo
-            "videochannel": .question,     // needs extra Jingle steps; unstable
+            // #357: re-synced to upstream E2E (internal/e2e/tunnel_test.go @ 9822def).
+            "vp8channel":   .ok,           // #357 was: .question — E2E ExpectPass since 95dc660 (jitsi RTP keepalive fix)
+            "seichannel":   .fail,         // #357 was: .question — E2E ExpectFail (be6428b: jitsi non-data transports fail)
+            "videochannel": .fail,         // #357 was: .question — E2E ExpectFail (be6428b)
         ],
     ]
 
@@ -175,18 +201,27 @@ struct MatrixView: View {
                             .foregroundStyle(cp.color)
                             .fontWeight(isHighlighted ? .bold : .regular)
                             .frame(maxWidth: .infinity)
+                            // #369: the bare glyph is unreadable to VoiceOver —
+                            // speak "<carrier> <transport>: <status in words>".
+                            .accessibilityElement()
+                            .accessibilityLabel(
+                                "\(CarrierTransportMatrix.carrierLabel(c)) "
+                                + "\(CarrierTransportMatrix.transportLabel(t)): "
+                                + cp.spokenStatus)
                     }
                 }
             }
             Divider()
             // Legend
+            // #350 was: bare .green/.orange/.red/Color(.systemGray) — routed
+            // through Theme.Palette to match Compat.color and the #258 tokens.
             HStack(spacing: 10) {
                 ForEach([
-                    ("★", Color.green,          L10n.matrixStatusRecommended.localized()),
-                    ("✓", Color.green,          L10n.matrixStatusOK.localized()),
-                    ("?", Color.orange,         L10n.matrixStatusQuestion.localized()),
-                    ("✗", Color.red,            L10n.matrixStatusFail.localized()),
-                    ("—", Color(.systemGray),   L10n.matrixStatusUnknown.localized()),
+                    ("★", Theme.Palette.green,        L10n.matrixStatusRecommended.localized()),
+                    ("✓", Theme.Palette.green,        L10n.matrixStatusOK.localized()),
+                    ("?", Theme.Palette.orange,       L10n.matrixStatusQuestion.localized()),
+                    ("✗", Theme.Palette.red,          L10n.matrixStatusFail.localized()),
+                    ("—", Theme.Palette.textTertiary, L10n.matrixStatusUnknown.localized()),
                 ], id: \.0) { sym, col, label in
                     HStack(spacing: 2) {
                         Text(sym).foregroundStyle(col).fontWeight(.semibold)

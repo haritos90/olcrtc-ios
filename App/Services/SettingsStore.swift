@@ -30,8 +30,10 @@ enum LogLevel: Int, CaseIterable, Codable, Comparable {
 /// App appearance: System follows iOS, Light/Dark force a scheme. Replaces
 /// the Info.plist `UIUserInterfaceStyle = Dark` enforcement (project.yml);
 /// applied via `.preferredColorScheme` on the root in App.swift.
+/// #299: `.gray` is a real third colour scheme — it forces dark system chrome
+/// but swaps the pure-black grounds for neutral mid-gray (see `Theme.isGray`).
 enum AppearanceMode: String, CaseIterable, Identifiable {
-    case system, light, dark
+    case system, light, dark, gray
 
     var id: String { rawValue }
 
@@ -40,6 +42,7 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
         case .system: return L10n.appearanceSystem.localized()
         case .light:  return L10n.appearanceLight.localized()
         case .dark:   return L10n.appearanceDark.localized()
+        case .gray:   return L10n.appearanceGray.localized()   // #299
         }
     }
 
@@ -48,7 +51,8 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
         switch self {
         case .system: return nil
         case .light:  return .light
-        case .dark:   return .dark
+        // #299: Gray keeps dark system chrome (the mid-gray grounds are dark-side).
+        case .dark, .gray: return .dark
         }
     }
 }
@@ -93,6 +97,7 @@ final class SettingsStore: ObservableObject {
         static let vpsAutoPingEnabled   = true
         static let vpsAutoPingInterval  = 30
         static let vpsAutoPingRange     = 10...300
+        static let updateCheckEnabled   = true          // #360: opt-out
     }
 
     // MARK: Persistence dispatch
@@ -106,6 +111,16 @@ final class SettingsStore: ObservableObject {
     private static func persist<T>(_ value: T, forKey key: String) {
         writeQueue.async {
             UserDefaults.standard.set(value, forKey: key)
+        }
+    }
+
+    /// #360: persist a nullable value — store it when present, remove the key
+    /// when nil. The generic `persist` would store a wrapped `Optional.none`,
+    /// which `object(forKey:)` reads back as non-nil. Used for `lastUpdateCheck`.
+    private static func persistOptionalDate(_ value: Date?, forKey key: String) {
+        writeQueue.async {
+            if let value { UserDefaults.standard.set(value, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
         }
     }
 
@@ -179,6 +194,12 @@ final class SettingsStore: ObservableObject {
     @Published var backgroundAudio: Bool {
         didSet { Self.persist(backgroundAudio, forKey: Keys.backgroundAudio) }
     }
+    /// #337: screenshot-safe mode — when true, IP addresses in the Connections
+    /// diagnostics and on VPS cards are masked for display only (copy actions
+    /// and stored values stay real; Logs are deliberately never masked).
+    @Published var maskIPs: Bool {
+        didSet { Self.persist(maskIPs, forKey: Keys.maskIPs) }
+    }
     @Published var localSocksAuthEnabled: Bool {
         didSet { Self.persist(localSocksAuthEnabled, forKey: Keys.localSocksAuthEnabled) }
     }
@@ -204,11 +225,10 @@ final class SettingsStore: ObservableObject {
     @Published var language: String {
         didSet { Self.persist(language, forKey: Keys.language) }
     }
-    /// #267: design direction. false = Refined (default), true = Console.
-    @Published var designConsole: Bool {
-        didSet { Self.persist(designConsole, forKey: Keys.designConsole) }
-    }
-    /// #340: appearance (System/Light/Dark). Defaults to .dark — the app was
+    // #299 was: @Published var designConsole — the Refined/Console "design
+    // direction" (#267/#281) that only reskinned shape, never colours. Removed
+    // when Theme switched to real colour schemes (System/Light/Dark/Gray).
+    /// #340: appearance (System/Light/Dark/Gray). Defaults to .dark — the app was
     /// forced-dark until now, so existing users see no change on update.
     @Published var appearanceMode: AppearanceMode {
         didSet { Self.persist(appearanceMode.rawValue, forKey: Keys.appearanceMode) }
@@ -228,6 +248,20 @@ final class SettingsStore: ObservableObject {
     /// #285: which speed-test provider a run uses (id into `AppConstants.SpeedTest.providers`).
     @Published var speedTestProviderID: String {
         didSet { Self.persist(speedTestProviderID, forKey: Keys.speedTestProviderID) }
+    }
+    /// #360: opt-out toggle for the in-app GitHub-Releases update check. The
+    /// check is anonymous (no install id), interval-gated, and fails silently —
+    /// this is the only user control over it.
+    @Published var updateCheckEnabled: Bool {
+        didSet { Self.persist(updateCheckEnabled, forKey: Keys.updateCheckEnabled) }
+    }
+    /// #360: timestamp of the last *completed* update check (nil = never).
+    /// Drives the 24h interval gate so the network call runs at most once a day.
+    /// Persisted explicitly (write the Date / remove the key) rather than via the
+    /// generic `persist`, which would wrap a nil `Date?` in a double-optional that
+    /// `UserDefaults.set` can't store cleanly.
+    @Published var lastUpdateCheck: Date? {
+        didSet { Self.persistOptionalDate(lastUpdateCheck, forKey: Keys.lastUpdateCheck) }
     }
 
     // MARK: Init
@@ -255,10 +289,10 @@ final class SettingsStore: ObservableObject {
         autoConnectOnLaunch = (d.object(forKey: Keys.autoConnectOnLaunch) as? Bool)                                                          ?? false
         autoRemoveConnectionOnUninstall = (d.object(forKey: Keys.autoRemoveConnectionOnUninstall) as? Bool)                                  ?? true
         backgroundAudio          = (d.object(forKey: Keys.backgroundAudio)          as? Bool)   ?? false
+        maskIPs                  = (d.object(forKey: Keys.maskIPs)                  as? Bool)   ?? false   // #337
         localSocksAuthEnabled    = (d.object(forKey: Keys.localSocksAuthEnabled)    as? Bool)   ?? false
         localSocksUser           = (d.string(forKey: Keys.localSocksUser))                      ?? ""
         language                 = (d.string(forKey: Keys.language))                            ?? Self.defaultLanguage()
-        designConsole            = (d.object(forKey: Keys.designConsole) as? Bool)              ?? false
         appearanceMode           = AppearanceMode(rawValue: d.string(forKey: Keys.appearanceMode) ?? "") ?? .dark   // #340
         keepAliveSeconds    = (d.object(forKey: Keys.keepAlive)           as? Int)  .map { $0.clamped(to: Defaults.keepAliveRange) }         ?? Defaults.keepAliveSeconds
         vpsAutoPingEnabled  = (d.object(forKey: Keys.vpsAutoPingEnabled)  as? Bool)                                                          ?? Defaults.vpsAutoPingEnabled
@@ -269,6 +303,8 @@ final class SettingsStore: ObservableObject {
             enabledIPSources = AppConstants.defaultEnabledIPCheckLabels
         }
         speedTestProviderID = d.string(forKey: Keys.speedTestProviderID) ?? AppConstants.SpeedTest.defaultProviderID
+        updateCheckEnabled  = (d.object(forKey: Keys.updateCheckEnabled) as? Bool)  ?? Defaults.updateCheckEnabled   // #360
+        lastUpdateCheck     = d.object(forKey: Keys.lastUpdateCheck)     as? Date                                    // #360 (nil = never)
     }
 
     // MARK: Reset
@@ -287,6 +323,7 @@ final class SettingsStore: ObservableObject {
         autoConnectOnLaunch    = false
         autoRemoveConnectionOnUninstall = true
         backgroundAudio        = false
+        maskIPs                = false   // #337
         localSocksAuthEnabled  = false
         localSocksUser         = ""
         language               = Self.defaultLanguage()
@@ -296,6 +333,8 @@ final class SettingsStore: ObservableObject {
         vpsAutoPingInterval    = Defaults.vpsAutoPingInterval
         enabledIPSources       = AppConstants.defaultEnabledIPCheckLabels
         speedTestProviderID    = AppConstants.SpeedTest.defaultProviderID
+        updateCheckEnabled     = Defaults.updateCheckEnabled   // #360
+        lastUpdateCheck        = nil                           // #360: re-arm the check
     }
 
     /// Picks Russian if the device's preferred language starts with `ru`,
@@ -335,16 +374,19 @@ final class SettingsStore: ObservableObject {
         static let autoConnectOnLaunch = "settings.autoConnectOnLaunch"
         static let autoRemoveConnectionOnUninstall = "settings.autoRemoveConnectionOnUninstall"
         static let backgroundAudio           = "settings.backgroundAudio"
+        static let maskIPs                   = "settings.maskIPs"   // #337
         static let localSocksAuthEnabled     = "settings.localSocksAuthEnabled"
         static let localSocksUser            = "settings.localSocksUser"
         static let language                  = "settings.language"
-        static let designConsole             = "settings.designConsole"
+        // #299 was: designConsole = "settings.designConsole" — direction removed.
         static let appearanceMode            = "settings.appearanceMode"   // #340
         static let keepAlive                 = "settings.keepAliveSeconds"
         static let vpsAutoPingEnabled        = "settings.vpsAutoPingEnabled"
         static let vpsAutoPingInterval       = "settings.vpsAutoPingInterval"
         static let enabledIPSources          = "settings.enabledIPSources"
         static let speedTestProviderID       = "settings.speedTestProviderID"
+        static let updateCheckEnabled        = "settings.updateCheckEnabled"   // #360
+        static let lastUpdateCheck           = "settings.lastUpdateCheck"      // #360
     }
 }
 

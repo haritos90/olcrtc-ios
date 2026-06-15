@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os   // #372: OSAllocatedUnfairLock guards `lastTunnelActivityDate`
 // No `import Mobile`: the gomobile runtime is reached only through the engine
 // (OlcrtcEngine) now — TunnelManager is protocol-agnostic (#243). `Network` is
 // used for the NWPathMonitor that drives reconnect-on-path-change (#269).
@@ -115,8 +116,29 @@ final class TunnelManager: ObservableObject {
     /// `socksPort` above re-reads SettingsStore on every access, so after a
     /// live port edit in Settings it no longer answers "which port does the
     /// tunnel hold?" — the Settings port check compares against this instead.
-    @Published private(set) var boundPort: Int?
+    @Published private(set) var boundPort: Int? {
+        // #351: mirror every write into the nonisolated `liveBoundPort` so
+        // SOCKSSession (off MainActor) can target the port the live session
+        // actually bound rather than the live-editable configured one.
+        didSet { TunnelManager.liveBoundPort = boundPort }
+    }
     // eoc #313
+
+    /// #351: nonisolated mirror of `boundPort`. SOCKSSession builds tunnel-mode
+    /// URLSessions from a background task and can't await MainActor, so it reads
+    /// this instead of the configured `socksPort` while a session is live —
+    /// otherwise a live port edit in Settings would point keep-alive's verify
+    /// probe (and other in-app SOCKS traffic) at the wrong port and tear down a
+    /// healthy tunnel (#313 follow-up). Kept in lockstep by `boundPort.didSet`.
+    /// `nonisolated(unsafe)`: written only on MainActor (via `boundPort`), read
+    /// from background tasks; a stale read across the brief connect/disconnect
+    /// window is benign (falls back to the configured port in `socksPort`).
+    nonisolated(unsafe) private(set) static var liveBoundPort: Int? = nil
+
+    /// #351: the port in-app SOCKS traffic should target *now* — the live
+    /// session's bound port while connected, else the configured port. Tunnel
+    /// verify, IP check, and speed test all route through here via SOCKSSession.
+    nonisolated static var activeSocksPort: Int { liveBoundPort ?? socksPort }
 
     @Published var state: ConnectionState = .disconnected {
         didSet {
@@ -183,6 +205,37 @@ final class TunnelManager: ObservableObject {
     private nonisolated static let maxReconnectDelaySeconds: Double = 60
     private nonisolated static let maxReconnectAttempts = 6   // 2+4+8+16+32+60 ≈ 122 s, then wait for user
 
+    // MARK: Same-port wait-and-retry (#333)
+    //
+    // The core's SOCKS listener tears down asynchronously, so right after our own
+    // disconnect the configured port can still read busy for a second or two — an
+    // immediate reconnect would fail the #308 "port busy" check on our *own* ghost.
+    // Mitigation that keeps the #308 contract intact (bind exactly the configured
+    // port, typed busy error, NO sliding): if the port is busy *and we disconnected
+    // ourselves recently*, poll the SAME port briefly before surfacing the error.
+    // The window is gated on a self-disconnect so a genuinely busy port (another
+    // app) still fails fast.
+    private nonisolated static let selfDisconnectGhostWindow: TimeInterval = 10  // only wait if we let go this recently
+    private nonisolated static let portReleasePollInterval: Double = 0.25        // ~250 ms between probes
+    private nonisolated static let portReleaseMaxWait: Double = 5                // give up after ~5 s → typed busy error
+
+    /// When we last tore down our own listener (disconnect / keep-alive loss /
+    /// recovery teardown). Gates the same-port wait above so we only ever wait on
+    /// *our* ghost, never on a port a different app is holding. `nonisolated(unsafe)`:
+    /// written on MainActor, read by the nonisolated wait decision; a stale read is
+    /// benign (worst case we skip the wait and fail fast as before).
+    nonisolated(unsafe) private static var lastSelfDisconnectDate: Date? = nil
+
+    /// #333: should the connect path wait for the configured port to free up rather
+    /// than failing immediately? Only when the port is currently busy AND we
+    /// released our own listener within `selfDisconnectGhostWindow`. Pure → tested.
+    nonisolated static func shouldWaitForOwnPortRelease(portFree: Bool,
+                                                        selfDisconnectedAgo: TimeInterval?) -> Bool {
+        guard !portFree else { return false }
+        guard let ago = selfDisconnectedAgo, ago >= 0 else { return false }
+        return ago <= selfDisconnectGhostWindow
+    }
+
     // MARK: Network-path monitoring (#269)
     //
     // The gomobile session is bound to whatever network path it started on, so
@@ -198,10 +251,35 @@ final class TunnelManager: ObservableObject {
     private var lastPathSatisfied: Bool?                  // nil until the first update (baseline)
     private var lastPrimaryInterface: NWInterface.InterfaceType?
 
-    /// Updated whenever data successfully flows through the tunnel.
-    /// `nonisolated` so SOCKSSession / SpeedTest can write from background tasks.
-    /// Keep-alive reads this on MainActor; a slight data race on Date is benign.
-    nonisolated(unsafe) static var lastTunnelActivityDate: Date? = nil
+    // boc #372: `lastTunnelActivityDate` is written from several concurrent
+    // contexts — `noteActivity`, `SOCKSSession.noteTunnelActivity`, and the
+    // keep-alive loop — and read by keep-alive. It was a plain
+    // `nonisolated(unsafe) static var Date?`, an unsynchronised shared mutable
+    // static (a data race / UB). Back it with an `OSAllocatedUnfairLock` (iOS
+    // 16+; app targets 17+), storing the time as a `Double`
+    // (timeIntervalSinceReferenceDate) so the guarded value is a trivially
+    // copyable scalar. The `Date?` get/set/reset surface below is preserved
+    // verbatim, so every existing call site — including the #333 reset-on-
+    // disconnect (`= nil`) — keeps working with no change.
+    // #372 was: nonisolated(unsafe) static var lastTunnelActivityDate: Date? = nil
+    private static let activityClock = OSAllocatedUnfairLock<Double?>(initialState: nil)
+
+    /// Timestamp of the last observed tunnel activity (`nil` = none / reset).
+    /// `nonisolated` so SOCKSSession / SpeedTest write it from background tasks
+    /// and keep-alive reads it on MainActor — all serialized through the lock.
+    nonisolated static var lastTunnelActivityDate: Date? {
+        get {
+            activityClock.withLock { stored in
+                stored.map { Date(timeIntervalSinceReferenceDate: $0) }
+            }
+        }
+        set {
+            activityClock.withLock { stored in
+                stored = newValue?.timeIntervalSinceReferenceDate
+            }
+        }
+    }
+    // eoc #372
 
     /// Call this whenever a successful request through the tunnel is observed.
     /// Pass `forAtLeast` to suppress keep-alive probes for a known busy period
@@ -261,6 +339,15 @@ final class TunnelManager: ObservableObject {
         bgKeeper.stop()
         activeEngine?.stop()
         lastRecord = nil
+        // #333: stopping our own listener opens the async-teardown window during
+        // which the port reads busy on our ghost. Record it so the *next* connect
+        // can wait-and-retry the same port (gated on this being recent).
+        TunnelManager.lastSelfDisconnectDate = Date()
+        // #333 fold-in: a future activity reservation (e.g. noteActivity(forAtLeast:)
+        // from a speed test) parks `lastTunnelActivityDate` ahead; if it survived
+        // teardown it would suppress keep-alive on the NEXT session for one interval.
+        // Clear it so each session starts with a clean keep-alive baseline.
+        TunnelManager.lastTunnelActivityDate = nil
         state = .disconnected
     }
 
@@ -309,7 +396,7 @@ final class TunnelManager: ObservableObject {
                 if ok {
                     failCount = 0
                     TunnelManager.lastTunnelActivityDate = Date()
-                    LogStore.shared.log(.connection, L10n.keepAliveOK.localized())
+                    LogStore.shared.log(.connection, L10n.keepAliveOK.localized(), code: .keepAliveOK)  // OLC-1010
                 } else {
                     failCount += 1
                     if failCount < 3 {
@@ -317,9 +404,10 @@ final class TunnelManager: ObservableObject {
                         // Warn but keep the connection alive; next interval decides.
                         // 3 consecutive failures = 90s of sustained failure before disconnect.
                         LogStore.shared.log(.connection,
-                            "⚠ Keep-alive failed (\(failCount)/3) — retrying next interval")
+                            "⚠ Keep-alive failed (\(failCount)/3) — retrying next interval",
+                            code: .keepAliveRetry)  // OLC-1011
                     } else {
-                        LogStore.shared.log(.connection, L10n.keepAliveLost.localized())
+                        LogStore.shared.log(.connection, L10n.keepAliveLost.localized(), code: .keepAliveLost)  // OLC-1012
                         self.activeEngine?.stop()
                         self.state = .failed(L10n.serverConnectionLost.localized())
                         self.requestReconnect(reason: self.lastRecord?.displayName ?? "")
@@ -337,7 +425,7 @@ final class TunnelManager: ObservableObject {
     /// is live, further requests are no-ops so triggers can't stack.
     private func requestReconnect(reason: String) {
         guard lastRecord != nil, recoveryTask == nil else { return }
-        LogStore.shared.log(.connection, L10n.reconnecting_fmt.formatted(reason))
+        LogStore.shared.log(.connection, L10n.reconnecting_fmt.formatted(reason), code: .reconnecting)  // OLC-1013
         recoveryTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.recoveryTask = nil }
@@ -355,7 +443,7 @@ final class TunnelManager: ObservableObject {
                 if Task.isCancelled || ok { return }   // superseded, or connected → done
                 attempt += 1
                 if attempt >= Self.maxReconnectAttempts {
-                    LogStore.shared.log(.connection, L10n.reconnectGaveUp.localized())
+                    LogStore.shared.log(.connection, L10n.reconnectGaveUp.localized(), code: .reconnectFailed)  // OLC-1014
                     self.state = .failed(L10n.reconnectGaveUp.localized())
                     return
                 }
@@ -414,7 +502,7 @@ final class TunnelManager: ObservableObject {
             // Stop spending reconnect attempts with no route; cancel any live
             // recovery loop — a fresh one starts (below) when the path returns.
             recoveryTask?.cancel(); recoveryTask = nil
-            LogStore.shared.log(.connection, L10n.netPathLost.localized())
+            LogStore.shared.log(.connection, L10n.netPathLost.localized(), code: .waitingNetwork)  // OLC-1015
             activeEngine?.stop()
             state = .waitingForNetwork
         case .reconnect(let reason):
@@ -513,6 +601,27 @@ final class TunnelManager: ObservableObject {
     /// for the user, it does NOT enter the recovery loop, so a bad manual connect
     /// can't spin a backoff).
     private func start(record: ConnectionRecord) {
+        // #333: in the common case the configured port is free, so preflight runs
+        // synchronously here and flips to `.connecting` in the same turn (the
+        // responsive, test-observable fast path). Only when the port is busy on
+        // *our own* recent ghost do we detour through an async same-port wait,
+        // then preflight once it frees up.
+        if shouldWaitForOwnPortReleaseNow() {
+            state = .connecting   // optimistic: hold the toggle ON while we wait
+            Task { [weak self] in
+                guard let self else { return }
+                await self.waitForOwnPortRelease()
+                // The wait may have been superseded (user flipped off → .disconnected)
+                // — only proceed if we're still the pending attempt.
+                guard self.state == .connecting else { return }
+                guard let (engine, details, port, settings, epoch) = self.preflight(record, isReconnect: false) else { return }
+                Task.detached { [weak self] in
+                    await Self.runEngine(engine: engine, details: details,
+                                         port: port, settings: settings, epoch: epoch, manager: self)
+                }
+            }
+            return
+        }
         guard let (engine, details, port, settings, epoch) = preflight(record, isReconnect: false) else { return }
         Task.detached { [weak self] in
             await Self.runEngine(engine: engine, details: details,
@@ -525,11 +634,40 @@ final class TunnelManager: ObservableObject {
     /// verified, so the loop can stop (success) or back off (failure).
     @discardableResult
     private func connectAndAwait(_ record: ConnectionRecord) async -> Bool {
+        if shouldWaitForOwnPortReleaseNow() { await waitForOwnPortRelease() }   // #333
         guard let (engine, details, port, settings, epoch) = preflight(record, isReconnect: true) else { return false }
         return await Task.detached {
             await Self.runEngine(engine: engine, details: details,
                                  port: port, settings: settings, epoch: epoch, manager: self)
         }.value
+    }
+
+    /// #333: is the configured SOCKS port busy *because* we just tore down our own
+    /// listener (within `selfDisconnectGhostWindow`)? Reads live state on MainActor
+    /// and delegates the verdict to the pure `shouldWaitForOwnPortRelease`.
+    private func shouldWaitForOwnPortReleaseNow() -> Bool {
+        let port = UInt16(SettingsStore.shared.socksPort)
+        let ago = TunnelManager.lastSelfDisconnectDate.map { Date().timeIntervalSince($0) }
+        return Self.shouldWaitForOwnPortRelease(portFree: PortAvailability.isFree(port),
+                                                selfDisconnectedAgo: ago)
+    }
+
+    /// #333: poll the SAME configured port until it frees up — up to
+    /// `portReleaseMaxWait`, every `portReleasePollInterval` — before the
+    /// preflight's #308 check runs. Keeps the #308 contract: we never slide to
+    /// another port; on timeout the preflight surfaces the typed busy error as
+    /// usual. Only called when `shouldWaitForOwnPortReleaseNow()` is true, so a
+    /// foreign-held port is never waited on (it still fails fast).
+    private func waitForOwnPortRelease() async {
+        let port = UInt16(SettingsStore.shared.socksPort)
+        LogStore.shared.log(.connection, L10n.waitingForPortRelease.localized())
+        let deadline = Date().addingTimeInterval(Self.portReleaseMaxWait)
+        while Date() < deadline {
+            if PortAvailability.isFree(port) { return }
+            try? await Task.sleep(for: .seconds(Self.portReleasePollInterval))
+        }
+        // Fell through → still busy; preflight's isFree() check fails fast with the
+        // typed busy error (no special handling needed here).
     }
 
     /// Checks the configured SOCKS port is free and snapshots the `SettingsStore`
@@ -545,7 +683,7 @@ final class TunnelManager: ObservableObject {
         // #308 was: PortAvailability.nextFreePort auto-slide + portChangedAuto log.
         guard PortAvailability.isFree(configuredPort) else {
             let msg = L10n.errorPortBusy_fmt.formatted(Int(configuredPort))
-            LogStore.shared.log(.connection, "✗ \(msg)")  // OLC-1026 (docs/diagnostic-messages.md)
+            LogStore.shared.log(.connection, "✗ \(msg)", code: .portBusy)  // OLC-1026 (docs/diagnostic-messages.md)
             state = .failed(msg)
             return nil
         }
@@ -603,11 +741,11 @@ final class TunnelManager: ObservableObject {
                 return false
             }
             if tunnelOK {
-                LogStore.shared.log(.connection, L10n.tunnelOK.localized())
+                LogStore.shared.log(.connection, L10n.tunnelOK.localized(), code: .tunnelWorks)  // OLC-1007
                 manager?.state = .connected
                 return true
             } else {
-                LogStore.shared.log(.connection, L10n.tunnelFailed.localized())
+                LogStore.shared.log(.connection, L10n.tunnelFailed.localized(), code: .tunnelDown)  // OLC-1009
                 engine.stop()
                 manager?.state = .failed(L10n.serverNotResponding.localized())
                 return false
@@ -663,6 +801,11 @@ final class TunnelManager: ObservableObject {
 
     private static func verifyTunnel() async -> Bool {
         let session = SOCKSSession.make(mode: .tunnel, timeout: 20)
+        // #333 fold-in: tear the session down once we have a verdict so the losing /
+        // cancelled probe tasks don't linger in flight against the (about-to-close)
+        // SOCKS listener. `finishTasksAndInvalidate` lets the winner's transfer
+        // complete, then releases the session and any sockets it held.
+        defer { session.finishTasksAndInvalidate() }
         return await withTaskGroup(of: (String, Bool).self) { group in
             for urlString in AppConstants.tunnelVerifyURLs {
                 guard let url = URL(string: urlString) else { continue }
@@ -672,20 +815,23 @@ final class TunnelManager: ObservableObject {
                         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
                         if status == 200 {
                             await MainActor.run {
-                                LogStore.shared.log(.connection, "✓ tunnel verify via \(urlString)")
+                                LogStore.shared.log(.connection, "✓ tunnel verify via \(urlString)",
+                                                    code: .verifyOK)  // OLC-1005
                             }
                             return (urlString, true)
                         }
                         await MainActor.run {
                             LogStore.shared.log(.connection,
-                                "✗ tunnel verify via \(urlString): HTTP \(status)")
+                                "✗ tunnel verify via \(urlString): HTTP \(status)",
+                                code: .verifyFailed)  // OLC-1006
                         }
                         return (urlString, false)
                     } catch {
                         let reason = Self.verifyFailureReason(error)
                         await MainActor.run {
                             LogStore.shared.log(.connection,
-                                "✗ tunnel verify via \(urlString): \(reason)")
+                                "✗ tunnel verify via \(urlString): \(reason)",
+                                code: .verifyFailed)  // OLC-1006
                         }
                         return (urlString, false)
                     }
@@ -721,6 +867,76 @@ final class TunnelManager: ObservableObject {
         let engine = details.engine
         if let problem = engine.validate(details) { return .failure(problem) }
         return await engine.checkReady(details, settings: probeSettings())
+    }
+
+    // MARK: Batch ping a group (#364)
+    //
+    // Health-check every connection in a group at once. The single-node `ping`
+    // already runs an isolated, non-singleton client that leases an EPHEMERAL
+    // port per probe (OlcrtcEngine.ping → PortAvailability.freeEphemeralPort) — it
+    // never touches the configured SOCKS port (#308). The batch only adds
+    // orchestration: it runs the probes SEQUENTIALLY (one room at a time, no
+    // parallel native clients fighting over the gomobile primitives), gives each
+    // probe a UNIQUE clientID so two pings — or a ping racing the live tunnel — in
+    // the same room don't collide on identity, and SKIPS the node the live tunnel
+    // currently holds (pinging it would join its own room as a second client).
+
+    /// Per-probe clientID for a batch ping (#364): the record's own id keeps it
+    /// stable across re-runs while still being unique per node, so a probe never
+    /// rendezvouses under the same clientID as a live tunnel (which uses the
+    /// connection's configured clientID, e.g. "default"). Pure → tested.
+    nonisolated static func batchPingClientID(recordID: UUID) -> String {
+        "olc-ping-\(recordID.uuidString.prefix(8))"
+    }
+
+    /// Whether a batch ping should SKIP this record: true only when the live
+    /// tunnel is connected to *this same node*. Pinging it would join the node's
+    /// room a second time; the live RTT is already known. Other nodes (and the
+    /// disconnected case) are always probed. Pure → tested.
+    nonisolated static func shouldSkipBatchPing(record: ConnectionRecord,
+                                                connectedNode: ConnectionRecord?,
+                                                state: ConnectionState) -> Bool {
+        guard state.isConnected, let live = connectedNode else { return false }
+        return live.id == record.id
+    }
+
+    /// Rewrites a record's olcrtc clientID to `clientID` for an isolated probe,
+    /// leaving every other field untouched. Non-olcrtc records pass through.
+    nonisolated static func recordForBatchPing(_ record: ConnectionRecord,
+                                               clientID: String) -> ConnectionRecord {
+        guard case .olcrtc(var p) = record.details else { return record }
+        p.clientID = clientID
+        var r = record
+        r.details = .olcrtc(p)
+        return r
+    }
+
+    /// Sequentially pings every record in `group`, returning id → outcome. Skips
+    /// the node the live tunnel currently holds (#308: never a second client into
+    /// the live room; the engine already leases an ephemeral port per probe).
+    /// `onResult` fires on MainActor after each probe so the UI can badge rows as
+    /// they complete rather than waiting for the whole group.
+    @discardableResult
+    func pingGroup(_ group: [ConnectionRecord],
+                   connectedNode: ConnectionRecord?,
+                   // No `@escaping`: `onResult` is called inline (never stored), and
+                   // since `pingGroup` is `@MainActor`-isolated each callback already
+                   // runs on the main actor — the UI can mutate @State directly.
+                   onResult: (UUID, PingOutcome) -> Void) async -> [UUID: PingOutcome] {
+        var results: [UUID: PingOutcome] = [:]
+        let state = self.state
+        for record in group {
+            guard !Self.shouldSkipBatchPing(record: record,
+                                            connectedNode: connectedNode, state: state) else {
+                continue
+            }
+            let probeRecord = Self.recordForBatchPing(
+                record, clientID: Self.batchPingClientID(recordID: record.id))
+            let outcome = await ping(probeRecord.details)
+            results[record.id] = outcome
+            onResult(record.id, outcome)
+        }
+        return results
     }
 
     /// Snapshots the `SettingsStore` values the probes need, on MainActor.

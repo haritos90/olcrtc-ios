@@ -1,0 +1,6 @@
+/* #376: localized Info.plist strings. The OS reads the camera-permission prompt
+   from the bundle (shown by QRScannerView when it requests access), so the
+   runtime L10n enum cannot cover it — it needs this InfoPlist.strings mechanism.
+   The English value mirrors NSCameraUsageDescription in project.yml (the base
+   fallback). */
+"NSCameraUsageDescription" = "Used to scan QR codes for importing server connections.";

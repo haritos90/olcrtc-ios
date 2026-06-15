@@ -5,24 +5,26 @@ import UIKit  // #340: UIColor trait closures back the dynamic light/dark tokens
 // shape, and type. App/UI/DesignSystem.swift and (later) every screen read from
 // here instead of hardcoding `.controlSize(...)`, ad-hoc hex, or per-call tints.
 //
-// Values come from design_handoff_ui_redesign, "Refined" direction (the handoff
-// default: pure-black ground, soft borderless cards). Where the handoff's hex
-// matches an iOS system color we use the *semantic* color — noted per token — so
-// Dynamic Type, contrast, and the dark palette keep working.
+// Values come from design_handoff_ui_redesign (pure-black ground, soft
+// borderless cards). Where the handoff's hex matches an iOS system color we use
+// the *semantic* color — noted per token — so Dynamic Type, contrast, and the
+// dark palette keep working.
 // #340 was: "The app is dark-only; this palette is authored for the dark
 // appearance" — light values come from design_handoff_logs_theme §4; the
-// appearance now follows SettingsStore.appearanceMode (System/Light/Dark)
-// via preferredColorScheme in App.swift. Semantic system colors adapt for
-// free; the handful of hardcoded grounds are dynamic via UIColor traits.
-//
-// To switch to the "Console" direction later, change only the values marked
-// `Console:` below (cooler ground, hairline card border, tighter radii).
+// appearance now follows SettingsStore.appearanceMode via preferredColorScheme
+// in App.swift. Semantic system colors adapt for free; the handful of
+// hardcoded grounds are dynamic via UIColor traits.
+// #299 was: a runtime Refined/Console "design direction" (#267/#281) that only
+// changed radii/borders/fonts, never colours. Dropped in favour of a real
+// third *colour* scheme — Gray — alongside System/Light/Dark. The metric/type
+// tokens are now single (Refined) values; the grounds resolve to neutral
+// mid-gray when AppearanceMode is .gray.
 
 enum Theme {
 
-    // #267: runtime design direction (Refined default / Console). The few tokens
-    // that differ read the live setting, so the Settings picker reskins the app.
-    fileprivate static var console: Bool { SettingsStore.shared.designConsole }
+    /// #299: true when the user picked the Gray colour scheme. The hardcoded
+    /// grounds below read this so pure-black surfaces become neutral mid-gray.
+    fileprivate static var isGray: Bool { SettingsStore.shared.appearanceMode == .gray }
 
     /// #340: dark/light pair → one Color that resolves per the active trait.
     fileprivate static func dynamic(dark: UIColor, light: UIColor) -> Color {
@@ -31,26 +33,26 @@ enum Theme {
 
     // MARK: - Colors
     enum Palette {
-        // Grounds & surfaces (bg/card/segActive switch with the direction).
-        // #340: light values per the handoff §4 token table.
-        // #340 was: bg = console ? Color(hex: 0x0B0D10) : .black (dark-only)
+        // Grounds & surfaces. #340: light values per the handoff §4 token table.
+        // #299: Gray uses neutral mid-gray grounds (systemGray6/5) instead of
+        // pure black so the whole app reads as a soft dark-gray, not OLED black.
+        // #340 was: bg = .black (dark-only)
         static var bg        : Color {
-            Theme.console
-                ? Theme.dynamic(dark: UIColor(hex: 0x0B0D10), light: UIColor(hex: 0xEDEFF2))
+            Theme.isGray
+                ? Theme.dynamic(dark: UIColor(hex: 0x1C1C1E), light: UIColor(hex: 0x1C1C1E))   // #299: systemGray6
                 : Theme.dynamic(dark: .black, light: .systemGroupedBackground)   // light = #F2F2F7
         }
-        // #340 was: card = console ? Color(hex: 0x15181D) : …(already adaptive)
         static var card      : Color {
-            Theme.console
-                ? Theme.dynamic(dark: UIColor(hex: 0x15181D), light: .white)
+            Theme.isGray
+                ? Theme.dynamic(dark: UIColor(hex: 0x2C2C2E), light: UIColor(hex: 0x2C2C2E))   // #299: systemGray5
                 : Color(.secondarySystemGroupedBackground)
         }
         static let fill      = Color(.tertiarySystemFill)                // rgba(118,118,128,0.22) — secondary-button / chip fill
-        // #340 was: segActive = console ? 0x2A2F37 : 0x48484A (dark-only);
-        // light = white in both directions (+ OlcSegmented's existing soft shadow)
+        // #340 was: segActive = 0x48484A (dark-only); light = white (+ OlcSegmented's soft shadow)
+        // #299: Gray reuses the dark segmented fill on its mid-gray ground.
         static var segActive : Color {
-            Theme.console
-                ? Theme.dynamic(dark: UIColor(hex: 0x2A2F37), light: .white)
+            Theme.isGray
+                ? Theme.dynamic(dark: UIColor(hex: 0x48484A), light: UIColor(hex: 0x48484A))
                 : Theme.dynamic(dark: UIColor(hex: 0x48484A), light: .white)
         }
         /// #340: Console card hairline — was hardcoded `Color.white.opacity(0.16)`
@@ -71,30 +73,33 @@ enum Theme {
         // ok = green, warn = orange, error = red), used identically everywhere.
         static let accent = Color.accentColor   // #0A84FF — existing AccentColor asset
         static let green  = Color.green          // #30D158
-        static let amber  = Color.yellow         // #FFD60A
+        // #350 (audit U4) was: amber = Color.yellow (#FFD60A) — ~1.3:1 on light/gray
+        // grounds, so the .progress dot and OlcProgressBar fill were near-invisible
+        // in Light. Now dynamic: bright yellow on dark, a darker amber on light.
+        static let amber  = Theme.dynamic(dark: UIColor(hex: 0xFFD60A), light: UIColor(hex: 0xB8860B))
         static let orange = Color.orange         // #FF9F0A
         static let red    = Color.red            // #FF453A
 
         // Tinted (weak) fills
         static let redWeak  = Color.red.opacity(0.16)      // danger-button background
-        static let star     = Color.yellow                 // #FFD60A — primary marker
+        // #350 (audit U4) was: star = Color.yellow (#FFD60A) — same low-contrast
+        // problem on the "Main" badge in Light. Dynamic, matching `amber`.
+        static let star     = Theme.dynamic(dark: UIColor(hex: 0xFFD60A), light: UIColor(hex: 0xB8860B))
         static let starWeak = Color.yellow.opacity(0.16)
     }
 
     // MARK: - Metrics (spacing / shape)
+    // #299 was: a few tokens branched on the Refined/Console "design direction"
+    // (#267/#281). The direction is gone — these are the single Refined values.
     enum Metrics {
         static let controlHeight:   CGFloat = 44   // every button, always
-        // #281: Console is the sharp, dense, terminal direction — tight radii,
-        // a visible hairline card border, and denser spacing — so it reads
-        // clearly different from Refined (soft, borderless, roomy). Previously
-        // the two differed by only 2pt/0.5pt and looked identical.
-        static var controlRadius:   CGFloat { Theme.console ? 5  : 13 }
-        static var cardRadius:      CGFloat { Theme.console ? 7  : 20 }
-        static var cardPadding:     CGFloat { Theme.console ? 12 : 16 }
-        static var cardBorderWidth: CGFloat { Theme.console ? 1  : 0 }
-        static var rowMinHeight:    CGFloat { Theme.console ? 44 : 52 }
-        static var sectionGap:      CGFloat { Theme.console ? 14 : 22 }
-        static var segmentedRadius: CGFloat { Theme.console ? 5  : 10 }
+        static let controlRadius:   CGFloat = 13
+        static let cardRadius:      CGFloat = 20
+        static let cardPadding:     CGFloat = 16
+        static let cardBorderWidth: CGFloat = 0
+        static let rowMinHeight:    CGFloat = 52
+        static let sectionGap:      CGFloat = 22
+        static let segmentedRadius: CGFloat = 10
         static let chipHeight:      CGFloat = 34   // handoff range 32–38
     }
 
@@ -102,14 +107,14 @@ enum Theme {
     // Mapped to Dynamic Type text styles (not fixed points) so the app's existing
     // font-size slider — `.dynamicTypeSize(...)` in App.swift — keeps scaling
     // these. Approx. handoff sizes noted in comments.
+    // #299 was: statusSubtitle/sectionHeader branched on the Console direction
+    // (monospaced) — the direction is gone, so these are the proportional values.
     enum Typography {
         static let largeTitle     = Font.largeTitle.bold()                                    // 32 / 800
         static let button         = Font.callout.weight(.semibold)                            // ~16 / 600
         static let statusTitle    = Font.subheadline.weight(.semibold)                        // ~15 / 600
-        // #281: Console reskins the caption-level labels to monospaced for its
-        // terminal feel; Refined keeps the proportional system font.
-        static var statusSubtitle: Font { Theme.console ? Font.system(.caption, design: .monospaced) : Font.caption }
-        static var sectionHeader:  Font { Theme.console ? Font.system(.caption, design: .monospaced).weight(.semibold) : Font.caption.weight(.semibold) }
+        static let statusSubtitle = Font.caption
+        static let sectionHeader  = Font.caption.weight(.semibold)
         static let chip           = Font.subheadline.weight(.semibold)                        // ~14 / 600
         static let segment        = Font.subheadline.weight(.semibold)                        // ~14 / 600
         static let metricLabel    = Font.caption2.weight(.semibold)                           // ~11 / 600 (tracked + uppercased)

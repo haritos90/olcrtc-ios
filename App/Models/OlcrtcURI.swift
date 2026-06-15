@@ -31,6 +31,14 @@ struct OlcrtcURI {
         var mimo        : String   // server-side: "sub_configname" / OLCRTC_CONFIG_NAME (scripts/srv.sh)
         var vp8FPS      : Int?
         var vp8BatchSize: Int?
+        // #355: seichannel payload params (sei.* in docs/uri.md). nil = not in
+        // the URI → the import falls back to OlcrtcConnection's defaults. These
+        // were previously discarded, and a sei URI's fps/batch wrongly landed in
+        // the vp8 fields; now the payload is routed by transport.
+        var seiFPS      : Int?
+        var seiBatch    : Int?
+        var seiFrag     : Int?
+        var seiACK      : Int?
     }
 
     enum ParseError: LocalizedError {
@@ -42,7 +50,9 @@ struct OlcrtcURI {
             switch self {
             case .invalidScheme:       return L10n.uriErrorInvalidScheme.localized()
             case .missingField(let f): return L10n.uriErrorMissingField_fmt.formatted(f)
-            case .mixedBrackets:       return "URI payload brackets are mismatched (expected [...] or <...>)"
+            // #355 (audit S1): was a hardcoded English literal while its siblings
+            // use L10n; route it through the table too.
+            case .mixedBrackets:       return L10n.uriErrorMixedBrackets.localized()
             }
         }
     }
@@ -56,6 +66,12 @@ struct OlcrtcURI {
             let fps   = p.vp8FPS       ?? SettingsStore.shared.vp8FPS
             let batch = p.vp8BatchSize ?? SettingsStore.shared.vp8BatchSize
             transportStr += "[vp8-fps=\(fps),vp8-batch=\(batch)]"
+        } else if p.transport == "seichannel" {
+            // #355: emit the sei payload (sei.* keys from docs/uri.md, client
+            // [k=v,…] form). seiFPS/seiBatch/seiFrag/seiACK are non-optional on
+            // OlcrtcConnection (defaults 30/10/1200/1), so they round-trip back
+            // into the sei fields on parse instead of being dropped.
+            transportStr += "[fps=\(p.seiFPS),batch=\(p.seiBatch),frag=\(p.seiFrag),ack-ms=\(p.seiACK)]"
         }
         let clientPart = p.clientID == "default" ? "" : "%\(p.clientID)"
         let mimoPart   = mimo.isEmpty ? "" : "$\(mimo)"
@@ -70,7 +86,9 @@ struct OlcrtcURI {
         guard s.hasPrefix("olcrtc://") else { throw ParseError.invalidScheme }
 
         let (carrier,  r1) = try extractCarrier(from:   String(s.dropFirst("olcrtc://".count)))
-        let (transport, fps, batch, r2) = try extractTransport(from: r1)
+        // #355: keep the raw payload; route its keys by transport below (vp8
+        // params for vp8channel, sei params for seichannel).
+        let (transport, payload, r2) = try extractTransport(from: r1)
         let (roomID,   r3) = try extractRoomID(from:   r2)
         let (key, clientID, mimo)       = extractTail(from: r3)
 
@@ -79,10 +97,13 @@ struct OlcrtcURI {
         guard !roomID.isEmpty    else { throw ParseError.missingField("roomID") }
         guard !key.isEmpty       else { throw ParseError.missingField("key") }
 
+        let p = parsePayload(payload, transport: transport)   // #355: transport-routed
         return Parsed(carrier: carrier, transport: transport,
                       roomID: roomID, key: key,
                       clientID: clientID, mimo: mimo,
-                      vp8FPS: fps, vp8BatchSize: batch)
+                      vp8FPS: p.vp8FPS, vp8BatchSize: p.vp8Batch,
+                      seiFPS: p.seiFPS, seiBatch: p.seiBatch,
+                      seiFrag: p.seiFrag, seiACK: p.seiACK)
     }
 
     // MARK: Parse helpers
@@ -102,10 +123,12 @@ struct OlcrtcURI {
     ///   • `[...]`  — client format (comma-separated key=value pairs)
     ///   • `<...>`  — server-script format (ampersand-separated)
     ///
-    /// Returns (transport, vp8FPS, vp8Batch, rest-after-@). Throws if `@` is absent.
+    /// Returns (transport, raw-payload, rest-after-@). The payload is left
+    /// unparsed here so the caller can route its keys by transport (#355).
+    /// Throws if `@` is absent.
     private static func extractTransport(
         from s: String
-    ) throws -> (transport: String, fps: Int?, batch: Int?, rest: String) {
+    ) throws -> (transport: String, payload: String, rest: String) {
 
         // Client format: transport[vp8-fps=60,vp8-batch=8]@roomID
         if let openIdx  = s.firstIndex(of: "["),
@@ -119,8 +142,7 @@ struct OlcrtcURI {
             }
             let transport = String(s[s.startIndex..<openIdx])
             let payload   = String(s[s.index(after: openIdx)..<closeIdx])
-            let (fps, batch) = parsePayload(payload)
-            return (transport, fps, batch, String(s[s.index(after: atIdx)...]))
+            return (transport, payload, String(s[s.index(after: atIdx)...]))
         }
 
         // Server-script format: transport<vp8-fps=60&vp8-batch=8>@roomID
@@ -135,15 +157,14 @@ struct OlcrtcURI {
             }
             let transport = String(s[s.startIndex..<openIdx])
             let payload   = String(s[s.index(after: openIdx)..<closeIdx])
-            let (fps, batch) = parsePayload(payload)
-            return (transport, fps, batch, String(s[s.index(after: atIdx)...]))
+            return (transport, payload, String(s[s.index(after: atIdx)...]))
         }
 
         // No payload block — plain transport@roomID
         guard let atIdx = s.firstIndex(of: "@") else {
             throw ParseError.missingField("roomID (@)")
         }
-        return (String(s[s.startIndex..<atIdx]), nil, nil,
+        return (String(s[s.startIndex..<atIdx]), "",
                 String(s[s.index(after: atIdx)...]))
     }
 
@@ -179,38 +200,51 @@ struct OlcrtcURI {
 
     // MARK: Payload key=value parser
 
-    /// Parses `key=value` pairs separated by `,` or `&`.
+    /// Parsed payload params, routed by transport. All optional: nil = the key
+    /// was absent, so the import keeps the app/connection default.
+    private struct Payload {
+        var vp8FPS  : Int?
+        var vp8Batch: Int?
+        var seiFPS  : Int?
+        var seiBatch: Int?
+        var seiFrag : Int?
+        var seiACK  : Int?
+    }
+
+    /// Parses `key=value` pairs separated by `,` or `&`, routing keys by
+    /// transport (#355): `vp8-fps`/`vp8-batch` belong to vp8channel; sei's
+    /// `fps`/`batch`/`frag`/`ack-ms` belong to seichannel (docs/uri.md). Bare
+    /// `fps`/`batch` are accepted as vp8 aliases for the non-sei transports so
+    /// older vp8 URIs that omitted the `vp8-` prefix still parse.
     /// Unknown keys are silently ignored for forward compatibility.
-    private static func parsePayload(_ payload: String) -> (fps: Int?, batch: Int?) {
-        var fps: Int?
-        var batch: Int?
+    private static func parsePayload(_ payload: String, transport: String) -> Payload {
+        var p = Payload()
+        let isSEI = transport == "seichannel"   // #355
         for pair in payload.split(whereSeparator: { $0 == "," || $0 == "&" }) {
             let kv = pair.split(separator: "=", maxSplits: 1)
             guard kv.count == 2 else { continue }
             let k = kv[0].trimmingCharacters(in: .whitespaces)
             let v = kv[1].trimmingCharacters(in: .whitespaces)
-            switch k {
-            case "vp8-fps", "fps":
-                if let n = Int(v) {
-                    fps = n
-                } else {
-                    Task { @MainActor in
-                        LogStore.shared.log(.connection,
-                            "⚠ OlcrtcURI: skipping unparseable '\(k)=\(v)' in payload")
-                    }
-                }
-            case "vp8-batch", "batch":
-                if let n = Int(v) {
-                    batch = n
-                } else {
-                    Task { @MainActor in
-                        LogStore.shared.log(.connection,
-                            "⚠ OlcrtcURI: skipping unparseable '\(k)=\(v)' in payload")
-                    }
-                }
+            switch (isSEI, k) {
+            case (false, "vp8-fps"), (false, "fps"):     p.vp8FPS   = intOrLog(k, v)
+            case (false, "vp8-batch"), (false, "batch"): p.vp8Batch = intOrLog(k, v)
+            case (true,  "fps"):                         p.seiFPS   = intOrLog(k, v)
+            case (true,  "batch"):                       p.seiBatch = intOrLog(k, v)
+            case (true,  "frag"):                        p.seiFrag  = intOrLog(k, v)
+            case (true,  "ack-ms"):                      p.seiACK   = intOrLog(k, v)
             default: break
             }
         }
-        return (fps, batch)
+        return p
+    }
+
+    /// Parses an Int payload value, logging (not failing) an unparseable one.
+    private static func intOrLog(_ k: String, _ v: String) -> Int? {
+        if let n = Int(v) { return n }
+        Task { @MainActor in
+            LogStore.shared.log(.connection,
+                "⚠ OlcrtcURI: skipping unparseable '\(k)=\(v)' in payload")
+        }
+        return nil
     }
 }

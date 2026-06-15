@@ -270,6 +270,11 @@ struct SettingsView: View {
                                    Preset(value: 60, label: "60")],
                          unit: "s")
             Toggle(L10n.backgroundAudioLabel.localized(), isOn: $settings.backgroundAudio)
+            // #360: opt-out of the daily, anonymous GitHub-Releases update
+            // check. Self-explanatory label keeps the §7 one-footer rule (the
+            // keep-alive footer survives); the full privacy note lives in the
+            // L10n table (updateCheckFooter) for any future detail screen.
+            Toggle(L10n.updateCheckLabel.localized(), isOn: $settings.updateCheckEnabled)
             Picker(L10n.logLevelLabel.localized(), selection: $settings.logLevel) {
                 ForEach(LogLevel.allCases, id: \.self) { level in
                     Text(level.label).tag(level)
@@ -324,19 +329,13 @@ struct SettingsView: View {
 
             // #340: appearance scheme — System / Light / Dark (applied via
             // preferredColorScheme in App.swift). #343: relabeled "Theme" —
-            // the section header carries "Appearance" now.
+            // the section header carries "Appearance" now. #299: + Gray, a real
+            // fourth colour scheme (the picker iterates allCases, so it appears
+            // automatically); the Refined/Console "Direction" picker was removed.
             Picker(L10n.themeLabel.localized(), selection: $settings.appearanceMode) {
                 ForEach(AppearanceMode.allCases) { mode in
                     Text(mode.title).tag(mode)
                 }
-            }
-
-            // #267: design-direction picker (Refined / Console).
-            // #343 was: labeled "Theme" — that name now belongs to the
-            // System/Light/Dark scheme picker above; this one is "Direction".
-            Picker(L10n.directionLabel.localized(), selection: $settings.designConsole) {
-                Text(L10n.themeRefined.localized()).tag(false)
-                Text(L10n.themeConsole.localized()).tag(true)
             }
 
             HStack {
@@ -405,6 +404,12 @@ struct SettingsView: View {
                     Text(p.label).tag(p.id)
                 }
             }
+            // #337: screenshot-safe mode — masks IPs in the Diagnostics rows
+            // and on VPS cards (display-only; copy + Logs stay real). The label
+            // is self-explanatory, so the section footer keeps the less obvious
+            // speed-provider note (§7 one-footer rule); the full mask
+            // explanation lives in the L10n table for any future detail screen.
+            Toggle(L10n.maskIPsLabel.localized(), isOn: $settings.maskIPs)
         } header: {
             Text(L10n.diagnosticsTitle.localized())
         } footer: {

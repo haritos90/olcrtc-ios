@@ -417,6 +417,12 @@ requirement and the `gomobile … requires Xcode` fix.
 
 The app retries the connection twice (2 × 30 s) before surfacing the error. If it fails consistently, reproduce manually with `ssh user@host` to isolate whether the issue is network-side or credential-side.
 
+---
+
+### Diagnostic codes in the Logs tab
+
+Client log lines carry a stable code such as `[OLC-1026]`. Open the **Logs** tab, search for the code (e.g. `OLC-1026`), and look it up in the [diagnostic message catalog](docs/diagnostic-messages.md) to see what it means and how to act. Client codes are `OLC-1xxx`; server/core codes (`OLC-2xxx`) come from `podman logs` and are matched by their message text rather than a prefix.
+
 </details>
 
 ---

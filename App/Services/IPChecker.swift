@@ -47,6 +47,11 @@ final class IPChecker: ObservableObject {
         defer { isChecking = false }
 
         let chosen = sources
+        // #324: open the diagnostics session/writer before the first line, the
+        // same way SpeedTest does — otherwise IP-check lines never reach
+        // diagnostics.log until a speed test happens to create the writer first,
+        // yet the Logs tab header already advertises that file.
+        LogStore.shared.startSession(.diagnostics)
         LogStore.shared.log(.diagnostics, "---")
         // #286: header records the connection type (direct/tunnel) + how many
         // sources are queried (the user can trim the list in Settings).

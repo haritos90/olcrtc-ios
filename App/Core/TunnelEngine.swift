@@ -165,7 +165,8 @@ final class OlcrtcEngine: TunnelEngine, @unchecked Sendable {
         }
         await MainActor.run {
             LogStore.shared.log(.connection,
-                L10n.connectingOlcrtc_fmt.formatted(params.carrier, params.transport, params.clientID))
+                L10n.connectingOlcrtc_fmt.formatted(params.carrier, params.transport, params.clientID),
+                code: .connecting)  // OLC-1002
         }
 
         // MobileSet* thread-safety:
@@ -226,7 +227,7 @@ final class OlcrtcEngine: TunnelEngine, @unchecked Sendable {
             await MainActor.run { LogStore.shared.log(.connection, L10n.mobileStartFailed_fmt.formatted(raw)) }
             throw TunnelEngineError(msg)
         }
-        await MainActor.run { LogStore.shared.log(.connection, L10n.mobileStartOK.localized()) }
+        await MainActor.run { LogStore.shared.log(.connection, L10n.mobileStartOK.localized(), code: .nativeStartOK) }  // OLC-1003
 
         var waitErr: NSError?
         let ready = MobileWaitReady(s.timeoutMs, &waitErr)
@@ -248,7 +249,7 @@ final class OlcrtcEngine: TunnelEngine, @unchecked Sendable {
         }
         await MainActor.run {
             LogStore.shared.log(.connection, L10n.waitReadyOK.localized())
-            LogStore.shared.log(.connection, "✓ SOCKS5 proxy ready on port \(port)")
+            LogStore.shared.log(.connection, "✓ SOCKS5 proxy ready on port \(port)", code: .socksReady)  // OLC-1004
         }
     }
 
