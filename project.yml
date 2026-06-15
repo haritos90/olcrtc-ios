@@ -36,6 +36,9 @@ targets:
       properties:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
+        # #376: this is the base/en fallback; localized variants live in
+        # App/<lang>.lproj/InfoPlist.strings (the OS reads the prompt from the
+        # bundle, so it can't go through the runtime L10n enum).
         NSCameraUsageDescription: "Used to scan QR codes for importing server connections."
         UIBackgroundModes:
           - audio
@@ -48,7 +51,7 @@ targets:
         # bundle id, container, OLCRTC_* env) stay lowercase olcrtc.
         CFBundleDisplayName: OlcRTC
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "250"
+        CFBundleVersion: "253"
         CFBundleURLTypes:
           - CFBundleURLName: olcrtc
             CFBundleURLSchemes:
@@ -62,7 +65,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.alexk.olcrtc-ios
         INFOPLIST_FILE: App/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "1.2"
+        MARKETING_VERSION: "1.3"
         CODE_SIGN_ENTITLEMENTS: App/Entitlements.plist
     preBuildScripts:
       - name: "Parity: Provisioning.swift vs olcrtc-upstream/script/srv.sh (server-side only)"

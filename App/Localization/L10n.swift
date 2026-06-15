@@ -66,6 +66,18 @@ enum L10n: String, CaseIterable {
     case shareConnectionTitle, shareConnectionExplanation, shareConnectionURIHeader
     case primaryRoleMain                    // "primary"
     case copiedURI_fmt                      // "📋 URI copied: %@"
+    // #135: full-access (co-admin) share — carries SSH creds; destructive.
+    case shareFullAccessTitle               // "Share full access (SSH)"
+    case shareFullAccessHeader              // "Full access (SSH)"
+    case shareFullAccessWarning             // destructive warning
+    case shareFullAccessReveal              // "Reveal full-access link"
+    case shareFullAccessCopy                // "Copy full-access link"
+    case shareFullAccessCopied_fmt          // "🔑 Full-access link copied: %@"
+    // #366: receiving a full-access (olcrtc://host/v1/…) link — confirm import.
+    case fullAccessImportTitle              // "Import full access?"
+    case fullAccessImportBody_fmt           // warning + "saves SSH creds for %@"
+    case fullAccessImportAddAction          // "Add full access"
+    case fullAccessImportInvalid            // "This full-access link is invalid."
 
     // MARK: AddConnectionView
     case newConnectionTitle, editConnectionTitle
@@ -85,6 +97,13 @@ enum L10n: String, CaseIterable {
     case vp8FpsLabel, vp8BatchLabel
     case globalDefault_fmt                  // "global (%d)"
     case overrideHint
+    // #365: per-connection seichannel params (shown only for transport == seichannel)
+    case seiParamsHeader                    // "SEI parameters"
+    case seiFpsLabel                        // "FPS"
+    case seiBatchLabel                      // "Batch size"
+    case seiFragLabel                       // "Fragment size"
+    case seiAckLabel                        // "ACK timeout (ms)"
+    case seiParamsHint                      // explanation: only sent for seichannel transport
 
     // MARK: ServersView
     case serversTitle                       // "VPS list"
@@ -193,6 +212,7 @@ enum L10n: String, CaseIterable {
     case logsSegVPS                         // "VPS"
     case logsSegContainer                   // "Container"
     case logsLineCount_fmt                  // "%d lines" — file-header row, right-aligned
+    case logsPeerCount_fmt                  // #367: "👥 %d peers" — live server peer count
 
     // MARK: #338 — inline container fetch with progress
     case logsFetchAction                    // "Fetch" — source-card button
@@ -251,13 +271,15 @@ enum L10n: String, CaseIterable {
     case fontSizeLabel, fontPreviewText
     case fontFooter
     case languageLabel
-    case themeLabel, themeRefined, themeConsole   // #267 design-direction picker
-    case directionLabel                     // #343: "Direction" — Refined/Console picker (themeLabel moved to the scheme picker)
-    // #340 — appearance scheme picker (System / Light / Dark)
+    // #299 was: themeRefined/themeConsole/directionLabel — the Refined/Console
+    // "design direction" picker was removed when Theme became real colour schemes.
+    case themeLabel                         // "Theme" — the appearance-scheme picker label
+    // #340 — appearance scheme picker (System / Light / Dark / Gray)
     case appearanceLabel                    // "Appearance"
     case appearanceSystem                   // "System"
     case appearanceLight                    // "Light"
     case appearanceDark                     // "Dark"
+    case appearanceGray                     // "Gray" (#299)
     // #342 — fixed-footprint hero footer
     case heroDisconnectedHint_fmt           // "Flip the switch to connect via %@."
 
@@ -300,6 +322,7 @@ enum L10n: String, CaseIterable {
     case serverNotResponding                // "Server not responding"
     case disconnectingArrow                 // "→ Disconnecting"
     case netPathLost                        // "⚠ Network lost — waiting for connectivity" (#269)
+    case waitingForPortRelease              // "⏳ Waiting for port release…" (#333: own-ghost same-port wait)
     case netPathRestored                    // "network restored" (#269 reconnect reason)
     case netPathChanged                     // "network path changed" (#269 reconnect reason)
     case reconnecting_fmt                   // "↻ Reconnecting (%@)" (#269/#270 sink entry)
@@ -319,10 +342,15 @@ enum L10n: String, CaseIterable {
     // #308 was: errorAllPortsBusy_fmt (port-range "all busy") — replaced by the
     // single-port errorPortBusy_fmt now that the port no longer slides.
     case errorPortBusy_fmt                  // "Port %d is busy — free it or change the port in Settings" (OLC-1026)
+    // #375: the encryption key couldn't be read from Keychain because the device
+    // was still locked at launch (kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly).
+    // Shown instead of the misleading "Key must be 64 hex characters (got: 0)".
+    case errorSecretsLocked                 // "Unlock the device and reopen the app to load your saved key."
 
     // MARK: OlcrtcURI errors
     case uriErrorInvalidScheme
     case uriErrorMissingField_fmt
+    case uriErrorMixedBrackets               // #355 (audit S1): payload [...]/<...> brackets mismatched
 
     // MARK: Provisioning
     case provisioningSSHConnecting          // "Connecting via SSH…"
@@ -432,6 +460,54 @@ enum L10n: String, CaseIterable {
     case subImportAddAction                 // "Add"
     case subInvalidLink                     // bad olcrtc-sub:// link
     case subEmptyList                       // fetched, but no valid olcrtc:// lines
+    case subImportPastedSource              // #361: source label for a pasted raw sub.md body
+
+    // MARK: #363 — surfaced subscription metadata (group detail + per-node)
+    case subMetaSource                      // "Source"
+    case subMetaServers                     // "Servers"
+    case subMetaRefresh                     // "Refresh"
+    case subMetaRefreshNever                // "Never"
+    case subMetaRefreshInterval_fmt         // "every %@"
+    case subMetaUsed                        // "Used"
+    case subMetaAvailable                   // "Available"
+
+    // MARK: #364 — batch "ping group"
+    case pingGroupAction                    // "Ping all"
+    case pingGroupResult_fmt                // "📡 Pinged %@: %d ok, %d failed"
+
+    // MARK: #346 — VPS-card mini-stat labels (abbreviations; ru = en per operator)
+    case vpsStatPing, vpsStatDisk, vpsStatRAM, vpsStatUp
+    case scanRestored_fmt                   // "Restored: %@" — #303 restore alert (real ru)
+
+    // MARK: #337 — screenshot-safe IP masking
+    case maskIPsLabel                       // "Hide IP addresses" — Settings toggle
+    case maskIPsFooter                      // explanation: display-only, copy stays real, logs unmasked
+
+    // MARK: #328 — active-carrier endpoints with one-tap copy (proxy-loop exclusions)
+    case carrierEndpointsTitle              // "Carrier endpoints"
+    case carrierEndpointsHint               // "Add these as DIRECT rules in your proxy app so its own traffic doesn't loop through olcrtc."
+    case carrierEndpointHost                // "Host"
+    case carrierEndpointResolvedIPs         // "Resolved IPs"
+    case carrierEndpointResolving           // "Resolving…"
+    case carrierEndpointUnresolved          // "Could not resolve"
+    case carrierEndpointNoHost              // "This carrier's room ID isn't a host — nothing to exclude."
+    case carrierEndpointCopied_fmt          // "📋 Copied: %@"
+    case carrierEndpointRefresh             // "Re-resolve" — IPs rotate
+
+    // MARK: #359 — accessibility for the hero connect toggle + icon toolbar buttons
+    case a11yConnectToggle                  // "Connect"
+    case a11yConnectHintSelectFirst         // "Select a connection first"
+    case a11yStateConnected, a11yStateConnecting, a11yStateDisconnected  // toggle a11y value
+
+    // MARK: #360 — in-app update checker (GitHub Releases)
+    case updateCheckLabel                   // "Check for updates" — Settings toggle
+    case updateCheckFooter                  // explanation: anonymous, opt-out, links only
+    case updateAvailableTitle_fmt           // "Update available — %@"
+    case updateAvailableBody                // explanation: a newer build is on GitHub; sideload it
+    case updateOpenReleasePage              // "Open release page"
+    case updateInstallSideStore             // "Install with SideStore"
+    case updateInstallLiveContainer         // "Install with LiveContainer"
+    case updateLater                        // "Later"
 }
 
 extension L10n {

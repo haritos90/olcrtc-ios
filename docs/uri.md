@@ -14,7 +14,7 @@ olcrtc://<carrier>?<transport>[<params>]@<roomID>#<key>[%<clientID>][$<mimo>]
 |---|---|---|
 | `<carrier>` | yes | Conferencing platform used as the transport — e.g. `telemost`, `wbstream`, `jitsi`. |
 | `<transport>` | yes | Channel type: `datachannel`, `vp8channel`, `seichannel`, or `videochannel`. |
-| `[<params>]` | no | Inline tuning in `[k=v,k=v]` form, e.g. `[vp8-fps=15,vp8-batch=8]`. Overrides the app's global defaults for this connection only. |
+| `[<params>]` | no | Inline tuning in `[k=v,k=v]` form. For `vp8channel`: `[vp8-fps=15,vp8-batch=8]`. For `seichannel`: `[fps=60,batch=64,frag=900,ack-ms=2000]` (sei.* keys from `olcrtc-upstream/docs/uri.md`). Overrides the app's defaults for this connection only. The parser routes these keys by transport (#355). |
 | `<roomID>` | yes | Room identifier. For `jitsi` this may be a full room URL. |
 | `<key>` | yes | 64-character hex encryption key (the shared secret). |
 | `%<clientID>` | no | Legacy client identifier. Defaults to `default`; the server no longer filters on it, so new URIs omit it. |
@@ -57,5 +57,16 @@ confirmation. The list's `#name` becomes the group of the imported records;
 each record is named after its `##name` (falling back to the URI's `$<mimo>`
 comment, then `carrier · transport`). Unknown fields are ignored; HTTP
 sources are not supported (the URIs carry encryption keys). Parser:
-`App/Models/OlcrtcSubscription.swift`, fetcher (with DoH fallback):
+`App/Models/OlcrtcSubscription.swift`, fetcher (with DoH fallback, A + AAAA):
 `App/Services/SubscriptionFetcher.swift`.
+
+Re-opening the **same** `olcrtc-sub://` link diffs against the records it
+imported before — new nodes are added, changed nodes updated in place (keeping
+their key and primary selection), nodes the list dropped are removed — instead
+of appending duplicates (#356). Nodes are keyed by their connection-defining
+fields (carrier · transport · room · key · client id). The list's `#refresh`
+interval (`5s`/`10m`/`6h`/`1d`) is stored so a manual/launch check can tell when
+a subscription is due for a refresh.
+
+A bare `olcrtc://` link (not `olcrtc-sub://`) opens the same confirm sheet for
+the single connection it encodes and adds it on confirmation (#354).

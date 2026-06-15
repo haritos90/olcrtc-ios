@@ -3,7 +3,10 @@
 parity_check.py
 
 Verifies that scripts/srv.sh (our patched copy) stays aligned with
-olcrtc-upstream/script/srv.sh (upstream) — in BOTH directions (#325).
+olcrtc-upstream/script/srv.sh (upstream) — in BOTH directions (#325), and
+LINE-BY-LINE IN ORDER for the lines we actually run, not by set membership
+(a set lookup calls a moved / duplicated / out-of-context line "present" and
+passes a drift it shouldn't).
 
 How it works
 ------------
@@ -22,31 +25,65 @@ marked using two kinds of pair comments:
 A rejected block (#325) carries upstream lines we consciously decided not to
 adopt — commented out so they never execute, verbatim so the checker can match
 them against upstream. The reason lives on the `boc` line itself; every other
-line inside the block MUST be `# ` + the exact upstream line (no free-form
-comments inside — they would be read as payload).
+line inside the block MUST be `# ` + the exact upstream line.
 
-Every line of ours is therefore one of: same-as-upstream (base), ours
-(inside boc/eoc), or rejected (commented copy inside a rejected block).
-Every executable upstream line is one of: adopted (in our base, or carried
-verbatim inside a boc patch), rejected, or unaccounted.
+Every executable line of ours is one of: same-as-upstream (base), ours (our
+replacement inside boc/eoc), or rejected (commented verbatim copy inside a
+rejected block).
+
+Two kinds of lines, two kinds of check
+--------------------------------------
+- BASE lines are the lines we actually RUN, and they sit in upstream's order
+  (srv.sh is a copy; we don't reorder executable code). They are checked
+  POSITIONALLY — line by line, in order, against upstream — so a base line is
+  only accepted when it appears at the right place in the upstream sequence.
+  This is the part the operator asked to harden: a forward two-pointer walk
+  (with an inner forward scan per line — the "double loop"; the script is small
+  so the O(n·m) cost is negligible) instead of `text in upstream_set`.
+- REJECTED lines are commented-out and deliberately GROUPED by theme (#325
+  consolidated all skipped upstream lines into a few rejected blocks), so their
+  position in our file is NOT meaningful — they don't reconstruct upstream's
+  order. The only thing that matters for a rejected line is whether the
+  rejection is still valid, i.e. whether upstream STILL HAS that line. So
+  rejected lines get an existence check (is this rejection stale?), not a
+  positional one. (They are never executed, so position carries no risk.)
+
+Algorithm
+---------
+Walk our srv.sh into an ordered stream: each base line is a "base" token; each
+`# boc olcrtc-ios` patch start emits a "patch" marker; rejected lines are
+collected aside (text set + line list). Then walk the base/patch stream against
+the ordered upstream executable lines with one forward cursor `ui`:
+
+  - base token → forward-scan upstream from `ui` for an exact match.
+      * found at j → consume it (ui = j + 1). Upstream lines skipped to reach it
+        (ui..j-1) form a GAP: each gap line must be accounted — licensed by an
+        `# boc` patch seen since the last match (a region we replaced), or
+        present in the rejected set (a line we explicitly skipped). Any other
+        gap line is UNACCOUNTED (a new upstream line we never decided on → fail).
+      * not found at/after `ui` → base-drift: upstream changed/dropped/moved a
+        line we run → fail.
+  - patch marker → set `patch_pending` (licenses the next gap as replaced).
+  - After the walk, trailing upstream lines are accounted the same way (patch or
+    rejected), else unaccounted.
+  - Separately, every rejected line must still exist in upstream (else the
+    rejection is stale and must be updated/deleted → fail).
 
 Invariants checked
 ------------------
 1. Every `# boc …` has a matching `# eoc …`; no nesting; rejected blocks
    contain only `# `-prefixed payload lines.
-2. Every base line of ours must appear verbatim in upstream (upstream changed
-   or dropped a line we rely on → fail).
-3. Every rejected payload line must still exist in upstream (upstream dropped
-   it → the rejection is stale and must be deleted → fail).
-4. Every executable upstream line must be adopted or rejected — an
-   unaccounted line (e.g. a new upstream env var or install step) fails the
-   build: adopt it, or wrap it in a rejected block with a reason, AND file a
-   TODO.md task for the triage decision.
-5. Base lines should appear in upstream order — a reorder produces a warning
-   (not a failure: duplicates like `echo ""` make strict ordering unprovable).
+2. Every base line appears in upstream IN ORDER (positional) — else base-drift.
+3. Every rejected line still exists in upstream (existence) — else stale.
+4. Every executable upstream line is accounted: positionally matched by a base
+   line, replaced by an `# boc` patch, or present in the rejected set. An
+   unaccounted line (a new env var, install step, …) fails the build: adopt it,
+   or reject-it-with-a-reason, AND file a TODO.md triage task.
 
-Blank lines and pure-comment lines are ignored on both sides — only
-executable lines need an adopt/reject decision.
+Blank lines and pure-comment lines are ignored on both sides. (Edge case:
+a genuinely-new upstream line that lands inside a gap we already patch is
+absorbed by that patch rather than flagged — acceptable, the region is one we
+have reviewed.)
 
 What we do NOT compare
 ----------------------
@@ -83,18 +120,24 @@ def read(path):
         sys.exit(1)
 
 
-def split_sections(lines):
-    """
-    Walk our patched srv.sh once and return:
-      - base:     [(line_no, text), ...] lines OUTSIDE any marker block
-      - ours:     [(line_no, text), ...] replacement code inside boc/eoc blocks
-      - rejected: [(line_no, text), ...] un-commented payload of rejected blocks
-      - balance_errors: [(line_no, message), ...] structural problems
+def executable(text):
+    """Comparison scope: skip blanks and pure comments."""
+    s = text.strip()
+    return bool(s) and not s.startswith("#")
 
-    Line numbers are 1-based to match what editors show.
+
+def parse_ours(lines):
     """
-    base = []
-    ours = []
+    Walk our patched srv.sh once. Returns (stream, rejected, balance_errors):
+
+      stream:   ordered list of base/patch tokens (in document order):
+                  {"kind": "base",  "n": line_no, "text": <verbatim upstream line>}
+                  {"kind": "patch", "n": line_no}   # one per `# boc olcrtc-ios` start
+      rejected: list of (line_no, text) for rejected-block payload lines
+      balance_errors: [(line_no, message), ...] structural problems
+    Line numbers are 1-based.
+    """
+    stream = []
     rejected = []
     balance_errors = []
     mode = None        # None | "ours" | "rejected"
@@ -125,6 +168,9 @@ def split_sections(lines):
                 balance_errors.append(
                     (n, f"nested marker (previous block opened at line {open_line})"))
             mode, open_line = "ours", n
+            # One patch marker per `# boc` block: it licenses the upstream lines
+            # this block replaces (the next base match may skip them).
+            stream.append({"kind": "patch", "n": n})
             continue
         if s.startswith(EOC):
             if mode != "ours":
@@ -134,7 +180,8 @@ def split_sections(lines):
             continue
 
         if mode is None:
-            base.append((n, stripped))
+            if executable(stripped):
+                stream.append({"kind": "base", "n": n, "text": stripped})
         elif mode == "rejected":
             # Payload must be `# ` + verbatim upstream line ("#" alone = blank).
             if s == "#" or not s:
@@ -143,23 +190,18 @@ def split_sections(lines):
                 balance_errors.append(
                     (n, "rejected-block line must be '# ' + verbatim upstream line"))
                 continue
-            rejected.append((n, stripped.lstrip()[2:]))
+            payload = stripped.lstrip()[2:]
+            if executable(payload):
+                rejected.append((n, payload))
         elif mode == "ours":
-            # Our replacement code — exempt from the base check, but an
-            # upstream line carried verbatim inside a boc patch still counts
-            # as adopted for the upstream-side accounting below.
-            ours.append((n, stripped))
+            # Our replacement code — not a claim against upstream. The "patch"
+            # marker emitted at the block start already licenses the gap.
+            pass
 
     if mode is not None:
         balance_errors.append((open_line, "marker block never closed"))
 
-    return base, ours, rejected, balance_errors
-
-
-def executable(text):
-    """Comparison scope: skip blanks and pure comments."""
-    s = text.strip()
-    return bool(s) and not s.startswith("#")
+    return stream, rejected, balance_errors
 
 
 print("note: [parity] Checking scripts/srv.sh vs olcrtc-upstream/script/srv.sh ...")
@@ -167,7 +209,7 @@ print("note: [parity] Checking scripts/srv.sh vs olcrtc-upstream/script/srv.sh .
 ours_lines     = read(OURS)
 upstream_lines = read(UPSTREAM)
 
-base, ours_block, rejected, balance_errors = split_sections(ours_lines)
+stream, rejected, balance_errors = parse_ours(ours_lines)
 
 # Bail early on structural problems — classifying content is meaningless if
 # we don't know which lines belong to which block.
@@ -179,41 +221,79 @@ if balance_errors:
 
 upstream_exec = [l.rstrip() for l in upstream_lines if executable(l.rstrip())]
 upstream_set  = set(upstream_exec)
-base_exec     = [(n, t) for n, t in base if executable(t)]
-base_set      = {t for _, t in base_exec}
-ours_set      = {t for _, t in ours_block if executable(t)}
 rejected_set  = {t for _, t in rejected}
 
-errors = []
+drift_errors = []   # (line_no, text) base-drift — base line not in upstream in order
+unaccounted  = []   # (upstream_exec_index, text) — upstream line in a non-patched gap
 
-# 2. Our base lines must exist verbatim in upstream (the pre-#325 check).
-for line_no, text in base_exec:
-    if text not in upstream_set:
-        errors.append(("base", line_no, text))
+# --- 2 & 4: positional walk of base lines against upstream ------------------
+ui = 0
+patch_pending = False
+n_base = 0
 
-# 3. #325: rejected payload must still exist in upstream — otherwise the
-#    rejection is stale (upstream dropped the line) and should be deleted.
-for line_no, text in rejected:
-    if text not in upstream_set:
-        errors.append(("stale-rejected", line_no, text))
 
-# 4. #325: every executable upstream line must be adopted (in our base, or
-#    carried verbatim inside a boc patch) or rejected.
-unaccounted = [(i, t) for i, t in enumerate(upstream_exec, start=1)
-               if t not in base_set and t not in ours_set and t not in rejected_set]
+def account_gap(lo, hi, patched):
+    """Upstream lines [lo, hi) skipped between base matches: each must be
+    licensed by a patch, or be a line we explicitly rejected — else unaccounted."""
+    if patched:
+        return  # the whole gap is a region our `# boc` patch replaced
+    for k in range(lo, hi):
+        line = upstream_exec[k]
+        if line not in rejected_set:
+            unaccounted.append((k + 1, line))
 
-if errors:
-    print(f"error: [parity] {len(errors)} line(s) in scripts/srv.sh failed the upstream match.")
-    print("       base: upstream changed/dropped a line we rely on — re-sync it, or wrap it")
-    print("             in a `# boc olcrtc-ios` block if it is a deliberate patch.")
-    print("       stale-rejected: upstream no longer has the line — delete it from the")
-    print("             rejected block.")
+
+for tok in stream:
+    if tok["kind"] == "patch":
+        patch_pending = True
+        continue
+
+    n_base += 1
+    text = tok["text"]
+    j = None
+    for k in range(ui, len(upstream_exec)):
+        if upstream_exec[k] == text:
+            j = k
+            break
+
+    if j is None:
+        drift_errors.append((tok["n"], text))
+        patch_pending = False   # alignment broke here; don't mass-flag the rest
+        continue
+
+    account_gap(ui, j, patch_pending)
+    ui = j + 1
+    patch_pending = False
+
+# Trailing upstream lines after the last base match.
+account_gap(ui, len(upstream_exec), patch_pending)
+
+# --- 3: rejected lines must still exist in upstream (existence) -------------
+stale_rejected = [(n, t) for n, t in rejected if t not in upstream_set]
+
+if drift_errors:
+    print(f"error: [parity] {len(drift_errors)} base line(s) in scripts/srv.sh did not "
+          f"match upstream in order.")
+    print("       base-drift: a line we run is gone from upstream, changed, or out of")
+    print("             order at this position — re-sync it, or wrap it in a")
+    print("             `# boc olcrtc-ios` block if it is a deliberate patch.")
     print("       Next step:  diff -u olcrtc-upstream/script/srv.sh scripts/srv.sh | less")
     print()
-    for kind, line_no, text in errors[:10]:
-        print(f"  srv.sh:{line_no}: {kind}: {text!r}")
-    if len(errors) > 10:
-        print(f"  ... and {len(errors) - 10} more")
+    for line_no, text in drift_errors[:10]:
+        print(f"  srv.sh:{line_no}: base-drift: {text!r}")
+    if len(drift_errors) > 10:
+        print(f"  ... and {len(drift_errors) - 10} more")
+    sys.exit(1)
+
+if stale_rejected:
+    print(f"error: [parity] {len(stale_rejected)} rejected line(s) no longer exist upstream.")
+    print("       stale-rejected: upstream dropped the line, so the rejection is stale —")
+    print("             delete it from its `# boc olcrtc-ios-rejected:` block.")
+    print()
+    for line_no, text in stale_rejected[:10]:
+        print(f"  srv.sh:{line_no}: stale-rejected: {text!r}")
+    if len(stale_rejected) > 10:
+        print(f"  ... and {len(stale_rejected) - 10} more")
     sys.exit(1)
 
 if unaccounted:
@@ -230,25 +310,6 @@ if unaccounted:
         print(f"  ... and {len(unaccounted) - 10} more")
     sys.exit(1)
 
-# 5. #325: order check (warning only) — our base lines should follow upstream
-#    order. Greedy walk: each base line consumes the next upstream occurrence;
-#    a line only found *behind* the cursor was reordered (or duplicated).
-cursor = 0
-positions = {}
-for i, t in enumerate(upstream_exec):
-    positions.setdefault(t, []).append(i)
-reordered = []
-for line_no, text in base_exec:
-    ahead = [i for i in positions[text] if i >= cursor]
-    if ahead:
-        cursor = ahead[0] + 1
-    else:
-        reordered.append((line_no, text))
-for line_no, text in reordered[:5]:
-    print(f"warning: [parity] srv.sh:{line_no}: out of upstream order: {text!r}")
-if len(reordered) > 5:
-    print(f"warning: [parity] ... and {len(reordered) - 5} more out-of-order lines")
-
 print(f"note: [parity] All checks passed — "
-      f"{len(base_exec)} adopted, {len(rejected)} rejected, "
+      f"{n_base} adopted (positional, in order), {len(rejected)} rejected, "
       f"{len(upstream_exec)} upstream lines accounted for.")

@@ -170,4 +170,41 @@ enum AppConstants {
     /// auto-generated room when no room is given. Keep in sync with the
     /// `${OLCRTC_JITSI_URL:-...}` default in `scripts/srv.sh`.
     static let defaultJitsiBaseURL = "https://meet1.arbitr.ru"
+
+    /// In-app update checker (#360). Endpoints derived from this repo's slug —
+    /// `git remote` is `git@github.com:haritos90/olcrtc-ios.git`, which is the
+    /// same `${GITHUB_REPOSITORY}` the release workflow publishes to.
+    enum Update {
+        /// `owner/repo` — the GitHub Releases live here. Single source of truth
+        /// for every update URL below; matches release.yml's GITHUB_REPOSITORY.
+        static let repoSlug = "haritos90/olcrtc-ios"
+
+        /// Unsigned-IPA asset name attached to every release (release.yml).
+        static let ipaAssetName = "olcrtc-ios-unsigned.ipa"
+
+        /// Unauthenticated "latest release" REST endpoint (#360).
+        static let latestReleaseAPIURL = URL(string:
+            "https://api.github.com/repos/\(repoSlug)/releases/latest")!
+
+        /// Human-facing release page for `tag`.
+        static func releasePageURL(tag: String) -> URL {
+            URL(string: "https://github.com/\(repoSlug)/releases/tag/\(tag)")!
+        }
+
+        /// Direct download URL of the unsigned .ipa asset for `tag` — same shape
+        /// release.yml builds the SideStore/LiveContainer links from.
+        static func ipaDownloadURL(tag: String) -> String {
+            "https://github.com/\(repoSlug)/releases/download/\(tag)/\(ipaAssetName)"
+        }
+
+        /// `sidestore://install?url=<ipa>` deep link (release.yml install line).
+        static func sideStoreURL(tag: String) -> URL? {
+            URL(string: "sidestore://install?url=\(ipaDownloadURL(tag: tag))")
+        }
+
+        /// `livecontainer://install?url=<ipa>` deep link (release.yml install line).
+        static func liveContainerURL(tag: String) -> URL? {
+            URL(string: "livecontainer://install?url=\(ipaDownloadURL(tag: tag))")
+        }
+    }
 }

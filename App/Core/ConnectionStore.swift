@@ -21,6 +21,15 @@ final class ConnectionStore: ObservableObject {
         didSet { UserDefaults.standard.set(primaryID?.uuidString, forKey: "olcrtc_primary_id") }
     }
 
+    /// #375: true when the last secret hydration hit a Keychain *read error* (as
+    /// opposed to a genuinely-absent key) for at least one connection — the
+    /// classic case is the device being locked before first unlock, so the
+    /// `AfterFirstUnlockThisDeviceOnly` key can't be read yet and would otherwise
+    /// be cached as "" (later surfacing as the misleading "key length 0"). The UI
+    /// observes this to show "unlock the device and reopen", and the app
+    /// re-hydrates on the next foreground (see `rehydrateSecrets`).
+    @Published private(set) var secretsLocked = false
+
     /// Returns the explicit primary, or the first connection as implicit
     /// fallback (single-server case: that one is "primary" by default).
     var primary: ConnectionRecord? {
@@ -79,10 +88,163 @@ final class ConnectionStore: ObservableObject {
         }
     }
 
+    // MARK: Subscriptions (#356)
+    //
+    // Re-importing the same olcrtc-sub:// link must diff against the records it
+    // produced last time — add new nodes, update changed ones in place (keeping
+    // their UUID/keychain entry and primary selection), drop nodes the source
+    // no longer lists — instead of blind-appending duplicates (the #111 bug).
+    // Records are tied to a source by `subSourceURL` and matched by `subNodeKey`.
+
+    /// Per-source refresh bookkeeping, persisted alongside the connection list.
+    /// `refreshInterval` is the `#refresh` interval (seconds) last seen for the
+    /// source; `lastRefresh` is when we last imported it. Both feed `isRefreshDue`.
+    /// #363 adds the surfaced group-level metadata (name + `#used`/`#available`
+    /// quota + node count) so a group detail view can render it without re-fetch.
+    /// Synthesised Codable: old metas decode the new fields as nil with no migration.
+    struct SubscriptionMeta: Codable, Equatable {
+        var refreshInterval: TimeInterval?
+        var lastRefresh    : Date
+        var name           : String?   // #363: global #name (group label)
+        var used           : String?   // #363: global #used (e.g. "10mb/10gb")
+        var available      : String?   // #363: global #available
+        var serverCount    : Int?      // #363: number of nodes last imported
+    }
+
+    /// sourceURL → meta. Persisted under `olcrtc_sub_meta_v1`.
+    @Published private(set) var subscriptionMeta: [String: SubscriptionMeta] = [:] {
+        didSet { saveSubMeta() }
+    }
+
+    /// Pure diff used by `importSubscription` (and exercised directly in tests).
+    /// `existing` is the current record list; `source` selects the records that
+    /// belong to this subscription. Returns the records to insert, the updated
+    /// versions of matched records (same id), and the ids to remove.
+    struct SubscriptionDiff: Equatable {
+        var toAdd   : [ConnectionRecord] = []
+        var toUpdate: [ConnectionRecord] = []
+        var toRemove: [UUID] = []
+    }
+
+    static func diffSubscription(_ sub: OlcrtcSubscription,
+                                 source: String,
+                                 group: String,
+                                 existing: [ConnectionRecord]) -> SubscriptionDiff {
+        // Records previously imported from this exact source, keyed by node.
+        var byKey: [String: ConnectionRecord] = [:]
+        for r in existing where r.subSourceURL == source {
+            if let k = r.subNodeKey { byKey[k] = r }
+        }
+        var diff = SubscriptionDiff()
+        var seen = Set<String>()
+        for entry in sub.entries {
+            let key = entry.nodeKey
+            // De-dup within a single list too: keep the first occurrence.
+            guard seen.insert(key).inserted else { continue }
+            let params = connection(from: entry)
+            if let prior = byKey[key] {
+                // Update in place: keep id (and thus keychain + primary), refresh
+                // the protocol params, name, group, provenance, and #363 metadata.
+                var updated = prior
+                updated.name      = entry.recordName
+                updated.groupName = group
+                updated.details   = .olcrtc(params)
+                updated.subSourceURL = source
+                updated.subNodeKey   = key
+                updated.subIP        = entry.ip          // #363
+                updated.subComment   = entry.comment
+                updated.subUsed      = entry.used
+                updated.subAvailable = entry.available
+                if updated != prior { diff.toUpdate.append(updated) }
+            } else {
+                var added = ConnectionRecord(
+                    name: entry.recordName, groupName: group,
+                    details: .olcrtc(params),
+                    subSourceURL: source, subNodeKey: key)
+                added.subIP        = entry.ip            // #363
+                added.subComment   = entry.comment
+                added.subUsed      = entry.used
+                added.subAvailable = entry.available
+                diff.toAdd.append(added)
+            }
+        }
+        // Anything from this source not in the new list is removed.
+        for (key, r) in byKey where !seen.contains(key) {
+            diff.toRemove.append(r.id)
+        }
+        return diff
+    }
+
+    /// Builds the protocol params for a subscription entry (#355 sei params
+    /// carried through; #356 dedup uses the result).
+    private static func connection(from entry: OlcrtcSubscription.Entry) -> OlcrtcConnection {
+        let p = entry.parsed
+        return OlcrtcConnection(
+            carrier: p.carrier, transport: p.transport, roomID: p.roomID,
+            key: p.key, clientID: p.clientID,
+            vp8FPS: p.vp8FPS, vp8BatchSize: p.vp8BatchSize,
+            seiFPS:   p.seiFPS   ?? 30, seiBatch: p.seiBatch ?? 10,
+            seiFrag:  p.seiFrag  ?? 1200, seiACK:  p.seiACK  ?? 1)
+    }
+
+    /// Applies a (re-)import of `sub` fetched from `source`. Diffs against the
+    /// existing records for that source so re-opening the same link updates in
+    /// place instead of duplicating, then records the refresh bookkeeping.
+    /// Returns the diff so the caller can report add/update/remove counts.
+    @discardableResult
+    func importSubscription(_ sub: OlcrtcSubscription, source: String) -> SubscriptionDiff {
+        let group = sub.name ?? ConnectionRecord.defaultGroupName
+        let diff  = Self.diffSubscription(sub, source: source, group: group, existing: connections)
+
+        if !diff.toRemove.isEmpty {
+            for id in diff.toRemove { ConnectionSecretStore.remove(connectionID: id) }
+            connections.removeAll { diff.toRemove.contains($0.id) }
+        }
+        for updated in diff.toUpdate {
+            if let i = connections.firstIndex(where: { $0.id == updated.id }) {
+                connections[i] = updated
+            }
+        }
+        for added in diff.toAdd { connections.append(added) }
+        if primaryID == nil, let first = connections.first { primaryID = first.id }
+        // Repair a dangling primary if the diff removed the selected record.
+        if let pid = primaryID, !connections.contains(where: { $0.id == pid }) {
+            primaryID = connections.first?.id
+        }
+
+        subscriptionMeta[source] = SubscriptionMeta(
+            refreshInterval: sub.refreshInterval, lastRefresh: Date(),
+            name: sub.name, used: sub.used, available: sub.available,   // #363
+            serverCount: sub.entries.count)
+
+        LogStore.shared.log(.connection,
+            "⬇ subscription \(source): +\(diff.toAdd.count) ~\(diff.toUpdate.count) −\(diff.toRemove.count)")
+        return diff
+    }
+
+    /// Whether a source is due for a refresh, given its stored `#refresh`
+    /// interval and the time of the last import (#356). Unknown source or no
+    /// interval → false (we never nag about a list that didn't ask for it).
+    func isRefreshDue(source: String, now: Date = Date()) -> Bool {
+        guard let meta = subscriptionMeta[source], let interval = meta.refreshInterval,
+              interval > 0 else { return false }
+        return now.timeIntervalSince(meta.lastRefresh) >= interval
+    }
+
     func grouped() -> [(group: String, items: [ConnectionRecord])] {
         Dictionary(grouping: connections, by: { $0.groupName })
             .sorted { $0.key < $1.key }
             .map { (group: $0.key, items: $0.value) }
+    }
+
+    /// #363: the (source, meta) for a group, if any of its records came from a
+    /// subscription. Picks the first record in `items` carrying a `subSourceURL`
+    /// and looks its meta up — a group is normally backed by a single source.
+    /// Returns nil for a purely manual group so the UI shows no metadata section.
+    func subscriptionInfo(for items: [ConnectionRecord]) -> (source: String, meta: SubscriptionMeta)? {
+        guard let source = items.lazy.compactMap({ $0.subSourceURL }).first,
+              let meta = subscriptionMeta[source] else { return nil }
+        return (source, meta)
     }
 
     /// Sorted unique group names already in use. Used by the connection
@@ -93,7 +255,8 @@ final class ConnectionStore: ObservableObject {
 
     // MARK: Persistence
 
-    private static let v2Key = "olcrtc_records_v2"
+    private static let v2Key      = "olcrtc_records_v2"
+    private static let subMetaKey = "olcrtc_sub_meta_v1"   // #356
 
     /// Saves the connection list to UserDefaults with the encryption key
     /// stripped from JSON — the key lives in Keychain instead. This runs
@@ -130,22 +293,78 @@ final class ConnectionStore: ObservableObject {
             }
         }
 
-        connections = list.map { Self.hydrateSecrets($0) }
+        // #375: hydrate secrets, tracking whether any read hit a Keychain ERROR
+        // (device locked before first unlock) vs. a genuinely-absent key. On an
+        // error we flag `secretsLocked` so the UI can prompt to unlock + reopen,
+        // and `rehydrateSecrets()` (called on foreground) retries the read.
+        var sawReadError = false
+        connections = list.map { record in
+            let (hydrated, readError) = Self.hydrateSecrets(record)
+            if readError { sawReadError = true }
+            return hydrated
+        }
+        secretsLocked = sawReadError
 
         if let s = UserDefaults.standard.string(forKey: "olcrtc_primary_id"),
            let uuid = UUID(uuidString: s) {
             primaryID = uuid
         }
+
+        // #356: subscription refresh bookkeeping. Assigned directly (not via the
+        // published setter inside `load()` semantics) — the didSet re-save is a
+        // harmless no-op writing the same bytes back.
+        if let data = UserDefaults.standard.data(forKey: Self.subMetaKey),
+           let decoded = try? JSONDecoder().decode([String: SubscriptionMeta].self, from: data) {
+            subscriptionMeta = decoded
+        }
     }
 
-    private static func hydrateSecrets(_ record: ConnectionRecord) -> ConnectionRecord {
+    /// Persists `subscriptionMeta` (#356). Runs from its `didSet`.
+    private func saveSubMeta() {
+        if let data = try? JSONEncoder().encode(subscriptionMeta) {
+            UserDefaults.standard.set(data, forKey: Self.subMetaKey)
+        }
+    }
+
+    /// #375: re-read every connection's secrets from Keychain and clear
+    /// `secretsLocked` if the read now succeeds. Call on app foreground
+    /// (`.scenePhase == .active`) so a key that was unreadable at a locked-device
+    /// launch is hydrated before the user can hit Connect — turning a misleading
+    /// "key length 0" into a working connection once the device is unlocked.
+    ///
+    /// Cheap no-op unless we're actually in the locked state: when nothing was
+    /// locked the in-memory keys are already correct, so we skip the re-read (and
+    /// the `connections` reassignment's `save()` round-trip) entirely.
+    func rehydrateSecrets() {
+        guard secretsLocked else { return }
+        var sawReadError = false
+        connections = connections.map { record in
+            let (hydrated, readError) = Self.hydrateSecrets(record)
+            if readError { sawReadError = true }
+            return hydrated
+        }
+        secretsLocked = sawReadError
+    }
+
+    /// Hydrates a record's secrets from Keychain. The second tuple element is
+    /// true when a read hit a genuine Keychain ERROR (`.failure`) rather than a
+    /// missing key (`.success(nil)`) — #375: the locked-before-first-unlock case,
+    /// where caching the resulting "" would later look like "key length 0". On an
+    /// error we leave the existing in-memory value untouched (don't clobber a key
+    /// hydrated by an earlier successful pass).
+    private static func hydrateSecrets(_ record: ConnectionRecord) -> (ConnectionRecord, readError: Bool) {
         var r = record
+        var readError = false
         if case .olcrtc(var p) = r.details {
-            if let kc = ConnectionSecretStore.key(for: r.id) { p.key = kc }
+            switch ConnectionSecretStore.keyResult(for: r.id) {
+            case .success(let kc?): p.key = kc
+            case .success(nil):     break          // genuinely absent — leave as-is
+            case .failure:          readError = true   // locked / unreadable — retry on foreground
+            }
             if let sp = ConnectionSecretStore.socksPass(for: r.id) { p.socksPass = sp }
             r.details = .olcrtc(p)
         }
-        return r
+        return (r, readError)
     }
 }
 

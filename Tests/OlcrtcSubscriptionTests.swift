@@ -144,4 +144,90 @@ final class OlcrtcSubscriptionTests: XCTestCase {
         XCTAssertEqual(sub.entries[1].recordName, "Mimo Only")
         XCTAssertEqual(sub.entries[2].recordName, "wbstream · datachannel")
     }
+
+    // MARK: #363 — carried-through metadata (previously parsed-then-dropped)
+
+    func testGlobalAndNodeMetadataAreCarried() {
+        let sub = OlcrtcSubscription.parse(upstreamExample)
+        // Global #used / #available now retained.
+        XCTAssertEqual(sub.used, "10mb/10gb")
+        XCTAssertEqual(sub.available, "9.99gb")
+        // Per-node ##used / ##available / ##ip / ##comment retained on the entry.
+        let first = sub.entries[0]
+        XCTAssertEqual(first.used, "500mb/10gb")
+        XCTAssertEqual(first.available, "9.5gb")
+        XCTAssertEqual(first.ip, "203.0.113.10")
+        XCTAssertEqual(first.comment, "basic free node")
+        // The second node has only a comment (no ip/used/available).
+        let second = sub.entries[1]
+        XCTAssertNil(second.ip)
+        XCTAssertEqual(second.comment,
+            "reserve route, wbstream+datachannel does not work in guest flow")
+    }
+
+    func testNodeMetadataBindsToNearestPrecedingURI() {
+        let body = """
+        olcrtc://wbstream?datachannel@r1#aa
+        ##ip: 10.0.0.1
+        ##comment: node one
+        olcrtc://wbstream?datachannel@r2#bb
+        ##comment: node two
+        """
+        let sub = OlcrtcSubscription.parse(body)
+        XCTAssertEqual(sub.entries[0].ip, "10.0.0.1")
+        XCTAssertEqual(sub.entries[0].comment, "node one")
+        XCTAssertNil(sub.entries[1].ip)
+        XCTAssertEqual(sub.entries[1].comment, "node two")
+    }
+
+    // MARK: #361 — paste-and-import detection (pure classifier)
+
+    func testDetectSingleConnectionURI() {
+        let input = "olcrtc://wbstream?datachannel@room#aa"
+        XCTAssertEqual(OlcrtcSubscription.detectImport(input), .connectionURI(input))
+        // Leading/trailing whitespace is trimmed.
+        XCTAssertEqual(OlcrtcSubscription.detectImport("  \(input)\n"), .connectionURI(input))
+    }
+
+    func testDetectSubscriptionLink() {
+        let sub = "olcrtc-sub://pool.example.org/sub"
+        XCTAssertEqual(OlcrtcSubscription.detectImport(sub),
+                       .subscriptionURL(URL(string: sub)!))
+        let https = "https://pool.example.org/sub"
+        XCTAssertEqual(OlcrtcSubscription.detectImport(https),
+                       .subscriptionURL(URL(string: https)!))
+    }
+
+    func testDetectHTTPSOnlyForURLs() {
+        // A plain http:// link is NOT treated as a subscription URL (ATS posture).
+        XCTAssertEqual(OlcrtcSubscription.detectImport("http://pool.example.org/sub"),
+                       .unrecognized)
+    }
+
+    func testDetectRawSubscriptionBody() {
+        let body = """
+        #name: Pool
+        olcrtc://wbstream?datachannel@r1#aa
+        ##name: A
+        olcrtc://wbstream?datachannel@r2#bb
+        """
+        guard case .subscriptionBody = OlcrtcSubscription.detectImport(body) else {
+            return XCTFail("multi-line sub.md text must detect as a body")
+        }
+        // A metadata-only multi-line blob with a marker still routes as a body
+        // (parse decides it's empty downstream).
+        guard case .subscriptionBody = OlcrtcSubscription.detectImport("#name: x\nsome banner") else {
+            return XCTFail("a #marker line marks the blob as a sub body")
+        }
+    }
+
+    func testDetectUnrecognized() {
+        XCTAssertEqual(OlcrtcSubscription.detectImport(""), .unrecognized)
+        XCTAssertEqual(OlcrtcSubscription.detectImport("just some random text"), .unrecognized)
+        // Multiple olcrtc:// lines (no markers) still detect as a body, not a single URI.
+        guard case .subscriptionBody = OlcrtcSubscription.detectImport(
+            "olcrtc://wbstream?datachannel@r1#aa\nolcrtc://wbstream?datachannel@r2#bb") else {
+            return XCTFail("multiple connection URIs detect as a body")
+        }
+    }
 }

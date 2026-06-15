@@ -98,11 +98,17 @@ struct LogsView: View {
                         prompt: L10n.logsSearchPlaceholder.localized())
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    let plain = LogRendering.plain(currentEntries.reversed())
+                    // #353 was: `let plain = LogRendering.plain(currentEntries.reversed())`
+                    // built the entire export string on every toolbar refresh,
+                    // even though it's only needed when the user opens Share or
+                    // taps Copy. Both now build it on demand — Share via
+                    // `.shareLazy` (Menu-open-time), Copy inside its own action.
                     OlcOverflowMenu(items: [
-                        .share(L10n.shareAction.localized(), systemImage: "square.and.arrow.up", item: plain),
+                        .shareLazy(L10n.shareAction.localized(), systemImage: "square.and.arrow.up") {
+                            LogRendering.plain(currentEntries.reversed())
+                        },
                         .action(L10n.copyAllAction.localized(), systemImage: "doc.on.doc") {
-                            UIPasteboard.general.string = plain
+                            UIPasteboard.general.string = LogRendering.plain(currentEntries.reversed())
                         },
                         .divider,
                         .action(L10n.clearCategoryAction.localized(), systemImage: "trash", role: .destructive) {
@@ -219,6 +225,17 @@ struct LogsView: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(Theme.Palette.textSecondary)
                 Spacer(minLength: 8)
+                // #367: live peer count for the selected container server, parsed
+                // from the server's "Current peers count:" log lines (PR #96).
+                if selection == .containerLogs,
+                   let host = selectedHost,
+                   let peers = store.peerCounts[host.logFilePrefix] {
+                    Text(L10n.logsPeerCount_fmt.formatted(peers))
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                    Text("·").font(.caption2).foregroundStyle(Theme.Palette.textTertiary)
+                }
                 Text(L10n.logsLineCount_fmt.formatted(currentEntries.count))
                     .font(.caption2)
                     .monospacedDigit()
@@ -367,7 +384,10 @@ struct LogsView: View {
         }
         // #338 was: fetching = true … defer { fetching = false }
         fetchPhase = 0
-        defer { fetchPhase = nil }
+        // #334: publish the in-flight host so the ServersView card can show a
+        // busy indicator while the fetch runs on this (Logs) tab.
+        router.fetchingHostID = host.id
+        defer { fetchPhase = nil; router.fetchingHostID = nil }
 
         var target = host
         if target.lastContainerName == nil {

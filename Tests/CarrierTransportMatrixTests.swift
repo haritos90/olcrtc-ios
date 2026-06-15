@@ -43,6 +43,11 @@ final class CarrierTransportMatrixTests: XCTestCase {
         XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "telemost", transport: "datachannel"), .fail)
         XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "telemost", transport: "seichannel"),  .fail)
         XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "wbstream", transport: "datachannel"), .question)
+        // #357: re-synced to the upstream E2E ground truth (tunnel_test.go @ 9822def).
+        // jitsi's RTP-keepalive fixes flipped vp8channel to pass; sei/video expect-fail.
+        XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "jitsi",    transport: "vp8channel"),   .ok)
+        XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "jitsi",    transport: "seichannel"),   .fail)
+        XCTAssertEqual(CarrierTransportMatrix.compat(carrier: "jitsi",    transport: "videochannel"), .fail)
     }
 
     // The pre-selected transport for each carrier must be its recommended cell.

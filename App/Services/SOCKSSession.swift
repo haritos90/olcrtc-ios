@@ -39,7 +39,11 @@ enum SOCKSSession {
             cfg.connectionProxyDictionary = [
                 "SOCKSEnable": 1,
                 "SOCKSProxy" : "127.0.0.1",
-                "SOCKSPort"  : TunnelManager.socksPort
+                // #351 was: TunnelManager.socksPort (the *configured* port) — after
+                // a live port edit while connected that targeted the wrong port, so
+                // keep-alive's verify probe failed and tore down a healthy tunnel.
+                // `activeSocksPort` prefers the port the live session actually bound.
+                "SOCKSPort"  : TunnelManager.activeSocksPort
             ] as [AnyHashable: Any]
         }
         return URLSession(configuration: cfg)

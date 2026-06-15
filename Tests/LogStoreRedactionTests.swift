@@ -100,4 +100,42 @@ final class LogStoreRedactionTests: XCTestCase {
         let result = LogStore.redactSecrets(banner)
         XCTAssertFalse(result.contains(key), "the 64-hex key must not survive in any form")
     }
+
+    // MARK: #377 — password-marker scrubbing (defense-in-depth)
+
+    func testRedactsPasswordMarkerValues() {
+        XCTAssertEqual(LogStore.redactSecrets("ssh password=hunter2 connecting"),
+                       "ssh password=<redacted> connecting")
+        XCTAssertEqual(LogStore.redactSecrets("pass: s3cr3t!"), "pass: <redacted>")
+        XCTAssertEqual(LogStore.redactSecrets("PASSWD=Xyz"), "PASSWD=<redacted>")
+    }
+
+    func testPasswordProseWithoutAValueIsUntouched() {
+        // No `=`/`:` value follows, so prose like "(password changed)" is safe.
+        let line = "✎ updated VPS: home [root@1.2.3.4:22] (password changed)"
+        XCTAssertEqual(LogStore.redactSecrets(line), line)
+    }
+
+    // #385: the `\b` word boundary means an interior `pass` is NOT a credential
+    // marker — `bypass=`/`compass:`/`surpass=` values must survive verbatim.
+    func testInteriorPassSubstringsAreNotRedacted() {
+        let lines = [
+            "GET /api?bypass=1 -> 200",
+            "heading compass: 270deg",
+            "surpass=threshold reached",
+        ]
+        for line in lines {
+            XCTAssertEqual(LogStore.redactSecrets(line), line,
+                           "interior 'pass' must not trigger redaction: \(line)")
+        }
+    }
+
+    // #385: a genuine marker preceded by a non-word char (space, `-`, quote, `=`)
+    // still redacts — the boundary only blocks word-interior matches.
+    func testRealPasswordMarkerStillRedactedAfterBoundaryChars() {
+        XCTAssertEqual(LogStore.redactSecrets(#"--password="hunter2""#),
+                       #"--password=<redacted>"#)
+        XCTAssertEqual(LogStore.redactSecrets("key=val pass=s3cret"),
+                       "key=val pass=<redacted>")
+    }
 }

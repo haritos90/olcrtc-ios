@@ -107,6 +107,54 @@ final class PortAvailabilityTests: XCTestCase {
         XCTAssertEqual(OlcrtcEngine.startErrorReason(raw, port: 1080), raw)
     }
 
+    // MARK: same-port wait-and-retry decision (#333)
+    //
+    // After our own disconnect the core's listener tears down asynchronously, so
+    // the configured port can read busy on our ghost for a second or two. The
+    // connect path waits-and-retries the SAME port — but ONLY when the port is
+    // busy AND we let go of it ourselves recently. The #308 contract is intact:
+    // no port sliding, and a foreign-held port still fails fast (no wait). The
+    // pure verdict is `TunnelManager.shouldWaitForOwnPortRelease`.
+
+    func testNoWaitWhenPortIsAlreadyFree() {
+        // The overwhelmingly common case: free port → connect immediately.
+        XCTAssertFalse(TunnelManager.shouldWaitForOwnPortRelease(
+            portFree: true, selfDisconnectedAgo: 1))
+        // Even a free port we just released needs no wait.
+        XCTAssertFalse(TunnelManager.shouldWaitForOwnPortRelease(
+            portFree: true, selfDisconnectedAgo: nil))
+    }
+
+    func testNoWaitWhenBusyButNoRecentSelfDisconnect() {
+        // Busy and we never disconnected ourselves → a foreign app holds it.
+        // Fail fast (#308), don't wait on someone else's listener.
+        XCTAssertFalse(TunnelManager.shouldWaitForOwnPortRelease(
+            portFree: false, selfDisconnectedAgo: nil))
+    }
+
+    func testNoWaitWhenSelfDisconnectIsStale() {
+        // Busy, but our last self-disconnect is older than the ghost window —
+        // the ghost would be long gone, so a busy port now is someone else's.
+        XCTAssertFalse(TunnelManager.shouldWaitForOwnPortRelease(
+            portFree: false, selfDisconnectedAgo: 30))
+    }
+
+    func testWaitsWhenBusyOnOurOwnRecentGhost() {
+        // Busy + we disconnected ourselves a moment ago → wait-and-retry the
+        // same port rather than failing on our own ghost.
+        XCTAssertTrue(TunnelManager.shouldWaitForOwnPortRelease(
+            portFree: false, selfDisconnectedAgo: 0))
+        XCTAssertTrue(TunnelManager.shouldWaitForOwnPortRelease(
+            portFree: false, selfDisconnectedAgo: 2))
+    }
+
+    func testNoWaitOnNegativeAge() {
+        // Defensive: a clock skew producing a negative "ago" must not be treated
+        // as "within the window".
+        XCTAssertFalse(TunnelManager.shouldWaitForOwnPortRelease(
+            portFree: false, selfDisconnectedAgo: -5))
+    }
+
     // MARK: freeEphemeralPort
 
     func testFreeEphemeralPortIsInRangeAndFree() throws {

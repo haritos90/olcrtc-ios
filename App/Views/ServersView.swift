@@ -24,8 +24,10 @@ struct ServersView: View {
     @ObservedObject var serverStore: ServerHostStore
     @ObservedObject var connections: ConnectionStore
     /// #339: "Container logs" routes to the Logs tab through this app-level
-    /// router (write-only here — MainTabView switches the tab, LogsView consumes).
-    let logsRouter: LogsRouter
+    /// router (MainTabView switches the tab, LogsView consumes).
+    /// #334 was: `let logsRouter` — now observed so the card reacts to
+    /// `fetchingHostID` and shows a busy indicator during a container-log fetch.
+    @ObservedObject var logsRouter: LogsRouter
     /// Per-tab lifecycle, NOT a shared singleton — intentional split from
     /// `TunnelManager.shared` / `SettingsStore.shared` / `LogStore.shared`.
     @StateObject  private var provisioner = Provisioner()
@@ -41,9 +43,14 @@ struct ServersView: View {
     @State private var display        : [UUID: HostDisplay] = [:]
     @State private var vpsStats       : [UUID: SSHRunner.VPSStats] = [:]
     @State private var pingLatencies  : [UUID: Double?] = [:]   // ms, nil=unreachable, absent=not pinged
+    // #374: when each host was last probed, so the periodic sweep only re-pings
+    // hosts whose last ping is older than the interval (instead of every host
+    // every tick). Absent → never pinged → due immediately.
+    @State private var lastPing       : [UUID: Date] = [:]
     @State private var scanFor        : ServerHost?
     @State private var foundContainers: [SSHRunner.FoundContainer] = []
     @State private var shareConn      : ConnectionRecord?   // #304: share the host's linked connection
+    @State private var shareFullAccess: FullAccessShareRequest?   // #135: full-access (SSH) share
     @State private var alertText           : String?
     @State private var removeHost          : ServerHost?
     @State private var uninstallConfirmHost    : ServerHost?
@@ -57,7 +64,10 @@ struct ServersView: View {
     // unparseable — confirm before rotating ~/.olcrtc_key (destructive for
     // every other client of that server).
     @State private var rotateKeyConfirmHost    : ServerHost?
-    @State private var pingTimer       : Timer?
+    // #374 was: pingTimer (Timer?) — a repeating Timer that re-pinged EVERY
+    // host every tick, even mid-op. Replaced by a structured `.task` sweep loop
+    // (autoPingLoop) tied to the view lifecycle, which cancels cleanly on
+    // disappear (no manual invalidate needed) and only re-pings stale hosts.
 
     @ObservedObject private var settings = SettingsStore.shared
 
@@ -78,11 +88,15 @@ struct ServersView: View {
             .navigationTitle(L10n.serversTitle.localized())
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
+                    // #359: icon-only "+" needs an a11y label (reused newServerTitle).
                     Button { showAdd = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel(L10n.newServerTitle.localized())
                 }
             }
-            .onAppear { startAutoPingIfNeeded() }
-            .onDisappear { pingTimer?.invalidate(); pingTimer = nil }
+            // #374: structured sweep loop tied to the view lifecycle — SwiftUI
+            // cancels it when the view disappears, replacing the old
+            // onAppear-start / onDisappear-invalidate Timer pair.
+            .task { await autoPingLoop() }
             // #258: route the provisioner's progress stream into the running host's
             // phase/subtitle ONLY — never the base state or the dot colour.
             .onChange(of: provisioner.status) { _, status in
@@ -120,6 +134,11 @@ struct ServersView: View {
             // #304: "Share connection" moved here from the Connections tab.
             .sheet(item: $shareConn) { conn in
                 ShareConnectionView(conn: conn)
+            }
+            // #135: full-access (co-admin) share — the same sheet, with the SSH
+            // payload that unlocks the destructive opt-in section.
+            .sheet(item: $shareFullAccess) { req in
+                ShareConnectionView(conn: req.conn, fullAccess: req.payload)
             }
             .alert(L10n.okPrompt.localized(), isPresented: Binding(
                 get: { alertText != nil },
@@ -296,6 +315,27 @@ struct ServersView: View {
         return connections.connections.first { $0.id == id }
     }
 
+    /// #135: builds the full-access (co-admin) share request for a host + its
+    /// linked connection — the connection URI plus the SSH host/port/login and
+    /// the password read live from the Keychain (ServerHostStore → KeychainHelper).
+    /// Returns nil when no password is stored, so the destructive item silently
+    /// no-ops rather than sharing a credential-less, useless blob.
+    private func fullAccessRequest(_ host: ServerHost, conn: ConnectionRecord) -> FullAccessShareRequest? {
+        guard let password = serverStore.password(for: host) else { return nil }
+        let uri: String
+        switch conn.details {
+        case .olcrtc(let p): uri = OlcrtcURI.encode(p)
+        }
+        let payload = FullAccessShare(
+            uri: uri,
+            label: host.label,
+            sshHost: host.host,
+            sshPort: host.port,
+            sshUsername: host.username,
+            sshPassword: password)
+        return FullAccessShareRequest(conn: conn, payload: payload)
+    }
+
     /// Any host mid-operation. Operations are serialized (one provisioner), so we
     /// disable every card's actions while one runs — this also keeps `runningHostID`
     /// unambiguous for phase routing.
@@ -362,25 +402,68 @@ struct ServersView: View {
     }
 
     // MARK: Auto-ping
+    //
+    // #374: a single structured sweep loop replaces the old repeating Timer
+    // that re-pinged EVERY host every tick (even mid-SSH-op, even when nothing
+    // had changed). Each pass:
+    //   • does an immediate first ping of any never-pinged host;
+    //   • when auto-ping is on, wakes every `interval` and re-pings ONLY hosts
+    //     whose last ping is older than the interval (skipping fresh ones);
+    //   • skips the periodic sweep entirely while an op is in flight
+    //     (actionsDisabled) — checkServer already pings the host it touches;
+    //   • staggers the per-host probes by a small delay so they don't all fire
+    //     on the same instant.
+    // The loop runs inside `.task`, so SwiftUI cancels it on disappear.
 
-    private func startAutoPingIfNeeded() {
-        let unpinged = serverStore.hosts.filter { pingLatencies[$0.id] == nil }
-        if !unpinged.isEmpty {
-            Task { for h in unpinged { await doPing(h) } }
-        }
-        pingTimer?.invalidate()
-        guard settings.vpsAutoPingEnabled, settings.vpsAutoPingInterval > 0 else { return }
-        let interval = TimeInterval(settings.vpsAutoPingInterval)
-        pingTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
-            Task { @MainActor in
-                for h in serverStore.hosts { await doPing(h) }
+    /// Small per-host gap so a fleet doesn't fire every probe on one tick (#374).
+    private static let pingStaggerSeconds: Double = 0.4
+
+    private func autoPingLoop() async {
+        // Initial pass: ping every host that's never been pinged.
+        await pingDueHosts(force: true)
+
+        // Periodic sweeps only when enabled and a positive interval is set.
+        while !Task.isCancelled {
+            guard settings.vpsAutoPingEnabled, settings.vpsAutoPingInterval > 0 else { return }
+            let interval = TimeInterval(settings.vpsAutoPingInterval)
+            do {
+                try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            } catch {
+                return   // cancelled while sleeping
             }
+            // Don't sweep on top of an in-flight SSH op — it would queue probes
+            // against a host we're already talking to, and nothing's changed.
+            guard !actionsDisabled else { continue }
+            await pingDueHosts(force: false)
+        }
+    }
+
+    /// Pings every host whose ping is stale (older than the configured
+    /// interval) — or, with `force`, every host not yet pinged. Staggered.
+    private func pingDueHosts(force: Bool) async {
+        let interval = TimeInterval(settings.vpsAutoPingInterval)
+        let now = Date()
+        let due = serverStore.hosts.filter { host in
+            guard let last = lastPing[host.id] else { return true }   // never pinged → due
+            return force ? false : now.timeIntervalSince(last) >= interval
+        }
+        for (i, host) in due.enumerated() {
+            if i > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(Self.pingStaggerSeconds * 1_000_000_000))
+                } catch {
+                    return   // cancelled mid-stagger
+                }
+            }
+            if Task.isCancelled { return }
+            await doPing(host)
         }
     }
 
     private func doPing(_ host: ServerHost) async {
         let result = await NetPing.tcp(host: host.host, port: UInt16(host.port), timeout: 5)
         pingLatencies[host.id] = result.success ? result.ms : nil
+        lastPing[host.id] = Date()   // #374: record so the sweep can skip fresh hosts
     }
 
     // MARK: Host card
@@ -396,7 +479,10 @@ struct ServersView: View {
                             Text(host.label)
                                 .font(.headline)
                                 .foregroundStyle(Theme.Palette.textPrimary)
-                            Text("\(host.username)@\(host.host):\(String(host.port))")
+                            // #337: mask the host for display when screenshot-safe
+                            // mode is on (IP literals → •••.•••.•••.x; hostnames
+                            // pass through). Display-only: host.host stays real.
+                            Text("\(host.username)@\(IPMask.display(host.host, masked: settings.maskIPs)):\(String(host.port))")
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundStyle(Theme.Palette.textSecondary)
                         }
@@ -404,6 +490,11 @@ struct ServersView: View {
                         OlcOverflowMenu(items: menuItems(host))
                             .disabled(actionsDisabled)
                     }
+
+                    // #334: container-log fetch runs on the Logs tab (#339), so it
+                    // isn't a HostOp and never reaches `statusRegion`. Surface its
+                    // progress here from the router's published in-flight host.
+                    containerLogBusyStrip(host)
 
                     statusRegion(host, state: state)
 
@@ -416,8 +507,30 @@ struct ServersView: View {
                     actionBar(host, state: state)
                 }
                 .animation(.easeInOut(duration: 0.35), value: state)
+                // #334: fade the container-log busy strip in/out smoothly.
+                .animation(.easeInOut(duration: 0.35), value: logsRouter.fetchingHostID)
             }
             .olcCardRow()
+        }
+    }
+
+    /// #334: a compact busy row shown only while THIS host's container-log
+    /// fetch is in flight (on the Logs tab). Reuses the `.progress` status tone
+    /// + OlcProgressBar, mirroring an in-card operation. The `.transition` +
+    /// the card's own animation (keyed on `fetchingHostID` below) keep it from
+    /// snapping in — see #335 for the start-jank lesson.
+    @ViewBuilder
+    private func containerLogBusyStrip(_ host: ServerHost) -> some View {
+        if logsRouter.fetchingHostID == host.id {
+            VStack(alignment: .leading, spacing: 8) {
+                OlcStatusPill(tone: .progress,
+                              title: L10n.actionContainerLogs.localized(),
+                              subtitle: L10n.logsPhaseReceiving.localized()) {
+                    ProgressView().controlSize(.small)
+                }
+                OlcProgressBar(fraction: 1)   // indeterminate-ish: the fetch has no fraction here
+            }
+            .transition(.opacity)
         }
     }
 
@@ -425,31 +538,62 @@ struct ServersView: View {
     // #341: fixed-height container (≈58pt) so the pill / pill+bar / failed
     // pill swap never changes the card height; the existing `.animation`
     // crossfades the content.
+    // #335: the pill is now ALWAYS rendered in the same top slot — only its
+    // tone/title/subtitle change — and the progress bar lives in a fixed-height
+    // slot BELOW it that just fades its opacity. Previously the `.running` case
+    // wrapped the pill in its own VStack while `.base`/`.failed` rendered a bare
+    // pill, so when the op started the crossfade animated the pill from one
+    // vertical anchor to another, overlapping the text for ~0.5s. One stable
+    // pill position kills the overlap.
     @ViewBuilder
     private func statusRegion(_ host: ServerHost, state: HostDisplay) -> some View {
-        Group {
-            switch state {
-            case .running(let op, let phase, let note, _):
-                VStack(alignment: .leading, spacing: 12) {
-                    OlcStatusPill(tone: .progress,
-                                  title: "\(op.verb)…",
-                                  subtitle: "\(note) · \(min(phase + 1, op.stepCount))/\(op.stepCount)") {
-                        ProgressView().controlSize(.small)
-                    }
-                    // #338 was: ProgressView(value:total:).tint(amber) — extracted
-                    // into the shared OlcProgressBar (also used by the Logs fetch).
-                    OlcProgressBar(fraction: Double(min(phase + 1, op.stepCount))
-                                           / Double(max(op.stepCount, 1)))
-                }
-            case .failed(let op, let phase, let message, _):
-                OlcStatusPill(tone: .error,
-                              title: L10n.vpsOpFailed_fmt.formatted(op.verb),
-                              subtitle: "\(phase.replacingOccurrences(of: "…", with: "")) · \(message)")
-            case .base(let b):
-                OlcStatusPill(tone: b.tone, title: b.title, subtitle: b.subtitle)
+        let bar = statusBarFraction(state)
+        VStack(alignment: .leading, spacing: 8) {
+            OlcStatusPill(tone: statusTone(state),
+                          title: statusTitle(state),
+                          subtitle: statusSubtitle(state)) {
+                if state.isRunning { ProgressView().controlSize(.small) }
             }
+            // #338 was: ProgressView(value:total:).tint(amber) — extracted into
+            // the shared OlcProgressBar (also used by the Logs fetch). The slot
+            // is always present (fixed 4pt) so the pill above never reflows when
+            // the bar appears/disappears; opacity carries the transition (#335).
+            OlcProgressBar(fraction: bar ?? 0)
+                .opacity(bar == nil ? 0 : 1)
         }
         .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+    }
+
+    // #335: per-state pill content, split out so the ONE pill above can render
+    // any state without changing its position.
+    private func statusTone(_ state: HostDisplay) -> OlcStatusTone {
+        switch state {
+        case .running:        return .progress
+        case .failed:         return .error
+        case .base(let b):    return b.tone
+        }
+    }
+    private func statusTitle(_ state: HostDisplay) -> String {
+        switch state {
+        case .running(let op, _, _, _): return "\(op.verb)…"
+        case .failed(let op, _, _, _):  return L10n.vpsOpFailed_fmt.formatted(op.verb)
+        case .base(let b):              return b.title
+        }
+    }
+    private func statusSubtitle(_ state: HostDisplay) -> String {
+        switch state {
+        case .running(let op, let phase, let note, _):
+            return "\(note) · \(min(phase + 1, op.stepCount))/\(op.stepCount)"
+        case .failed(_, let phase, let message, _):
+            return "\(phase.replacingOccurrences(of: "…", with: "")) · \(message)"
+        case .base(let b):
+            return b.subtitle
+        }
+    }
+    /// The progress fraction while running; nil when the bar slot is empty.
+    private func statusBarFraction(_ state: HostDisplay) -> Double? {
+        guard case .running(let op, let phase, _, _) = state else { return nil }
+        return Double(min(phase + 1, op.stepCount)) / Double(max(op.stepCount, 1))
     }
 
     // #341 was: metricsRow — a conditional 4×OlcMetric two-deck row (17pt mono).
@@ -460,11 +604,13 @@ struct ServersView: View {
         return HStack(spacing: 8) {
             pingMiniStat(host)
             statDot
-            OlcMiniStat(label: "Disk", value: Self.shortUsage(stats?.disk))
+            // #346: labels through L10n (ru = en for the abbreviations); units
+            // like "G"/"M"/"d" inside the values stay English.
+            OlcMiniStat(label: L10n.vpsStatDisk.localized(), value: Self.shortUsage(stats?.disk))
             statDot
-            OlcMiniStat(label: "RAM",  value: Self.shortUsage(stats?.ram))
+            OlcMiniStat(label: L10n.vpsStatRAM.localized(),  value: Self.shortUsage(stats?.ram))
             statDot
-            OlcMiniStat(label: "Up",   value: Self.shortUptime(stats?.uptime))
+            OlcMiniStat(label: L10n.vpsStatUp.localized(),   value: Self.shortUptime(stats?.uptime))
             Spacer(minLength: 0)
         }
         .opacity(state.isRunning ? 0.45 : 1)
@@ -472,18 +618,22 @@ struct ServersView: View {
 
     private var statDot: some View {
         Text("·").font(.caption2).foregroundStyle(Theme.Palette.textTertiary)
+            // #369: decorative separator between mini-stats — VoiceOver would
+            // otherwise read "middle dot" between each metric.
+            .accessibilityHidden(true)
     }
 
     private func pingMiniStat(_ host: ServerHost) -> OlcMiniStat {
         switch pingLatencies[host.id] {
         case .some(.some(let ms)):
-            return OlcMiniStat(label: "Ping", value: String(format: "%.0fms", ms),
+            // #346: "Ping" label through L10n (ru = en); "ms" stays English.
+            return OlcMiniStat(label: L10n.vpsStatPing.localized(), value: String(format: "%.0fms", ms),
                                tone: ms < 100 ? Theme.Palette.green
                                    : ms < 300 ? Theme.Palette.orange : Theme.Palette.red)
         case .some(.none):
-            return OlcMiniStat(label: "Ping", value: "✕", tone: Theme.Palette.red)
+            return OlcMiniStat(label: L10n.vpsStatPing.localized(), value: "✕", tone: Theme.Palette.red)
         case .none:
-            return OlcMiniStat(label: "Ping", value: "—", tone: Theme.Palette.textTertiary)
+            return OlcMiniStat(label: L10n.vpsStatPing.localized(), value: "—", tone: Theme.Palette.textTertiary)
         }
     }
 
@@ -638,6 +788,11 @@ struct ServersView: View {
             items.append(.action(L10n.shareConnectionTitle.localized(), systemImage: "square.and.arrow.up") {
                 shareConn = conn
             })
+            // #135: full-access (co-admin) share — carries the SSH credentials so
+            // the recipient can MANAGE the VPS. Destructive; warned in the sheet.
+            items.append(.action(L10n.shareFullAccessTitle.localized(), systemImage: "key.horizontal", role: .destructive) {
+                if let req = fullAccessRequest(host, conn: conn) { shareFullAccess = req }
+            })
         }
 
         items.append(.divider)
@@ -687,12 +842,22 @@ struct ServersView: View {
         await run(.install, on: host) { pw in
             let result = try await provisioner.install(on: host, password: pw, options: options)
             let cfg = try OlcrtcURI.parse(result.uri)
+            // #355 (audit A1): carry the vp8 + sei tuning the install URI may
+            // encode (server-script format) instead of dropping them to
+            // defaults; nil payload fields fall back to OlcrtcConnection's own
+            // defaults, same as the recover path.
             let params = OlcrtcConnection(
-                carrier:   cfg.carrier,
-                transport: cfg.transport,
-                roomID:    cfg.roomID,
-                key:       cfg.key,
-                clientID:  cfg.clientID
+                carrier:      cfg.carrier,
+                transport:    cfg.transport,
+                roomID:       cfg.roomID,
+                key:          cfg.key,
+                clientID:     cfg.clientID,
+                vp8FPS:       cfg.vp8FPS,
+                vp8BatchSize: cfg.vp8BatchSize,
+                seiFPS:       cfg.seiFPS   ?? 30,
+                seiBatch:     cfg.seiBatch ?? 10,
+                seiFrag:      cfg.seiFrag  ?? 1200,
+                seiACK:       cfg.seiACK   ?? 1
             )
             let record = ConnectionRecord(name: host.label, details: .olcrtc(params))
             connections.add(record)
@@ -818,6 +983,9 @@ struct ServersView: View {
                let existing = connections.connections.first(where: { $0.id == connID }),
                case .olcrtc(let oldParams) = existing.details,
                let cfg = try? OlcrtcURI.parse(uri) {
+                // #355 (audit A1): carry the sei tuning through the rebuild —
+                // these were dropped, resetting SEI to defaults on every
+                // reconfigure. Mirror how vp8FPS/vp8BatchSize are preserved.
                 let updated = OlcrtcConnection(
                     carrier:      cfg.carrier,
                     transport:    cfg.transport,
@@ -827,7 +995,11 @@ struct ServersView: View {
                     vp8FPS:       oldParams.vp8FPS,
                     vp8BatchSize: oldParams.vp8BatchSize,
                     socksUser:    oldParams.socksUser,
-                    socksPass:    oldParams.socksPass
+                    socksPass:    oldParams.socksPass,
+                    seiFPS:       oldParams.seiFPS,
+                    seiBatch:     oldParams.seiBatch,
+                    seiFrag:      oldParams.seiFrag,
+                    seiACK:       oldParams.seiACK
                 )
                 var updatedRecord = existing
                 updatedRecord.details = .olcrtc(updated)
@@ -962,8 +1134,9 @@ struct ServersView: View {
                                     .font(.system(.body, design: .monospaced))
                                 HStack(spacing: 8) {
                                     Circle()
+                                        // #350 was: Color.green / Color.orange — route through Theme.Palette.
                                         .fill(container.status == .notFound ? Color.secondary :
-                                              container.status.shortLabel.hasPrefix("Up") ? Color.green : Color.orange)
+                                              container.status.shortLabel.hasPrefix("Up") ? Theme.Palette.green : Theme.Palette.orange)
                                         .frame(width: 8, height: 8)
                                     Text(container.status.shortLabel)
                                         .font(.caption)
@@ -1009,8 +1182,17 @@ struct ServersView: View {
         updated.lastContainerName = container.name
         serverStore.update(updated, password: nil)
         display[host.id] = .base(.stopped)   // container present; Check confirms run-state
-        alertText = "Restored: \(container.name)"
+        alertText = L10n.scanRestored_fmt.formatted(container.name)   // #346 was: "Restored: \(container.name)"
     }
+}
+
+// #135: identifiable wrapper so the full-access share can drive a `.sheet(item:)`
+// the same way `shareConn` does. Carries the connection (for the URI-only top of
+// the sheet) plus the SSH payload that unlocks the destructive opt-in section.
+struct FullAccessShareRequest: Identifiable {
+    let id = UUID()
+    let conn: ConnectionRecord
+    let payload: FullAccessShare
 }
 
 // #340: both appearance variants.

@@ -403,4 +403,99 @@ final class TunnelManagerStateTests: XCTestCase {
         manager.state = .disconnected
     }
     // eoc #313
+
+    // MARK: nonisolated bound-port mirror + activeSocksPort (#351)
+    //
+    // SOCKSSession builds tunnel-mode sessions off MainActor, so it can't read the
+    // @Published `boundPort`. #351 mirrors every write into a nonisolated
+    // `liveBoundPort`, and `activeSocksPort` prefers it over the configured port
+    // while a session is live — otherwise a live port edit while connected would
+    // point keep-alive's verify probe at the wrong port and tear down a healthy
+    // tunnel (#313 follow-up). The mirror's lifecycle must match `boundPort`.
+
+    func testActiveSocksPortFallsBackToConfiguredWhenIdle() throws {
+        let s = SettingsStore.shared
+        let saved = s.socksPort
+        defer { s.socksPort = saved }
+        let free = try XCTUnwrap(someFreePort(), "no free local port to test on")
+
+        // Drive a full connect→disconnect so the mirror is deterministically
+        // cleared (the static `liveBoundPort` is shared across instances/tests,
+        // so a prior connect could otherwise leave it set).
+        s.socksPort = free
+        let manager = makeManager()
+        manager.connect(record: record(with: validParams()))
+        manager.state = .disconnected
+        XCTAssertNil(TunnelManager.liveBoundPort, "mirror must clear when the session ends")
+        // No live session → activeSocksPort falls back to the configured port.
+        XCTAssertEqual(TunnelManager.activeSocksPort, free)
+    }
+
+    func testActiveSocksPortPrefersBoundPortWhileConnectedAfterLiveEdit() throws {
+        let s = SettingsStore.shared
+        let saved = s.socksPort
+        defer { s.socksPort = saved }
+        let free = try XCTUnwrap(someFreePort(), "no free local port to test on")
+
+        s.socksPort = free
+        let manager = makeManager()
+        manager.connect(record: record(with: validParams()))
+        XCTAssertEqual(manager.state, .connecting)
+        // The mirror tracks the reserved snapshot and activeSocksPort prefers it.
+        XCTAssertEqual(TunnelManager.liveBoundPort, free)
+        XCTAssertEqual(TunnelManager.activeSocksPort, free)
+
+        // Live port edit while up: in-app SOCKS traffic must still target the
+        // port the session actually bound, not the freshly-typed setting (#351).
+        let other = free == 8808 ? 8809 : 8808
+        s.socksPort = other
+        XCTAssertEqual(TunnelManager.activeSocksPort, free,
+                       "activeSocksPort must stay on the bound port, not the edited setting")
+
+        // Session over → mirror clears → activeSocksPort falls back to configured.
+        manager.state = .disconnected
+        XCTAssertNil(TunnelManager.liveBoundPort)
+        XCTAssertEqual(TunnelManager.activeSocksPort, other)
+    }
+
+    // MARK: lastTunnelActivityDate — lock-backed get/set/reset (#372)
+    //
+    // The activity marker is now backed by an OSAllocatedUnfairLock instead of a
+    // `nonisolated(unsafe)` raw static. The Date? surface must round-trip a value
+    // (sub-millisecond precision is lost going through Double, so compare with a
+    // tolerance), reset to nil, and stay consistent under concurrent writes/reads
+    // (no crash, no torn read — the previous unsynchronised static was UB).
+
+    func testActivityDateRoundTripsAndResets() throws {
+        let now = Date()
+        TunnelManager.lastTunnelActivityDate = now
+        let read = try XCTUnwrap(TunnelManager.lastTunnelActivityDate)
+        XCTAssertEqual(read.timeIntervalSinceReferenceDate,
+                       now.timeIntervalSinceReferenceDate, accuracy: 0.001)
+        // #333 reset-on-disconnect semantics.
+        TunnelManager.lastTunnelActivityDate = nil
+        XCTAssertNil(TunnelManager.lastTunnelActivityDate)
+    }
+
+    func testActivityDateConcurrentAccessIsSafe() {
+        // Hammer the lock-backed store from many tasks at once; the assertion is
+        // simply that this completes without a crash / sanitizer trap and leaves
+        // a readable (non-torn) value behind. Under the old raw static this was a
+        // data race; ThreadSanitizer would flag it.
+        let exp = expectation(description: "concurrent activity writes")
+        exp.expectedFulfillmentCount = 64
+        for i in 0..<64 {
+            DispatchQueue.global().async {
+                if i % 2 == 0 {
+                    TunnelManager.lastTunnelActivityDate = Date()
+                } else {
+                    _ = TunnelManager.lastTunnelActivityDate
+                }
+                exp.fulfill()
+            }
+        }
+        wait(for: [exp], timeout: 5)
+        // Leave a clean baseline for any later test reading the shared static.
+        TunnelManager.lastTunnelActivityDate = nil
+    }
 }

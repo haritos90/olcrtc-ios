@@ -15,6 +15,12 @@ sees a code in the Logs tab can look up what it means and how to act — and so 
 **Status:** 🟢 emitted today · 🟡 planned (to be wired by [TODO #279]).
 **Source:** `app` = our Swift (`LogStore`) · `core` = the gomobile/Go olcrtc binary (captured via the log writer / `podman logs`).
 
+**Finding a code in the app (#279):** wired client (`OLC-1xxx`) lines are emitted with their
+code as a `[OLC-####]` prefix (`LogStore.log(…, code:)` → `OlcCode`). Open the **Logs** tab and
+type a code (e.g. `OLC-1026`) into the search field to jump to every matching line. Server
+(`OLC-2xxx`) lines are produced by the Go core / `podman logs` and are not prefixed by the app;
+search the catalogued message text instead.
+
 English only for now (see the L10n convention — every key still gets a Russian entry when wired into the UI).
 Seeded from real client + server captures (2026-06, build 221 / telemost + vp8channel). This is a starting
 set, not exhaustive — extend it as new conditions are caught.

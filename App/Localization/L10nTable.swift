@@ -68,6 +68,18 @@ enum L10nTable {
         .shareConnectionURIHeader:   "Connection URI",
         .primaryRoleMain:            "primary",
         .copiedURI_fmt:              "📋 URI copied: %@",
+        // #135: full-access (co-admin) share
+        .shareFullAccessTitle:       "Share full access (SSH)",
+        .shareFullAccessHeader:      "Full access (SSH)",
+        .shareFullAccessWarning:     "This link contains your SSH login and password. Anyone with it can fully control this VPS — install, reconfigure, reboot, or wipe it. Share only with someone you trust to co-administer the server.",
+        .shareFullAccessReveal:      "Reveal full-access link",
+        .shareFullAccessCopy:        "Copy full-access link",
+        .shareFullAccessCopied_fmt:  "🔑 Full-access link copied: %@",
+        // #366
+        .fullAccessImportTitle:      "Import full access?",
+        .fullAccessImportBody_fmt:   "This link grants full SSH control of the VPS “%@” — its address, login and password will be saved on this device. Only import links you trust.",
+        .fullAccessImportAddAction:  "Add full access",
+        .fullAccessImportInvalid:    "This full-access link is invalid.",
 
         // AddConnectionView
         .newConnectionTitle:         "New connection",
@@ -96,6 +108,13 @@ enum L10nTable {
         .vp8BatchLabel:              "Batch size",
         .globalDefault_fmt:          "global (%d)",
         .overrideHint:               "Overrides global settings for this connection only. «×» resets to global.",
+        // #365: per-connection seichannel params
+        .seiParamsHeader:            "SEI parameters",
+        .seiFpsLabel:                "FPS",
+        .seiBatchLabel:              "Batch size",
+        .seiFragLabel:               "Fragment size",
+        .seiAckLabel:                "ACK timeout (ms)",
+        .seiParamsHint:              "Tuning for the SEI channel. Sent only when the transport is seichannel; stored either way.",
 
         // ServersView
         .serversTitle:               "VPS list",
@@ -223,6 +242,7 @@ enum L10nTable {
         .logsSegVPS:                 "VPS",
         .logsSegContainer:           "Container",
         .logsLineCount_fmt:          "%d lines",
+        .logsPeerCount_fmt:          "👥 %d peers",
         // #338: inline container fetch — source card + monotonic phases
         .logsFetchAction:            "Fetch",
         .logsFetchFromHost_fmt:      "Fetch from %@",
@@ -277,15 +297,13 @@ enum L10nTable {
         .fontFooter:                 "Applied app-wide (via SwiftUI dynamicTypeSize). Smaller = denser, larger = easier to read.",
         .languageLabel:              "Language",
         .themeLabel:                 "Theme",
-        .themeRefined:               "Refined",
-        .themeConsole:               "Console",
-        .directionLabel:             "Direction",   // #343: Refined/Console picker label
 
-        // #340: appearance scheme picker
+        // #340/#299: appearance scheme picker (System / Light / Dark / Gray)
         .appearanceLabel:            "Appearance",
         .appearanceSystem:           "System",
         .appearanceLight:            "Light",
         .appearanceDark:             "Dark",
+        .appearanceGray:             "Gray",
         // #342: fixed-footprint hero footer
         .heroDisconnectedHint_fmt:   "Flip the switch to connect via %@.",
 
@@ -334,6 +352,7 @@ enum L10nTable {
         .serverNotResponding:        "Conferencing server not responding",
         .disconnectingArrow:         "→ Disconnecting",
         .netPathLost:                "⚠ Network lost — waiting for connectivity",
+        .waitingForPortRelease:      "⏳ Waiting for port release…",
         .netPathRestored:            "network restored",
         .netPathChanged:             "network path changed",
         .reconnecting_fmt:           "↻ Reconnecting (%@)",
@@ -349,10 +368,12 @@ enum L10nTable {
         .validateKeyNonHex:          "Key contains non-hex characters",
         .validateRoomIDEmpty:        "Room ID cannot be empty",
         .errorPortBusy_fmt:          "Port %d is busy — free it or change the port in Settings",
+        .errorSecretsLocked:         "Unlock the device and reopen the app to load your saved key.",
 
         // OlcrtcURI errors
         .uriErrorInvalidScheme:      "URI must start with olcrtc://",
         .uriErrorMissingField_fmt:   "Missing field: %@",
+        .uriErrorMixedBrackets:      "URI payload brackets are mismatched (expected [...] or <...>)",
 
         // Provisioning
         .provisioningSSHConnecting:  "Connecting via SSH…",
@@ -480,6 +501,59 @@ enum L10nTable {
         .subImportAddAction:         "Add",
         .subInvalidLink:             "Subscription link must look like olcrtc-sub://host/path",
         .subEmptyList:               "The subscription contains no valid connections",
+        .subImportPastedSource:      "pasted list",
+
+        // #363: surfaced subscription metadata
+        .subMetaSource:              "Source",
+        .subMetaServers:             "Servers",
+        .subMetaRefresh:             "Refresh",
+        .subMetaRefreshNever:        "Never",
+        .subMetaRefreshInterval_fmt: "every %@",
+        .subMetaUsed:                "Used",
+        .subMetaAvailable:           "Available",
+
+        // #364: batch "ping group"
+        .pingGroupAction:            "Ping all",
+        .pingGroupResult_fmt:        "📡 Pinged %@: %d ok, %d failed",
+
+        // #346: VPS-card mini-stat labels (abbreviations; ru = en per operator)
+        .vpsStatPing:                "Ping",
+        .vpsStatDisk:                "Disk",
+        .vpsStatRAM:                 "RAM",
+        .vpsStatUp:                  "Up",
+        .scanRestored_fmt:           "Restored: %@",
+
+        // #337: screenshot-safe IP masking
+        .maskIPsLabel:               "Hide IP addresses",
+        .maskIPsFooter:              "Masks IP addresses on the Connections diagnostics and VPS cards for safe screenshots. Display-only — copy actions and stored values stay real. Logs are not masked.",
+
+        // #328: active-carrier endpoints with one-tap copy
+        .carrierEndpointsTitle:      "Carrier endpoints",
+        .carrierEndpointsHint:       "Add these as DIRECT rules in your proxy app so its own traffic doesn't loop through olcrtc.",
+        .carrierEndpointHost:        "Host",
+        .carrierEndpointResolvedIPs: "Resolved IPs",
+        .carrierEndpointResolving:   "Resolving…",
+        .carrierEndpointUnresolved:  "Could not resolve",
+        .carrierEndpointNoHost:      "This carrier's room ID isn't a host — nothing to exclude.",
+        .carrierEndpointCopied_fmt:  "📋 Copied: %@",
+        .carrierEndpointRefresh:     "Re-resolve",
+
+        // #359: accessibility for the hero connect toggle + icon toolbar buttons
+        .a11yConnectToggle:          "Connect",
+        .a11yConnectHintSelectFirst: "Select a connection first",
+        .a11yStateConnected:         "Connected",
+        .a11yStateConnecting:        "Connecting",
+        .a11yStateDisconnected:      "Disconnected",
+
+        // #360: in-app update checker (GitHub Releases)
+        .updateCheckLabel:           "Check for updates",
+        .updateCheckFooter:          "Once a day, checks GitHub Releases for a newer build and tells you how to sideload it. Anonymous — no account, no install id, no download is sent. Turn off to never contact GitHub.",
+        .updateAvailableTitle_fmt:   "Update available — %@",
+        .updateAvailableBody:        "A newer build is on GitHub. Open the release page or, if you sideload, tap your installer below to fetch the unsigned build.",
+        .updateOpenReleasePage:      "Open release page",
+        .updateInstallSideStore:     "Install with SideStore",
+        .updateInstallLiveContainer: "Install with LiveContainer",
+        .updateLater:                "Later",
     ]
 
     // MARK: Russian
@@ -531,6 +605,18 @@ enum L10nTable {
         .shareConnectionTitle:       "Поделиться подключением",
         .shareConnectionExplanation: "Отправь этот URI чтобы другой пользователь мог подключиться через твой сервер. Содержит carrier, room ID и ключ шифрования — SSH-данные сервера не включены.",
         .shareConnectionURIHeader:   "URI подключения",
+        // #135: full-access (co-admin) share
+        .shareFullAccessTitle:       "Поделиться полным доступом (SSH)",
+        .shareFullAccessHeader:      "Полный доступ (SSH)",
+        .shareFullAccessWarning:     "Эта ссылка содержит SSH-логин и пароль. Любой, у кого она есть, получит полный контроль над VPS — установка, перенастройка, перезагрузка и удаление. Делись только с тем, кому доверяешь администрирование сервера.",
+        .shareFullAccessReveal:      "Показать ссылку полного доступа",
+        .shareFullAccessCopy:        "Скопировать ссылку полного доступа",
+        .shareFullAccessCopied_fmt:  "🔑 Ссылка полного доступа скопирована: %@",
+        // #366
+        .fullAccessImportTitle:      "Импортировать полный доступ?",
+        .fullAccessImportBody_fmt:   "Эта ссылка даёт полный SSH-доступ к серверу «%@» — его адрес, логин и пароль будут сохранены на этом устройстве. Импортируйте только доверенные ссылки.",
+        .fullAccessImportAddAction:  "Добавить полный доступ",
+        .fullAccessImportInvalid:    "Недействительная ссылка полного доступа.",
         .primaryRoleMain:            "основной",
         .copiedURI_fmt:              "📋 URI скопирован: %@",
 
@@ -558,6 +644,13 @@ enum L10nTable {
         .vp8BatchLabel:              "Batch size",
         .globalDefault_fmt:          "глобальный (%d)",
         .overrideHint:               "Переопределяют глобальные настройки только для этого подключения. «×» сбрасывает к глобальному.",
+        // #365: параметры seichannel для соединения
+        .seiParamsHeader:            "Параметры SEI",
+        .seiFpsLabel:                "FPS",
+        .seiBatchLabel:              "Размер пакета",
+        .seiFragLabel:               "Размер фрагмента",
+        .seiAckLabel:                "Таймаут ACK (мс)",
+        .seiParamsHint:              "Настройки SEI-канала. Отправляются только при транспорте seichannel, но сохраняются в любом случае.",
 
         // ServersView
         .serversTitle:               "Список VPS",
@@ -685,6 +778,7 @@ enum L10nTable {
         .logsSegVPS:                 "VPS",
         .logsSegContainer:           "Контейнер",
         .logsLineCount_fmt:          "%d стр.",
+        .logsPeerCount_fmt:          "👥 %d участн.",
         // #338: inline container fetch — карточка источника + фазы
         .logsFetchAction:            "Загрузить",
         .logsFetchFromHost_fmt:      "Загрузить с %@",
@@ -740,15 +834,13 @@ enum L10nTable {
         .fontFooter:                 "Применяется ко всему приложению (через SwiftUI dynamicTypeSize). Меньше = плотнее, больше = удобнее читать.",
         .languageLabel:              "Язык",
         .themeLabel:                 "Тема",
-        .themeRefined:               "Refined",
-        .themeConsole:               "Console",
-        .directionLabel:             "Направление",   // #343: Refined/Console picker label
 
-        // #340: переключатель оформления
+        // #340/#299: переключатель оформления (Системное / Светлое / Тёмное / Серое)
         .appearanceLabel:            "Оформление",
         .appearanceSystem:           "Системное",
         .appearanceLight:            "Светлое",
         .appearanceDark:             "Тёмное",
+        .appearanceGray:             "Серая",
         // #342: подсказка в подвале hero-карточки
         .heroDisconnectedHint_fmt:   "Переведи переключатель, чтобы подключиться через %@.",
 
@@ -797,6 +889,7 @@ enum L10nTable {
         .serverNotResponding:        "Сервер видеосвязи не отвечает",
         .disconnectingArrow:         "→ Отключение",
         .netPathLost:                "⚠ Сеть потеряна — ожидание подключения",
+        .waitingForPortRelease:      "⏳ Ожидание освобождения порта…",
         .netPathRestored:            "сеть восстановлена",
         .netPathChanged:             "сеть изменилась",
         .reconnecting_fmt:           "↻ Переподключение (%@)",
@@ -812,10 +905,12 @@ enum L10nTable {
         .validateKeyNonHex:          "Ключ содержит не-hex символы",
         .validateRoomIDEmpty:        "Room ID не может быть пустым",
         .errorPortBusy_fmt:          "Порт %d занят — освободите его или смените порт в Настройках",
+        .errorSecretsLocked:         "Разблокируйте устройство и снова откройте приложение, чтобы загрузить сохранённый ключ.",
 
         // OlcrtcURI errors
         .uriErrorInvalidScheme:      "URI должен начинаться с olcrtc://",
         .uriErrorMissingField_fmt:   "Не найдено поле: %@",
+        .uriErrorMixedBrackets:      "Скобки полезной нагрузки URI не совпадают (ожидается [...] или <...>)",
 
         // Provisioning
         .provisioningSSHConnecting:  "Подключение по SSH…",
@@ -943,5 +1038,58 @@ enum L10nTable {
         .subImportAddAction:         "Добавить",
         .subInvalidLink:             "Ссылка подписки должна иметь вид olcrtc-sub://host/path",
         .subEmptyList:               "Подписка не содержит действительных соединений",
+        .subImportPastedSource:      "вставленный список",
+
+        // #363: отображение метаданных подписки
+        .subMetaSource:              "Источник",
+        .subMetaServers:             "Серверы",
+        .subMetaRefresh:             "Обновление",
+        .subMetaRefreshNever:        "Никогда",
+        .subMetaRefreshInterval_fmt: "каждые %@",
+        .subMetaUsed:                "Использовано",
+        .subMetaAvailable:           "Доступно",
+
+        // #364: групповой пинг
+        .pingGroupAction:            "Пинговать все",
+        .pingGroupResult_fmt:        "📡 Пинг %@: %d ок, %d неудач",
+
+        // #346: подписи мини-статистики карточки VPS (аббревиатуры; ru = en по решению оператора)
+        .vpsStatPing:                "Ping",
+        .vpsStatDisk:                "Disk",
+        .vpsStatRAM:                 "RAM",
+        .vpsStatUp:                  "Up",
+        .scanRestored_fmt:           "Восстановлено: %@",
+
+        // #337: безопасный для скриншотов режим — скрытие IP
+        .maskIPsLabel:               "Скрывать IP-адреса",
+        .maskIPsFooter:              "Скрывает IP-адреса в диагностике на вкладке «Соединения» и на карточках VPS для безопасных скриншотов. Только отображение — копирование и сохранённые значения остаются настоящими. Логи не скрываются.",
+
+        // #328: конечные точки активного оператора с копированием в один тап
+        .carrierEndpointsTitle:      "Точки оператора",
+        .carrierEndpointsHint:       "Добавь их как DIRECT-правила в прокси-приложении, чтобы его собственный трафик не зациклился через olcrtc.",
+        .carrierEndpointHost:        "Хост",
+        .carrierEndpointResolvedIPs: "Найденные IP",
+        .carrierEndpointResolving:   "Разрешение…",
+        .carrierEndpointUnresolved:  "Не удалось разрешить",
+        .carrierEndpointNoHost:      "ID комнаты этого оператора не является хостом — исключать нечего.",
+        .carrierEndpointCopied_fmt:  "📋 Скопировано: %@",
+        .carrierEndpointRefresh:     "Разрешить заново",
+
+        // #359: доступность переключателя подключения и кнопок-иконок в тулбаре
+        .a11yConnectToggle:          "Подключиться",
+        .a11yConnectHintSelectFirst: "Сначала выбери соединение",
+        .a11yStateConnected:         "Подключено",
+        .a11yStateConnecting:        "Подключение",
+        .a11yStateDisconnected:      "Отключено",
+
+        // #360: проверка обновлений (GitHub Releases)
+        .updateCheckLabel:           "Проверять обновления",
+        .updateCheckFooter:          "Раз в сутки проверяет в GitHub Releases новую сборку и подсказывает, как её установить через сайдлоад. Анонимно — без аккаунта, без идентификатора установки, ничего не отправляется. Отключи, чтобы вообще не обращаться к GitHub.",
+        .updateAvailableTitle_fmt:   "Доступно обновление — %@",
+        .updateAvailableBody:        "В GitHub есть более новая сборка. Открой страницу релиза или, если ставишь через сайдлоад, нажми кнопку своего установщика ниже, чтобы скачать неподписанную сборку.",
+        .updateOpenReleasePage:      "Открыть страницу релиза",
+        .updateInstallSideStore:     "Установить через SideStore",
+        .updateInstallLiveContainer: "Установить через LiveContainer",
+        .updateLater:                "Позже",
     ]
 }

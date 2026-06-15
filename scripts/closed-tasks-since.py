@@ -5,9 +5,12 @@ Diffs the **Closed** table of `TODO.md` against its version at `--since <ref>` a
 prints the newly-closed rows as a markdown bullet list — `- #ID release-note` —
 for the GitHub Release notes (release.yml appends the output under a heading).
 #315: the bullet text is the row's **Release note** column (the short,
-user-facing "what's new" line filled in when the task is closed); rows without
-one (legacy/`—`) fall back to the task title. The verbose **Resolution** column
-is deliberately NOT emitted — it's TODO.md history, not release copy.
+user-facing "what's new" line filled in when the task is closed).
+#347: rows whose Release note is `—` (or empty) are SKIPPED entirely — they are
+internal-only and not announced; we deliberately do NOT fall back to the task
+title (service-task titles like #322/#345 "amend the commit message" otherwise
+leaked into release notes). The verbose **Resolution** column is also NOT emitted
+— it's TODO.md history, not release copy.
 No new closed rows, no `--since`, or no prior `TODO.md` → prints nothing, so the
 caller simply omits the section. Stdlib only (mirrors scripts/parity_check.py).
 """
@@ -81,9 +84,12 @@ def main() -> None:
     for tid in new_ids:
         title, resolution, note = current[tid]
         # #315 was: `- #ID title — resolution` — too verbose for release copy.
-        # The Release note column is the curated line; title is the fallback.
-        text = note if note and note != "—" else title
-        print(f"- #{tid} {text}")
+        # #347 was: `text = note if note and note != "—" else title` — fell back
+        # to the title for "—" rows, leaking service-task titles into the notes.
+        # Now: skip "—"/empty entirely; "—" means internal-only, not announced.
+        if not note or note == "—":
+            continue
+        print(f"- #{tid} {note}")
 
 
 if __name__ == "__main__":
