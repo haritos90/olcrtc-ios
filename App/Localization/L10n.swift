@@ -397,6 +397,7 @@ enum L10n: String, CaseIterable {
     case pingFailed                         // "Ping failed"
     case healthCheckAction                  // "Health check" — menu item + chip a11y (#274)
     case healthResult_fmt                   // "🩺 Health %@ — ready %@ · RTT %@" (#274)
+    case healthResultRTT_fmt                // #407: "🩺 Health %@ — RTT %@" (RTT-only fast path)
 
     // MARK: ServersView alerts
     case alertPasswordMissingShort          // "Password not found"
@@ -493,6 +494,11 @@ enum L10n: String, CaseIterable {
     case carrierEndpointNoHost              // "This carrier's room ID isn't a host — nothing to exclude."
     case carrierEndpointCopied_fmt          // "📋 Copied: %@"
     case carrierEndpointRefresh             // "Re-resolve" — IPs rotate
+    // #406: carrier endpoints behind a Diagnostics button + a copy-all action.
+    case carrierEndpointsCheckAction        // "Check" — opens the sheet
+    case carrierEndpointsConnectHint        // diagnostics subtitle when disconnected
+    case carrierEndpointsReadyHint          // diagnostics subtitle when connected
+    case carrierEndpointCopyAll             // "Copy host & IPs"
 
     // MARK: #359 — accessibility for the hero connect toggle + icon toolbar buttons
     case a11yConnectToggle                  // "Connect"

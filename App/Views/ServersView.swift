@@ -601,26 +601,22 @@ struct ServersView: View {
     // 241/2048M · UP 11d, dimmed while an op runs.
     private func metricsStrip(_ host: ServerHost, state: HostDisplay) -> some View {
         let stats = vpsStats[host.id]
-        return HStack(spacing: 8) {
+        // #408: drop the "·" separators and pack the stats closer. The separators
+        // plus their padding ate roughly a third of the row, squeezing the values
+        // until they truncated ("4.4/4…", "501/19…"); the uppercase-tertiary label
+        // vs. mono-primary value contrast already delineates each stat without a
+        // glyph between them. #408 was: HStack(spacing: 8) with a `statDot` between
+        // every OlcMiniStat.
+        return HStack(spacing: 12) {
             pingMiniStat(host)
-            statDot
             // #346: labels through L10n (ru = en for the abbreviations); units
             // like "G"/"M"/"d" inside the values stay English.
             OlcMiniStat(label: L10n.vpsStatDisk.localized(), value: Self.shortUsage(stats?.disk))
-            statDot
             OlcMiniStat(label: L10n.vpsStatRAM.localized(),  value: Self.shortUsage(stats?.ram))
-            statDot
             OlcMiniStat(label: L10n.vpsStatUp.localized(),   value: Self.shortUptime(stats?.uptime))
             Spacer(minLength: 0)
         }
         .opacity(state.isRunning ? 0.45 : 1)
-    }
-
-    private var statDot: some View {
-        Text("·").font(.caption2).foregroundStyle(Theme.Palette.textTertiary)
-            // #369: decorative separator between mini-stats — VoiceOver would
-            // otherwise read "middle dot" between each metric.
-            .accessibilityHidden(true)
     }
 
     private func pingMiniStat(_ host: ServerHost) -> OlcMiniStat {

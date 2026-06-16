@@ -433,6 +433,7 @@ enum L10nTable {
         .pingFailed:                 "Ping failed",
         .healthCheckAction:          "Health check",
         .healthResult_fmt:           "🩺 Health %@ — ready %@ · RTT %@",
+        .healthResultRTT_fmt:        "🩺 Health %@ — RTT %@",
 
         // ServersView alerts
         .alertPasswordMissingShort:  "Password not found",
@@ -537,6 +538,10 @@ enum L10nTable {
         .carrierEndpointNoHost:      "This carrier's room ID isn't a host — nothing to exclude.",
         .carrierEndpointCopied_fmt:  "📋 Copied: %@",
         .carrierEndpointRefresh:     "Re-resolve",
+        .carrierEndpointsCheckAction: "Check",
+        .carrierEndpointsConnectHint: "Connect to a server to inspect its carrier endpoints.",
+        .carrierEndpointsReadyHint:  "Endpoints to route DIRECT in your proxy app.",
+        .carrierEndpointCopyAll:     "Copy host & IPs",
 
         // #359: accessibility for the hero connect toggle + icon toolbar buttons
         .a11yConnectToggle:          "Connect",
@@ -970,6 +975,7 @@ enum L10nTable {
         .pingFailed:                 "Пинг не удался",
         .healthCheckAction:          "Проверка соединения",
         .healthResult_fmt:           "🩺 Соединение %@ — готовность %@ · RTT %@",
+        .healthResultRTT_fmt:        "🩺 Соединение %@ — RTT %@",
 
         // ServersView alerts
         .alertPasswordMissingShort:  "Пароль не найден",
@@ -1074,6 +1080,10 @@ enum L10nTable {
         .carrierEndpointNoHost:      "ID комнаты этого оператора не является хостом — исключать нечего.",
         .carrierEndpointCopied_fmt:  "📋 Скопировано: %@",
         .carrierEndpointRefresh:     "Разрешить заново",
+        .carrierEndpointsCheckAction: "Проверить",
+        .carrierEndpointsConnectHint: "Подключись к серверу, чтобы посмотреть точки оператора.",
+        .carrierEndpointsReadyHint:  "Точки для DIRECT-правил в прокси-приложении.",
+        .carrierEndpointCopyAll:     "Скопировать хост и IP",
 
         // #359: доступность переключателя подключения и кнопок-иконок в тулбаре
         .a11yConnectToggle:          "Подключиться",

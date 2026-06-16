@@ -189,6 +189,11 @@ final class TunnelManager: ObservableObject {
 
     private var lastRecord: ConnectionRecord?
     private var keepAliveTask: Task<Void, Never>?
+    /// #409: the off-MainActor native teardown kicked off by `disconnect()`.
+    /// `MobileStop()` blocks until the WebRTC session fully closes, so it runs in
+    /// a detached Task to keep the UI responsive; a following `connect()` cancels
+    /// it so a stray late Stop can't tear down the freshly-started session.
+    private var stopTask: Task<Void, Never>?
     private let bgKeeper = BackgroundRuntimeKeeper()
 
     // MARK: Recovery (#270) — capped exponential-backoff auto-reconnect
@@ -323,6 +328,10 @@ final class TunnelManager: ObservableObject {
         }
         // A manual connect supersedes any in-flight auto-recovery loop (#270).
         recoveryTask?.cancel(); recoveryTask = nil
+        // #409: cancel a pending off-MainActor teardown from a just-prior
+        // disconnect so its late MobileStop() can't kill the session we're about
+        // to start (both hit the same Go singleton).
+        stopTask?.cancel(); stopTask = nil
         lastRecord = record
         start(record: record)
     }
@@ -337,7 +346,19 @@ final class TunnelManager: ObservableObject {
         recoveryTask?.cancel();  recoveryTask = nil
         keepAliveTask?.cancel(); keepAliveTask = nil
         bgKeeper.stop()
-        activeEngine?.stop()
+        // #409: MobileStop() blocks until the native WebRTC session fully tears
+        // down (leave-presence + peer close) — running it on the MainActor froze
+        // the entire UI for seconds. Flip state synchronously (below) so the UI
+        // reflects the disconnect at once, then stop the engine OFF the MainActor.
+        // A subsequent connect() cancels this task; the Go singleton serialises
+        // Stop/Start and #333's port-release wait covers the teardown window.
+        // #409 was: activeEngine?.stop() called synchronously on the MainActor.
+        let engine = activeEngine
+        stopTask?.cancel()
+        stopTask = Task.detached {
+            if Task.isCancelled { return }
+            engine?.stop()
+        }
         lastRecord = nil
         // #333: stopping our own listener opens the async-teardown window during
         // which the port reads busy on our ghost. Record it so the *next* connect

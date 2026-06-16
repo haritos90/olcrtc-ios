@@ -52,14 +52,11 @@ struct ConnectionsView: View {
     /// #264: timestamp of the last IP check, shown as a small caption.
     @State private var ipCheckTime    : Date?
 
-    // boc #328: carrier-endpoint exclusions for the active connection. The
-    // base host derives from the connection params (jitsi room URL); its IPs
-    // rotate, so they're resolved on demand (resolver pass — Mobile.objc.h
-    // exposes no live ICE endpoints, so this is a best-effort hint, not an
-    // ICE-accurate list). nil host = the carrier's roomID isn't a host.
-    @State private var carrierHostIPs : [String] = []
-    @State private var carrierResolving = false
-    // eoc #328
+    // #406 was: @State carrierHostIPs / carrierResolving + an inline Section that
+    // appeared the moment the tunnel connected. The carrier-endpoint exclusions
+    // (#328) now live behind a Diagnostics button that opens CarrierEndpointsView,
+    // which owns its own resolve state — so the Connections layout no longer
+    // shifts when a session comes up.
 
     /// #274: per-row health-check state, keyed by connection id. Absent = never
     /// run. One action runs both probes — time-to-ready (#242) + RTT (#234) — and
@@ -88,12 +85,14 @@ struct ConnectionsView: View {
         case add
         case edit(ConnectionRecord)
         case qr(ConnectionRecord)
+        case carrierEndpoints(OlcrtcConnection)   // #406
 
         var id: String {
             switch self {
-            case .add:            return "add"
-            case .edit(let c):    return "edit-\(c.id.uuidString)"
-            case .qr(let c):      return "qr-\(c.id.uuidString)"
+            case .add:              return "add"
+            case .edit(let c):      return "edit-\(c.id.uuidString)"
+            case .qr(let c):        return "qr-\(c.id.uuidString)"
+            case .carrierEndpoints: return "carrier"
             }
         }
     }
@@ -133,6 +132,11 @@ struct ConnectionsView: View {
                             ipRow
                             Divider().overlay(Theme.Palette.separator)
                             speedRow
+                            // #406: carrier endpoints moved into Diagnostics as a
+                            // button that opens a sheet — no more card that pops in
+                            // on connect and shifts the screen.
+                            Divider().overlay(Theme.Palette.separator)
+                            carrierRow
                         }
                         .padding(.horizontal, Theme.Metrics.cardPadding)
                     }
@@ -140,9 +144,6 @@ struct ConnectionsView: View {
                 } header: {
                     Text(L10n.diagnosticsTitle.localized())
                 }
-
-                // #328: carrier-endpoint exclusions, only while connected.
-                carrierEndpointsSection
 
                 serversSection
             }
@@ -185,18 +186,11 @@ struct ConnectionsView: View {
                             }
                     }
                     .presentationDetents([.medium])
-                }
-            }
-            // #328: resolve the carrier base host's IPs when the tunnel comes up
-            // (and clear them when it goes down) so the exclusions card is
-            // populated without a manual tap. IPs rotate — the card offers a
-            // re-resolve button too.
-            .onChange(of: tunnel.state) { _, _ in
-                if let params = activeOlcrtcParams,
-                   let host = CarrierEndpoints.baseHost(for: params) {
-                    if carrierHostIPs.isEmpty { Task { await resolveCarrierHost(host) } }
-                } else {
-                    carrierHostIPs = []
+                case .carrierEndpoints(let params):
+                    // #406: the carrier-endpoint exclusions (#328), now a sheet
+                    // with copy-host / copy-IP / copy-both actions. It resolves on
+                    // appear and owns its own state.
+                    CarrierEndpointsView(params: params)
                 }
             }
         }
@@ -468,21 +462,23 @@ struct ConnectionsView: View {
 
     private var speedRow: some View {
         HStack(alignment: .top, spacing: 12) {
-            HStack(alignment: .top, spacing: 18) {
+            HStack(alignment: .top, spacing: 16) {
                 // #291: restore the measurement units next to the numbers — a bare
                 // "0.77" is ambiguous. #311: labels/formats through L10n.
-                // #342 was: unit baked into the value format ("%.0f ms") which
-                // inflated the mono number — now OlcMetric's `unit:` renders it
-                // as smaller secondary text, only next to a real number.
+                // #405: the unit now rides on the label line ("DL · Mbps") so the
+                // value column holds the full decimal — "40.7" used to overflow
+                // and wrap its fractional part to a second line. The unit shows
+                // unconditionally (it labels the column even before a test runs).
+                // #405 was: unit passed via speedUnit(...) after the value.
                 OlcMetric(label: L10n.speedLabelPing.localized(),
                           value: speedValue(speed.lastResult?.pingMs, L10n.speedPingValue_fmt.localized()),
-                          unit: speedUnit(speed.lastResult?.pingMs, L10n.speedUnitMs.localized()))
+                          unit: L10n.speedUnitMs.localized(), unitInLabel: true)
                 OlcMetric(label: L10n.speedLabelDL.localized(),
                           value: speedValue(speed.lastResult?.downloadMbps, L10n.speedRateValue_fmt.localized()),
-                          unit: speedUnit(speed.lastResult?.downloadMbps, L10n.speedUnitMbps.localized()))
+                          unit: L10n.speedUnitMbps.localized(), unitInLabel: true)
                 OlcMetric(label: L10n.speedLabelUL.localized(),
                           value: speedValue(speed.lastResult?.uploadMbps, L10n.speedRateValue_fmt.localized()),
-                          unit: speedUnit(speed.lastResult?.uploadMbps, L10n.speedUnitMbps.localized()))
+                          unit: L10n.speedUnitMbps.localized(), unitInLabel: true)
             }
             Spacer(minLength: 8)
             OlcButton(L10n.speedTestRun.localized(), role: .secondary, isBusy: speed.isTesting) {
@@ -498,10 +494,9 @@ struct ConnectionsView: View {
         return String(format: format, v)
     }
 
-    /// #342: the unit only accompanies a real number — never "…" or "—".
-    private func speedUnit(_ v: Double?, _ unit: String) -> String? {
-        !speed.isTesting && v != nil ? unit : nil
-    }
+    // #405 was: speedUnit(_:_:) — the unit now lives on the metric's label line
+    // (OlcMetric `unitInLabel`), shown unconditionally, so the per-value gate is
+    // gone.
 
     // IP-check display helpers (unchanged logic).
     private var ipCheckCollapsed: Bool {
@@ -523,125 +518,31 @@ struct ConnectionsView: View {
         return p
     }
 
-    /// #328: when connected, show the carrier base host + its resolved IPs
-    /// (and the proxy-loop exclusion hint) so the user can add DIRECT rules in
-    /// a Shadowrocket-style app. Hidden when disconnected. STUN/TURN hosts are
-    /// not exposed by the core (Mobile.objc.h), so we don't fabricate them.
-    @ViewBuilder
-    private var carrierEndpointsSection: some View {
-        if let params = activeOlcrtcParams {
-            Section {
-                OlcCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if let host = CarrierEndpoints.baseHost(for: params) {
-                            endpointRow(label: L10n.carrierEndpointHost.localized(), value: host)
-                            Divider().overlay(Theme.Palette.separator)
-                            resolvedIPsRow(host: host)
-                        } else {
-                            Text(L10n.carrierEndpointNoHost.localized())
-                                .font(.caption)
-                                .foregroundStyle(Theme.Palette.textSecondary)
-                        }
-                        Text(L10n.carrierEndpointsHint.localized())
-                            .font(.caption2)
-                            .foregroundStyle(Theme.Palette.textTertiary)
-                    }
-                }
-                .olcCardRow()
-            } header: {
+    /// #406: a Diagnostics row that opens the carrier-endpoint exclusions
+    /// (#328) on demand. The button is enabled (accent) only while connected to
+    /// an olcrtc node — the debug info isn't needed otherwise, and gating it
+    /// keeps the card from changing on connect/disconnect. #406 was: an inline
+    /// Section (`carrierEndpointsSection`) that appeared the moment a tunnel came
+    /// up and shifted the whole screen.
+    private var carrierRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(L10n.carrierEndpointsTitle.localized())
-            }
-        }
-    }
-
-    /// One copyable endpoint: label + monospaced value + a copy button.
-    private func endpointRow(label: String, value: String) -> some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .font(.caption2.weight(.semibold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(Theme.Palette.textTertiary)
-                Text(value)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.subheadline)
                     .foregroundStyle(Theme.Palette.textPrimary)
-                    .textSelection(.enabled)
-            }
-            Spacer(minLength: 8)
-            Button {
-                copyEndpoint(value)
-            } label: {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.accent)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(L10n.copyURIAction.localized())
-        }
-    }
-
-    /// The resolved-IPs row: a re-resolve action + each IP copyable. IPs rotate,
-    /// so the user copies both the host (above) and the current IPs.
-    @ViewBuilder
-    private func resolvedIPsRow(host: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(L10n.carrierEndpointResolvedIPs.localized())
-                    .font(.caption2.weight(.semibold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(Theme.Palette.textTertiary)
-                Spacer()
-                Button(L10n.carrierEndpointRefresh.localized()) {
-                    Task { await resolveCarrierHost(host) }
-                }
-                .font(.caption2)
-                .buttonStyle(.borderless)
-                .disabled(carrierResolving)
-            }
-            if carrierResolving {
-                Text(L10n.carrierEndpointResolving.localized())
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(Theme.Palette.textSecondary)
-            } else if carrierHostIPs.isEmpty {
-                Text(L10n.carrierEndpointUnresolved.localized())
+                Text(activeOlcrtcParams != nil
+                     ? L10n.carrierEndpointsReadyHint.localized()
+                     : L10n.carrierEndpointsConnectHint.localized())
                     .font(.caption)
                     .foregroundStyle(Theme.Palette.textSecondary)
-            } else {
-                ForEach(carrierHostIPs, id: \.self) { ip in
-                    HStack(spacing: 8) {
-                        Text(ip)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(Theme.Palette.textPrimary)
-                            .textSelection(.enabled)
-                        Spacer(minLength: 8)
-                        Button { copyEndpoint(ip) } label: {
-                            Image(systemName: "doc.on.doc")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(Theme.Palette.accent)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(L10n.copyURIAction.localized())
-                    }
-                }
             }
+            Spacer(minLength: 8)
+            OlcButton(L10n.carrierEndpointsCheckAction.localized(), role: .secondary) {
+                if let params = activeOlcrtcParams { activeSheet = .carrierEndpoints(params) }
+            }
+            .disabled(activeOlcrtcParams == nil)
         }
-    }
-
-    /// Copies an endpoint to the clipboard and logs it (display-only masking
-    /// never touches copy — #337 — so the real value goes to the pasteboard).
-    private func copyEndpoint(_ value: String) {
-        UIPasteboard.general.string = value
-        LogStore.shared.log(.connection, L10n.carrierEndpointCopied_fmt.formatted(value))
-    }
-
-    /// Resolves the carrier base host's current IPs (DNS pass). Re-runnable —
-    /// IPs rotate per carrier load-balancing.
-    private func resolveCarrierHost(_ host: String) async {
-        guard !carrierResolving else { return }
-        carrierResolving = true
-        let ips = await CarrierEndpoints.resolve(host: host)
-        carrierHostIPs = ips
-        carrierResolving = false
+        .padding(.vertical, 12)
     }
 
     /// Reassembles the original `olcrtc://` URI for sharing / copy / QR.
@@ -790,7 +691,13 @@ struct ConnectionsView: View {
     private func serverRow(_ conn: ConnectionRecord) -> some View {
         let isPrimary = store.primary?.id == conn.id
 
-        return HStack(spacing: 12) {
+        // #410: each connection is its own OlcCard on a cleared row (inset 16 via
+        // olcCardRow), so its plate width lines up with the hero / diagnostics
+        // cards above and the Manage VPS host cards. #410 was: a bare List row
+        // whose default inset-grouped cell plate sat ~16 pt wider per side than
+        // the cards, which a sharp eye reads as a misaligned, slightly longer row.
+        return OlcCard {
+          HStack(spacing: 12) {
             ZStack {
                 Circle()
                     .strokeBorder(isPrimary ? Theme.Palette.star : Theme.Palette.textTertiary,
@@ -836,7 +743,9 @@ struct ConnectionsView: View {
             // #258 was: a standalone pencil quick-edit button — removed (Edit is in
             // the overflow menu and the swipe action).
             OlcOverflowMenu(items: serverMenuItems(conn))
+          }
         }
+        .olcCardRow()
         .contentShape(Rectangle())
         .onTapGesture { store.setPrimary(conn.id) }
         .swipeActions(edge: .trailing) {
@@ -985,11 +894,25 @@ struct ConnectionsView: View {
         guard healthState[conn.id] != .checking else { return }
         healthState[conn.id] = .checking
         Task {
-            let ready = await tunnel.checkReady(conn.details)
-            let rtt   = await tunnel.ping(conn.details)
-            healthState[conn.id] = .done(ready: ready, rtt: rtt)
-            LogStore.shared.log(.connection, L10n.healthResult_fmt.formatted(
-                conn.displayName, Self.healthValue(ready), Self.healthValue(rtt)))
+            // #407: run the RTT probe first. Each probe establishes its OWN
+            // isolated WebRTC session (~5 s of setup), and a successful RTT
+            // already proves the transport reached ready — so in the common
+            // (healthy) case we skip the separate time-to-ready probe and the
+            // health check takes ~one session setup instead of two for a single
+            // "32 ms" result. Only when RTT fails do we run checkReady, to keep
+            // the "transport ready but data path down" (amber) distinction.
+            // #407 was: ready = checkReady(); rtt = ping() — always both, serial.
+            let rtt = await tunnel.ping(conn.details)
+            if case .success = rtt {
+                healthState[conn.id] = .done(ready: rtt, rtt: rtt)
+                LogStore.shared.log(.connection, L10n.healthResultRTT_fmt.formatted(
+                    conn.displayName, Self.healthValue(rtt)))
+            } else {
+                let ready = await tunnel.checkReady(conn.details)
+                healthState[conn.id] = .done(ready: ready, rtt: rtt)
+                LogStore.shared.log(.connection, L10n.healthResult_fmt.formatted(
+                    conn.displayName, Self.healthValue(ready), Self.healthValue(rtt)))
+            }
         }
     }
 

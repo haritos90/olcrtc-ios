@@ -606,19 +606,34 @@ struct OlcMetric: View {
     /// #342: optional unit ("ms"/"Mbps") rendered as smaller secondary text
     /// after the value, so the unit doesn't inflate the mono number.
     var unit: String? = nil
+    /// #405: render the unit up on the label line ("DL · Mbps") instead of after
+    /// the value, so a long decimal value ("40.7") keeps the full column width
+    /// and never wraps the fractional part to a second line. Default false keeps
+    /// the legacy after-value placement.
+    var unitInLabel: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .tracking(0.4)
-                .font(Theme.Typography.metricLabel)
-                .textCase(.uppercase)
-                .foregroundStyle(Theme.Palette.textTertiary)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(label)
+                    .tracking(0.4)
+                    .font(Theme.Typography.metricLabel)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+                // #405: the unit keeps its own case ("Mbps", not "MBPS") next to
+                // the uppercased label.
+                if unitInLabel, let unit {
+                    Text(unit)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.Palette.textTertiary)
+                }
+            }
             HStack(alignment: .firstTextBaseline, spacing: 3) {
                 Text(value)
                     .font(Theme.Typography.metricValue)
                     .foregroundStyle(tone ?? Theme.Palette.textPrimary)
-                if let unit {
+                    .lineLimit(1)   // #405: never wrap the number
+                if !unitInLabel, let unit {
                     Text(unit)
                         .font(.caption2)
                         .foregroundStyle(Theme.Palette.textSecondary)
