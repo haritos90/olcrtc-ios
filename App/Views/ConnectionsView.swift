@@ -76,6 +76,17 @@ struct ConnectionsView: View {
     @State private var batchPing      : [UUID: PingOutcome] = [:]
     @State private var pingingGroups  : Set<String> = []
 
+    /// #403: cache the per-group subscription metadata so `body` doesn't call
+    /// `store.subscriptionInfo(for:)` for every group on every render — `body`
+    /// re-evaluates whenever ANY observed object publishes, e.g. ~10×/s while a
+    /// speed test runs, recomputing this for each group each time. It only actually
+    /// changes when the connection list or the stored subscription meta changes, so
+    /// derive it then (`recomputeSubInfo()` on appear + the two `.onChange`s) and
+    /// read the cache in the footer. Keyed by group name. #403 was: a direct
+    /// `store.subscriptionInfo(for: group.items)` call inside the `serversSection`
+    /// footer, run on every body pass.
+    @State private var subInfoByGroup : [String: (source: String, meta: ConnectionStore.SubscriptionMeta)] = [:]
+
     /// #330: the single sheet this view can present. `Identifiable` drives one
     /// `.sheet(item:)`; `edit`/`qr` carry an immutable record snapshot, so the
     /// editor binds a value, not the live store object that churns while a
@@ -147,6 +158,12 @@ struct ConnectionsView: View {
 
                 serversSection
             }
+            // #403: keep the subscription-meta cache in sync with its only inputs —
+            // the connection list (group membership / source URLs) and the stored
+            // subscription meta — rather than recomputing it inside `body`. `initial:`
+            // seeds it on first appearance.
+            .onChange(of: store.connections, initial: true) { _, _ in recomputeSubInfo() }
+            .onChange(of: store.subscriptionMeta) { _, _ in recomputeSubInfo() }
             .navigationTitle("OlcRTC")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -300,7 +317,7 @@ struct ConnectionsView: View {
                     // fits the fixed footer slot.
                     OlcButton(L10n.actionRetry.localized(), systemImage: "arrow.clockwise",
                               role: .danger, compact: true) {
-                        connectGuarded(p)   // #375
+                        tunnel.connect(record: p)   // #393: guard now in TunnelManager.connect
                     }
                 }
             }
@@ -342,7 +359,7 @@ struct ConnectionsView: View {
                 || tunnel.state == .waitingForNetwork },
             set: { on in
                 if on, let p = store.primary {
-                    connectGuarded(p)
+                    tunnel.connect(record: p)   // #393: guard now in TunnelManager.connect
                 } else if !on {
                     tunnel.disconnect()
                 }
@@ -350,20 +367,13 @@ struct ConnectionsView: View {
         )
     }
 
-    /// #375: connect, but if Keychain secrets couldn't be read at a locked-device
-    /// launch (`store.secretsLocked`) the in-memory key is empty — connecting
-    /// would fail validation with the misleading "Key must be 64 hex characters
-    /// (got: 0)". Surface the actionable unlock message instead. Foreground
-    /// re-hydration (App.swift `.scenePhase == .active`) normally clears the flag
-    /// before the user gets here; this guards the locked-then-immediately-tapped
-    /// edge. All three connect entry points in this view route through here.
-    private func connectGuarded(_ record: ConnectionRecord) {
-        if store.secretsLocked {
-            tunnel.state = .failed(L10n.errorSecretsLocked.localized())
-            return
-        }
-        tunnel.connect(record: record)
-    }
+    // #393 was: connectGuarded(_:) — a view-level wrapper that checked
+    // `store.secretsLocked` and surfaced the unlock message before
+    // `tunnel.connect`. The guard (and its messaging) moved INTO
+    // `TunnelManager.connect` (MainTabView injects `tunnel.secretsLocked =
+    // { store.secretsLocked }`), so every caller — including auto-connect-on-launch,
+    // which bypassed this wrapper (#393) — is now covered. The wrapper became a
+    // redundant indirection; call sites call `tunnel.connect(record:)` directly.
 
     // MARK: 2. Routing
 
@@ -513,8 +523,16 @@ struct ConnectionsView: View {
     // MARK: 3b. Carrier endpoints (#328 — proxy-loop exclusions)
 
     /// The active olcrtc connection's params, only while the tunnel is up.
+    // #389 was: `case .olcrtc(let p)? = store.primary?.details` — `store.primary`
+    // is the UI selection, which a no-reconnect row tap desyncs from the live node,
+    // so the carrier card showed the WRONG carrier's host (wrong DIRECT-rule
+    // guidance). Derive from `tunnel.connectedRecord` (the live node, already gated
+    // on `.isConnected`) so the card always reflects the node the tunnel holds.
+    // (#406 already removed the old `carrierHostIPs` state from this view, so there
+    // is nothing else here to keep consistent — `CarrierEndpointsView` resolves the
+    // host it is handed.)
     private var activeOlcrtcParams: OlcrtcConnection? {
-        guard tunnel.state.isConnected, case .olcrtc(let p)? = store.primary?.details else { return nil }
+        guard case .olcrtc(let p)? = tunnel.connectedRecord?.details else { return nil }
         return p
     }
 
@@ -577,13 +595,28 @@ struct ConnectionsView: View {
                     } footer: {
                         // #363: subscription-backed groups surface their source +
                         // quota + refresh below the rows; manual groups show nothing.
-                        if let info = store.subscriptionInfo(for: group.items) {
+                        // #403 was: store.subscriptionInfo(for: group.items) computed
+                        // here on every render — now read from the cached map keyed by
+                        // group name (refreshed only when connections / meta change).
+                        if let info = subInfoByGroup[group.group] {
                             subscriptionMetaFooter(source: info.source, meta: info.meta)
                         }
                     }
                 }
             }
         }
+    }
+
+    /// #403: rebuild the per-group subscription-meta cache from the store. Runs only
+    /// when its inputs change (connections / subscriptionMeta), not on every render.
+    private func recomputeSubInfo() {
+        var map: [String: (source: String, meta: ConnectionStore.SubscriptionMeta)] = [:]
+        for group in store.grouped() {
+            if let info = store.subscriptionInfo(for: group.items) {
+                map[group.group] = info
+            }
+        }
+        subInfoByGroup = map
     }
 
     /// #364: group section header — the group name plus a "Ping all" action that
@@ -618,8 +651,13 @@ struct ConnectionsView: View {
         // Clear stale badges for this group so partial old results don't linger.
         for c in items { batchPing[c.id] = nil }
         Task {
-            let connected = tunnel.state.isConnected ? store.primary : nil
-            let results = await tunnel.pingGroup(items, connectedNode: connected) { id, outcome in
+            // #388 was: `pingGroup(items, connectedNode: tunnel.state.isConnected ?
+            // store.primary : nil)` — `store.primary` is the UI selection, which a
+            // no-reconnect row tap desyncs from the live node, so the skip missed the
+            // genuinely-connected node and pinged it as a 2nd client in its room.
+            // `pingGroup` now reads the live node from `tunnel.connectedRecord`
+            // itself (re-read each iteration), so the caller passes nothing.
+            let results = await tunnel.pingGroup(items) { id, outcome in
                 batchPing[id] = outcome
             }
             pingingGroups.remove(group)
@@ -808,7 +846,7 @@ struct ConnectionsView: View {
         if store.primary?.id != conn.id {
             items.append(.action(L10n.actionConnect.localized(), systemImage: "play.fill") {
                 store.setPrimary(conn.id)
-                connectGuarded(conn)   // #375
+                tunnel.connect(record: conn)   // #393: guard now in TunnelManager.connect
             })
         }
         // #274: one "Health check" item runs both probes (RTT + time-to-ready).

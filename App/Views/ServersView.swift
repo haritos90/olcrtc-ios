@@ -418,13 +418,33 @@ struct ServersView: View {
     /// Small per-host gap so a fleet doesn't fire every probe on one tick (#374).
     private static let pingStaggerSeconds: Double = 0.4
 
+    /// How long the loop idles between checks while auto-ping is OFF or has no
+    /// positive interval set — so flipping the toggle back ON resumes pinging
+    /// within a few seconds instead of never (#395). Short enough to feel live,
+    /// long enough not to spin.
+    private static let autoPingIdlePollSeconds: Double = 5
+
     private func autoPingLoop() async {
         // Initial pass: ping every host that's never been pinged.
         await pingDueHosts(force: true)
 
-        // Periodic sweeps only when enabled and a positive interval is set.
+        // #395 was: `guard … else { return }` — the loop exited *permanently*
+        // when auto-ping was disabled (or its interval was 0), and the id-less
+        // `.task` (body, line ~99) doesn't restart on a setting flip, so
+        // re-enabling auto-ping on the same tab never resumed periodic pinging.
+        // Now we sleep-and-recheck instead of returning, so a toggle flip is
+        // picked up on the next idle poll. SwiftUI still cancels the whole `.task`
+        // on view disappear (Task.sleep throws on cancel), keeping teardown clean.
         while !Task.isCancelled {
-            guard settings.vpsAutoPingEnabled, settings.vpsAutoPingInterval > 0 else { return }
+            guard settings.vpsAutoPingEnabled, settings.vpsAutoPingInterval > 0 else {
+                // Disabled / no interval — idle briefly, then re-check the toggle.
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(Self.autoPingIdlePollSeconds * 1_000_000_000))
+                } catch {
+                    return   // cancelled while idling
+                }
+                continue
+            }
             let interval = TimeInterval(settings.vpsAutoPingInterval)
             do {
                 try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
@@ -842,19 +862,8 @@ struct ServersView: View {
             // encode (server-script format) instead of dropping them to
             // defaults; nil payload fields fall back to OlcrtcConnection's own
             // defaults, same as the recover path.
-            let params = OlcrtcConnection(
-                carrier:      cfg.carrier,
-                transport:    cfg.transport,
-                roomID:       cfg.roomID,
-                key:          cfg.key,
-                clientID:     cfg.clientID,
-                vp8FPS:       cfg.vp8FPS,
-                vp8BatchSize: cfg.vp8BatchSize,
-                seiFPS:       cfg.seiFPS   ?? 30,
-                seiBatch:     cfg.seiBatch ?? 10,
-                seiFrag:      cfg.seiFrag  ?? 1200,
-                seiACK:       cfg.seiACK   ?? 1
-            )
+            // #401: via the shared Parsed → connection mapping.
+            let params = OlcrtcConnection(from: cfg)
             let record = ConnectionRecord(name: host.label, details: .olcrtc(params))
             connections.add(record)
             var updated = host
@@ -1030,6 +1039,10 @@ struct ServersView: View {
             // own seiFPS/seiBatch/seiFrag/seiACK defaults (App/Models/OlcrtcConnection.swift)
             // — used as a fallback only if the deployed server.yaml's sei: block
             // somehow lacked a field (shouldn't happen for srv.sh-written configs).
+            // #401: NOT routed through OlcrtcConnection(from: Parsed) — `cfg` here is
+            // an SSHRunner.RecoveredConfig (recovered server.yaml), not an
+            // OlcrtcURI.Parsed, so it keeps its own explicit field mapping; clientID
+            // is forced to "default" (a recovered server.yaml carries no client segment).
             let params = OlcrtcConnection(
                 carrier:      cfg.carrier,
                 transport:    cfg.transport,
@@ -1080,15 +1093,9 @@ struct ServersView: View {
             // vp8 tuning comes from the URI payload (salvaged server values may
             // differ from this app's global defaults). sei tuning can't round-trip
             // through OlcrtcURI.Parsed — defaults apply, same as the install path.
-            let params = OlcrtcConnection(
-                carrier:      cfg.carrier,
-                transport:    cfg.transport,
-                roomID:       cfg.roomID,
-                key:          cfg.key,
-                clientID:     cfg.clientID,
-                vp8FPS:       cfg.vp8FPS,
-                vp8BatchSize: cfg.vp8BatchSize
-            )
+            // #401: shared Parsed → connection mapping (sei defaults 30/10/1200/1
+            // == the struct's own defaults, so behavior is unchanged).
+            let params = OlcrtcConnection(from: cfg)
             let record = ConnectionRecord(name: host.label, details: .olcrtc(params))
             connections.add(record)
             var updated = host

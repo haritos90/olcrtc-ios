@@ -58,9 +58,12 @@ the ordered upstream executable lines with one forward cursor `ui`:
   - base token → forward-scan upstream from `ui` for an exact match.
       * found at j → consume it (ui = j + 1). Upstream lines skipped to reach it
         (ui..j-1) form a GAP: each gap line must be accounted — licensed by an
-        `# boc` patch seen since the last match (a region we replaced), or
-        present in the rejected set (a line we explicitly skipped). Any other
-        gap line is UNACCOUNTED (a new upstream line we never decided on → fail).
+        `# boc` patch seen since the last match (a region we replaced), present
+        in the rejected set (a line we explicitly skipped), or a dropped
+        duplicate of a base line we already run (#399 — e.g. upstream's second
+        identical `echo ""` when our copy keeps only one; carries no new
+        decision). Any other gap line is UNACCOUNTED (a new upstream line we
+        never decided on → fail).
       * not found at/after `ui` → base-drift: upstream changed/dropped/moved a
         line we run → fail.
   - patch marker → set `patch_pending` (licenses the next gap as replaced).
@@ -204,6 +207,130 @@ def parse_ours(lines):
     return stream, rejected, balance_errors
 
 
+# #399: the positional walk, extracted into a pure function so it can be
+# self-tested (run `python3 scripts/parity_check.py --selftest`). Returns
+# (drift_errors, unaccounted, n_base); inputs are the parsed base/patch stream,
+# the ordered upstream executable lines, and the rejected / base text sets.
+def account(stream, upstream_exec, rejected_set, base_set):
+    drift_errors = []   # (line_no, text) base-drift — base line not in upstream in order
+    unaccounted  = []   # (upstream_exec_index, text) — upstream line in a non-patched gap
+
+    def account_gap(lo, hi, patched):
+        """Upstream lines [lo, hi) skipped between base matches: each must be
+        licensed by a patch, be a line we explicitly rejected, or be a dropped
+        duplicate of a base line we already run (#399) — else unaccounted."""
+        if patched:
+            return  # the whole gap is a region our `# boc` patch replaced
+        for k in range(lo, hi):
+            line = upstream_exec[k]
+            # #399: `line in base_set` accounts a dropped duplicate of an
+            # already-adopted line (the first copy matched positionally; this is
+            # a later copy we don't keep) — no new decision, so not unaccounted.
+            if line not in rejected_set and line not in base_set:
+                unaccounted.append((k + 1, line))
+
+    ui = 0
+    patch_pending = False
+    n_base = 0
+
+    for tok in stream:
+        if tok["kind"] == "patch":
+            patch_pending = True
+            continue
+
+        n_base += 1
+        text = tok["text"]
+        j = None
+        for k in range(ui, len(upstream_exec)):
+            if upstream_exec[k] == text:
+                j = k
+                break
+
+        if j is None:
+            drift_errors.append((tok["n"], text))
+            patch_pending = False   # alignment broke here; don't mass-flag the rest
+            continue
+
+        account_gap(ui, j, patch_pending)
+        ui = j + 1
+        patch_pending = False
+
+    # Trailing upstream lines after the last base match.
+    account_gap(ui, len(upstream_exec), patch_pending)
+    return drift_errors, unaccounted, n_base
+
+
+def _selftest():
+    """#399: exercise account() in isolation — focus on the dropped-duplicate
+    accounting. Exits 0 on pass, 1 on failure; never touches the real files."""
+    def base(text):  return {"kind": "base", "n": 0, "text": text}
+    patch = {"kind": "patch", "n": 0}
+    failures = []
+
+    def check(name, cond):
+        if not cond:
+            failures.append(name)
+
+    # 1. Dropped duplicate of an already-run line: upstream has `echo ""` twice
+    #    in a row, our copy keeps only one. The 2nd copy lands in a gap and must
+    #    be accounted (the #399 fix), not flagged unaccounted.
+    up    = ["A", 'echo ""', 'echo ""', "B"]
+    strm  = [base("A"), base('echo ""'), base("B")]
+    bset  = {"A", 'echo ""', "B"}
+    drift, unacc, _ = account(strm, up, set(), bset)
+    check("dropped-dup: no drift",        drift == [])
+    check("dropped-dup: nothing unacc",   unacc == [])
+
+    # 2. Non-adjacent dropped duplicate (the line recurs much later upstream).
+    up2   = ["A", 'echo ""', "B", "C", 'echo ""', "D"]
+    strm2 = [base("A"), base('echo ""'), base("B"), base("C"), base("D")]
+    bset2 = {"A", 'echo ""', "B", "C", "D"}
+    drift2, unacc2, _ = account(strm2, up2, set(), bset2)
+    check("nonadjacent-dup: no drift",      drift2 == [])
+    check("nonadjacent-dup: nothing unacc", unacc2 == [])
+
+    # 3. A genuinely NEW upstream line (not a duplicate of anything we run) must
+    #    STILL be flagged unaccounted — the fix must not mask real new lines.
+    up3   = ["A", "OLCRTC_NEW=1", "B"]
+    strm3 = [base("A"), base("B")]
+    bset3 = {"A", "B"}
+    drift3, unacc3, _ = account(strm3, up3, set(), bset3)
+    check("new-line: still unaccounted", [t for _, t in unacc3] == ["OLCRTC_NEW=1"])
+
+    # 4. A new line in a gap our `# boc` patch covers is absorbed (patched).
+    up4   = ["A", "OLCRTC_NEW=1", "B"]
+    strm4 = [base("A"), patch, base("B")]
+    bset4 = {"A", "B"}
+    drift4, unacc4, _ = account(strm4, up4, set(), bset4)
+    check("patched-gap: nothing unacc", unacc4 == [])
+
+    # 5. A gap line we explicitly rejected is accounted via the rejected set.
+    up5   = ["A", "OLCRTC_OLD=1", "B"]
+    strm5 = [base("A"), base("B")]
+    bset5 = {"A", "B"}
+    drift5, unacc5, _ = account(strm5, up5, {"OLCRTC_OLD=1"}, bset5)
+    check("rejected-gap: nothing unacc", unacc5 == [])
+
+    # 6. A base line missing from upstream is base-drift.
+    up6   = ["A", "B"]
+    strm6 = [base("A"), base("GONE"), base("B")]
+    bset6 = {"A", "GONE", "B"}
+    drift6, _, _ = account(strm6, up6, set(), bset6)
+    check("base-drift: flagged", [t for _, t in drift6] == ["GONE"])
+
+    if failures:
+        print("error: [parity] self-test FAILED:")
+        for f in failures:
+            print(f"  - {f}")
+        sys.exit(1)
+    print("note: [parity] self-test passed (6 cases).")
+    sys.exit(0)
+
+
+if "--selftest" in sys.argv[1:]:
+    _selftest()
+
+
 print("note: [parity] Checking scripts/srv.sh vs olcrtc-upstream/script/srv.sh ...")
 
 ours_lines     = read(OURS)
@@ -222,51 +349,17 @@ if balance_errors:
 upstream_exec = [l.rstrip() for l in upstream_lines if executable(l.rstrip())]
 upstream_set  = set(upstream_exec)
 rejected_set  = {t for _, t in rejected}
-
-drift_errors = []   # (line_no, text) base-drift — base line not in upstream in order
-unaccounted  = []   # (upstream_exec_index, text) — upstream line in a non-patched gap
+# #399: the texts of every base line we actually run. A gap line equal to one
+# of these is a DROPPED DUPLICATE of a line we already adopted (e.g. upstream
+# has two identical `echo ""` and our copy keeps only one) — the forward-walk
+# matches the first occurrence, leaving the second in a gap. It carries no new
+# decision (invariant 4 catches *new* env vars / install steps, not a repeat of
+# a line we already run), so it must be accounted, not flagged UNACCOUNTED.
+base_set      = {tok["text"] for tok in stream if tok["kind"] == "base"}
 
 # --- 2 & 4: positional walk of base lines against upstream ------------------
-ui = 0
-patch_pending = False
-n_base = 0
-
-
-def account_gap(lo, hi, patched):
-    """Upstream lines [lo, hi) skipped between base matches: each must be
-    licensed by a patch, or be a line we explicitly rejected — else unaccounted."""
-    if patched:
-        return  # the whole gap is a region our `# boc` patch replaced
-    for k in range(lo, hi):
-        line = upstream_exec[k]
-        if line not in rejected_set:
-            unaccounted.append((k + 1, line))
-
-
-for tok in stream:
-    if tok["kind"] == "patch":
-        patch_pending = True
-        continue
-
-    n_base += 1
-    text = tok["text"]
-    j = None
-    for k in range(ui, len(upstream_exec)):
-        if upstream_exec[k] == text:
-            j = k
-            break
-
-    if j is None:
-        drift_errors.append((tok["n"], text))
-        patch_pending = False   # alignment broke here; don't mass-flag the rest
-        continue
-
-    account_gap(ui, j, patch_pending)
-    ui = j + 1
-    patch_pending = False
-
-# Trailing upstream lines after the last base match.
-account_gap(ui, len(upstream_exec), patch_pending)
+drift_errors, unaccounted, n_base = account(
+    stream, upstream_exec, rejected_set, base_set)
 
 # --- 3: rejected lines must still exist in upstream (existence) -------------
 stale_rejected = [(n, t) for n, t in rejected if t not in upstream_set]

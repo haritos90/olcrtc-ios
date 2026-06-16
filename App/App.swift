@@ -192,12 +192,20 @@ struct MainTabView: View {
         }
         // eoc #111
         .onAppear {
+            // #393: wire the locked-secrets check into TunnelManager so EVERY
+            // connect path (incl. auto-connect below, which calls `connect`
+            // directly) gets the actionable "unlock the device" message instead
+            // of the misleading "Key must be 64 hex characters (got: 0)".
+            // `ConnectionStore` isn't a singleton, so it's injected as a closure.
+            tunnel.secretsLocked = { store.secretsLocked }
             guard !didAutoConnect else { return }
             didAutoConnect = true
             LogStore.shared.log(.connection, "▶ \(LogStore.appVersionString())")
             if settings.autoConnectOnLaunch, let p = store.primary {
                 LogStore.shared.log(.connection,
                     "▶ Auto-connect on launch → \(p.displayName)")
+                // #393: the secretsLocked guard now lives in TunnelManager.connect,
+                // so this direct call is covered too (was the #375 gap).
                 tunnel.connect(record: p)
             }
         }
@@ -205,6 +213,12 @@ struct MainTabView: View {
         // when disabled or checked within 24h; tolerates failure silently. On a
         // newer release it sets `available`, which raises the sheet below.
         .task { await updateChecker.checkIfDue() }
+        // #362: on launch, silently re-fetch any subscription source whose
+        // `#refresh` interval has elapsed (the import diff dedups, so servers
+        // update in place). A per-source fetch failure is logged and skipped —
+        // no modal on a background refresh. A manual pull-to-refresh reuses the
+        // same `store.refreshDueSources()` trigger (exposed from the store).
+        .task { await store.refreshDueSources() }
         .sheet(item: $updateChecker.available) { update in
             UpdateAvailableSheet(update: update)
         }
@@ -319,12 +333,10 @@ struct MainTabView: View {
     /// dedup/provenance).
     private func handleConnectionURL(_ url: URL) {
         do {
-            // The OS may percent-encode payload chars ([ ] < > &) when forming
-            // the URL; try the raw form first, then a decoded fallback.
-            let raw = url.absoluteString
-            let candidate = (try? OlcrtcURI.parse(raw)) != nil
-                ? raw : (raw.removingPercentEncoding ?? raw)
-            let parsed = try OlcrtcURI.parse(candidate)
+            // #398 was: a local raw-then-percent-decoded fallback here. That
+            // normalization now lives inside OlcrtcURI.parse, so every caller
+            // (paste / QR / subscription body) handles encoded URIs the same way.
+            let parsed = try OlcrtcURI.parse(url.absoluteString)
             var sub = OlcrtcSubscription()
             sub.entries = [OlcrtcSubscription.Entry(parsed: parsed, name: nil)]
             subSource     = parsed.mimo.isEmpty ? "\(parsed.carrier) · \(parsed.transport)" : parsed.mimo
@@ -365,12 +377,7 @@ struct MainTabView: View {
             fullAccessPrompt = nil
             return
         }
-        let params = OlcrtcConnection(
-            carrier: p.carrier, transport: p.transport, roomID: p.roomID,
-            key: p.key, clientID: p.clientID,
-            vp8FPS: p.vp8FPS, vp8BatchSize: p.vp8BatchSize,
-            seiFPS:  p.seiFPS  ?? 30, seiBatch: p.seiBatch ?? 10,
-            seiFrag: p.seiFrag ?? 1200, seiACK:  p.seiACK  ?? 1)
+        let params = OlcrtcConnection(from: p)   // #401: shared Parsed → connection mapping
         store.add(ConnectionRecord(name: fa.label,
                                    groupName: ConnectionRecord.defaultGroupName,
                                    details: .olcrtc(params)))
@@ -405,14 +412,9 @@ struct MainTabView: View {
             // #354: single connection, no subscription provenance.
             let group = sub.name ?? ConnectionRecord.defaultGroupName
             for entry in sub.entries {
-                let p = entry.parsed
                 // #355: sei params carried through (defaults when a key is absent).
-                let params = OlcrtcConnection(
-                    carrier: p.carrier, transport: p.transport, roomID: p.roomID,
-                    key: p.key, clientID: p.clientID,
-                    vp8FPS: p.vp8FPS, vp8BatchSize: p.vp8BatchSize,
-                    seiFPS:  p.seiFPS  ?? 30, seiBatch: p.seiBatch ?? 10,
-                    seiFrag: p.seiFrag ?? 1200, seiACK:  p.seiACK  ?? 1)
+                // #401: via the shared Parsed → connection mapping.
+                let params = OlcrtcConnection(from: entry.parsed)
                 store.add(ConnectionRecord(name: entry.recordName,
                                            groupName: group,
                                            details: .olcrtc(params)))

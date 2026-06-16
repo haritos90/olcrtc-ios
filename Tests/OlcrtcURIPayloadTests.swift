@@ -104,6 +104,40 @@ final class OlcrtcURIPayloadTests: XCTestCase {
         XCTAssertEqual(p.roomID, "abc")
     }
 
+    // MARK: percent-encoded payload normalization (#398)
+
+    /// #398: the percent-decode fallback now lives in OlcrtcURI.parse, so an
+    /// encoded URI (the OS often percent-encodes `[ ] , < > &` when forming a
+    /// deep link / QR URL) parses through the single entry point every caller
+    /// uses — not just the old handleConnectionURL fallback.
+    func testParsePercentEncodedClientPayload() throws {
+        // "[vp8-fps=60,vp8-batch=8]" with [, ], and , percent-encoded.
+        let p = try OlcrtcURI.parse(
+            "olcrtc://wbstream?vp8channel%5Bvp8-fps=60%2Cvp8-batch=8%5D@room#aa")
+        XCTAssertEqual(p.transport, "vp8channel")
+        XCTAssertEqual(p.vp8FPS, 60)
+        XCTAssertEqual(p.vp8BatchSize, 8)
+        XCTAssertEqual(p.roomID, "room")
+        XCTAssertEqual(p.key, "aa")
+    }
+
+    func testParsePercentEncodedServerScriptPayload() throws {
+        // "<fps=60&batch=64&frag=900&ack-ms=2000>" with <, >, & encoded.
+        let p = try OlcrtcURI.parse(
+            "olcrtc://wbstream?seichannel%3Cfps=60%26batch=64%26frag=900%26ack-ms=2000%3E@room-01#aa")
+        XCTAssertEqual(p.transport, "seichannel")
+        XCTAssertEqual(p.seiFPS, 60)
+        XCTAssertEqual(p.seiBatch, 64)
+        XCTAssertEqual(p.seiFrag, 900)
+        XCTAssertEqual(p.seiACK, 2000)
+    }
+
+    /// A genuinely-malformed URI (no `@`) must still throw its real diagnostic,
+    /// not get masked by the decode retry.
+    func testParseStillThrowsOnMalformedAfterDecodeRetry() {
+        XCTAssertThrowsError(try OlcrtcURI.parse("olcrtc://wbstream%3Fvp8channel"))
+    }
+
     // MARK: mixed-bracket error (audit S1 — now localized)
 
     func testMixedBracketsThrowsLocalizedError() {

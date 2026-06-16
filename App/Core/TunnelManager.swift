@@ -130,10 +130,26 @@ final class TunnelManager: ObservableObject {
     /// otherwise a live port edit in Settings would point keep-alive's verify
     /// probe (and other in-app SOCKS traffic) at the wrong port and tear down a
     /// healthy tunnel (#313 follow-up). Kept in lockstep by `boundPort.didSet`.
-    /// `nonisolated(unsafe)`: written only on MainActor (via `boundPort`), read
-    /// from background tasks; a stale read across the brief connect/disconnect
-    /// window is benign (falls back to the configured port in `socksPort`).
-    nonisolated(unsafe) private(set) static var liveBoundPort: Int? = nil
+    // boc #382: was `nonisolated(unsafe) private(set) static var liveBoundPort:
+    // Int?`. It is written on MainActor (via `boundPort.didSet`) but read off
+    // MainActor by `SOCKSSession.make` (called from the detached `verifyTunnel`
+    // task), so the unsynchronised shared mutable static was a genuine data race
+    // / UB — not merely a benign stale read. Back it with an `OSAllocatedUnfairLock`
+    // exactly like #372 did for `lastTunnelActivityDate`; `Int?` is a trivially
+    // copyable scalar so the guarded value needs no further wrapping. The
+    // get/set surface below preserves the old `static var` call sites verbatim.
+    // #382 was: nonisolated(unsafe) private(set) static var liveBoundPort: Int? = nil
+    private static let boundPortLock = OSAllocatedUnfairLock<Int?>(initialState: nil)
+
+    /// #382: thread-safe accessor for the live session's bound port. Written on
+    /// MainActor (via `boundPort.didSet`), read off MainActor by `SOCKSSession`;
+    /// all access is serialized through `boundPortLock`. `private(set)` is kept by
+    /// making the setter `private`.
+    nonisolated private(set) static var liveBoundPort: Int? {
+        get { boundPortLock.withLock { $0 } }
+        set { boundPortLock.withLock { $0 = newValue } }
+    }
+    // eoc #382
 
     /// #351: the port in-app SOCKS traffic should target *now* — the live
     /// session's bound port while connected, else the configured port. Tunnel
@@ -188,12 +204,32 @@ final class TunnelManager: ObservableObject {
     }
 
     private var lastRecord: ConnectionRecord?
+
+    /// #388: the record the live tunnel actually holds — `lastRecord` while the
+    /// session is up, else nil. This is the SINGLE source of truth for "which node
+    /// am I connected to": `lastRecord` is set by `connect()` and cleared by
+    /// `disconnect()`, independent of the UI's `store.primary` selection. The UI
+    /// must use THIS (not `store.primary`) wherever it reasons about the live node
+    /// — a row tap (`setPrimary`, no reconnect) moves `store.primary` but not the
+    /// live session, and that desync made batch-ping skip the wrong node (#388) and
+    /// the carrier card read the wrong host (#389). Connecting/failed states return
+    /// nil so callers only ever see a node that's genuinely live.
+    var connectedRecord: ConnectionRecord? {
+        state.isConnected ? lastRecord : nil
+    }
+
     private var keepAliveTask: Task<Void, Never>?
     /// #409: the off-MainActor native teardown kicked off by `disconnect()`.
     /// `MobileStop()` blocks until the WebRTC session fully closes, so it runs in
     /// a detached Task to keep the UI responsive; a following `connect()` cancels
     /// it so a stray late Stop can't tear down the freshly-started session.
     private var stopTask: Task<Void, Never>?
+    /// #386: the same-port wait Task that `start()` spawns when our own ghost still
+    /// holds the configured port (#333). Stored so `disconnect()`/`connect()` can
+    /// cancel it — otherwise it was fire-and-forget and, on a disconnect+reconnect
+    /// inside its ≤5 s wait, would resume and run `preflight` for the OLD record
+    /// (bumping `connectEpoch` last), connecting the wrong exit node.
+    private var pendingStartTask: Task<Void, Never>?
     private let bgKeeper = BackgroundRuntimeKeeper()
 
     // MARK: Recovery (#270) — capped exponential-backoff auto-reconnect
@@ -226,19 +262,46 @@ final class TunnelManager: ObservableObject {
 
     /// When we last tore down our own listener (disconnect / keep-alive loss /
     /// recovery teardown). Gates the same-port wait above so we only ever wait on
-    /// *our* ghost, never on a port a different app is holding. `nonisolated(unsafe)`:
-    /// written on MainActor, read by the nonisolated wait decision; a stale read is
-    /// benign (worst case we skip the wait and fail fast as before).
-    nonisolated(unsafe) private static var lastSelfDisconnectDate: Date? = nil
+    /// *our* ghost, never on a port a different app is holding.
+    // #382: was `nonisolated(unsafe)`, but every access (write in `disconnect()`,
+    // read in `shouldWaitForOwnPortReleaseNow()`) is on the MainActor — the pure
+    // verdict takes the elapsed interval as a value, it never reads this static
+    // off-actor — so the annotation was merely unnecessary. Let it inherit the
+    // type's `@MainActor` isolation; no logic change.
+    // #382 was: nonisolated(unsafe) private static var lastSelfDisconnectDate: Date? = nil
+    private static var lastSelfDisconnectDate: Date? = nil
+
+    /// #394: the port our last self-disconnect actually released (the `boundPort`
+    /// the dying session held). Gates the same-port wait so we only ever wait on a
+    /// port WE just let go: if the configured port no longer matches it — the user
+    /// changed the SOCKS port in Settings between sessions, or a foreign app is
+    /// holding a *different* port — there is no ghost of ours to wait for, so we
+    /// fail fast per #308. MainActor-only (written in `disconnect()`, read in
+    /// `shouldWaitForOwnPortReleaseNow()`); never read off-actor.
+    private static var lastSelfDisconnectPort: Int? = nil
 
     /// #333: should the connect path wait for the configured port to free up rather
-    /// than failing immediately? Only when the port is currently busy AND we
-    /// released our own listener within `selfDisconnectGhostWindow`. Pure → tested.
+    /// than failing immediately? Only when the port is currently busy, we released
+    /// our own listener within `selfDisconnectGhostWindow`, AND the busy port is the
+    /// very port we just released (#394). Pure → tested.
+    // #394 was: shouldWaitForOwnPortRelease(portFree:selfDisconnectedAgo:) — it
+    // classified ANY busy configured port as "our ghost" on timing alone. But
+    // `PortAvailability.isFree` is holder-agnostic, so a foreign app (or a
+    // now-different configured port) read as busy in the window triggered a 5 s
+    // wait instead of the #308 fail-fast. Requiring `configuredPort == releasedPort`
+    // attributes the wait to our own just-released session: a foreign holder on any
+    // OTHER port, or a port the user re-pointed, now fails fast immediately. (A
+    // foreign app grabbing the exact port we just released within the window is not
+    // distinguishable at the socket level; that residual case still bounded-waits
+    // then fails per #308 — never sliding, never weakening the contract.)
     nonisolated static func shouldWaitForOwnPortRelease(portFree: Bool,
-                                                        selfDisconnectedAgo: TimeInterval?) -> Bool {
+                                                        selfDisconnectedAgo: TimeInterval?,
+                                                        configuredPort: Int,
+                                                        releasedPort: Int?) -> Bool {
         guard !portFree else { return false }
-        guard let ago = selfDisconnectedAgo, ago >= 0 else { return false }
-        return ago <= selfDisconnectGhostWindow
+        guard let ago = selfDisconnectedAgo, ago >= 0, ago <= selfDisconnectGhostWindow else { return false }
+        // #394: only our own ghost — the busy port must be the one we just released.
+        return releasedPort == configuredPort
     }
 
     // MARK: Network-path monitoring (#269)
@@ -311,6 +374,17 @@ final class TunnelManager: ObservableObject {
     // `ConnectionDetails.engine`, so there's nothing protocol-specific to wire
     // up at construction anymore (#243).
 
+    /// #393: "are this device's Keychain secrets currently unreadable?" — supplied
+    /// by the owner (MainTabView wires `{ store.secretsLocked }`). When true the
+    /// in-memory key is empty and a connect would fail validation with the
+    /// misleading "Key must be 64 hex characters (got: 0)"; `connect` short-circuits
+    /// to the actionable "unlock the device" message instead. Lives here (not just
+    /// in `ConnectionsView.connectGuarded`) so EVERY caller is covered — including
+    /// auto-connect-on-launch (App.swift), which bypassed the view guard (#393).
+    /// `ConnectionStore` isn't a singleton, so it's injected as a closure rather
+    /// than referenced directly. nil (unwired, e.g. in tests) ⇒ never locked.
+    var secretsLocked: (() -> Bool)?
+
     /// Starts a tunnel for the given record. Dispatches to a protocol-specific
     /// path based on `record.details`. Today only .olcrtc is supported; when
     /// other protocols come online they get their own `start...` method.
@@ -326,12 +400,24 @@ final class TunnelManager: ObservableObject {
         // (no route) would only fail, so treat it like .connecting/.connected.
         case .connecting, .connected, .waitingForNetwork: return
         }
+        // #393: if the device was locked before first unlock at launch the saved
+        // key couldn't be read (empty in memory) — surface the actionable unlock
+        // message rather than the misleading "Key must be 64 hex characters
+        // (got: 0)". Guarding here covers auto-connect-on-launch too, which calls
+        // `connect` directly and bypassed ConnectionsView.connectGuarded (#393).
+        if secretsLocked?() == true {
+            state = .failed(L10n.errorSecretsLocked.localized())
+            return
+        }
         // A manual connect supersedes any in-flight auto-recovery loop (#270).
         recoveryTask?.cancel(); recoveryTask = nil
         // #409: cancel a pending off-MainActor teardown from a just-prior
         // disconnect so its late MobileStop() can't kill the session we're about
         // to start (both hit the same Go singleton).
         stopTask?.cancel(); stopTask = nil
+        // #386: cancel a same-port wait still pending from a prior connect so its
+        // post-wait preflight can't fire for the old record after this one starts.
+        pendingStartTask?.cancel(); pendingStartTask = nil
         lastRecord = record
         start(record: record)
     }
@@ -345,6 +431,10 @@ final class TunnelManager: ObservableObject {
         // from a clean baseline.
         recoveryTask?.cancel();  recoveryTask = nil
         keepAliveTask?.cancel(); keepAliveTask = nil
+        // #386: a same-port wait may be in flight (state == .connecting while it
+        // polls the port). Cancel it so it can't resume past the wait and preflight
+        // a now-stale record after the user disconnected.
+        pendingStartTask?.cancel(); pendingStartTask = nil
         bgKeeper.stop()
         // #409: MobileStop() blocks until the native WebRTC session fully tears
         // down (leave-presence + peer close) — running it on the MainActor froze
@@ -364,6 +454,12 @@ final class TunnelManager: ObservableObject {
         // which the port reads busy on our ghost. Record it so the *next* connect
         // can wait-and-retry the same port (gated on this being recent).
         TunnelManager.lastSelfDisconnectDate = Date()
+        // #394: record WHICH port this session held (read before the `.disconnected`
+        // didSet clears `boundPort`). The next connect waits only if its configured
+        // port matches this — so a foreign app on a different port, or a port the
+        // user re-pointed, fails fast per #308 instead of waiting on a non-existent
+        // ghost of ours.
+        TunnelManager.lastSelfDisconnectPort = boundPort
         // #333 fold-in: a future activity reservation (e.g. noteActivity(forAtLeast:)
         // from a speed test) parks `lastTunnelActivityDate` ahead; if it survived
         // teardown it would suppress keep-alive on the NEXT session for one interval.
@@ -628,13 +724,25 @@ final class TunnelManager: ObservableObject {
         // *our own* recent ghost do we detour through an async same-port wait,
         // then preflight once it frees up.
         if shouldWaitForOwnPortReleaseNow() {
+            // #386: snapshot the epoch BEFORE the wait. A disconnect+reconnect
+            // inside the ≤5 s wait runs its own preflight (bumping connectEpoch)
+            // and lands back on `.connecting` for a DIFFERENT record — the old
+            // `state == .connecting` guard couldn't tell the two apart and would
+            // preflight the stale record last, connecting the wrong exit node.
+            let epochAtWaitStart = connectEpoch
             state = .connecting   // optimistic: hold the toggle ON while we wait
-            Task { [weak self] in
+            // #386: store the Task so disconnect()/connect() can cancel it; was a
+            // fire-and-forget Task that nothing could stop.
+            pendingStartTask = Task { [weak self] in
                 guard let self else { return }
                 await self.waitForOwnPortRelease()
-                // The wait may have been superseded (user flipped off → .disconnected)
-                // — only proceed if we're still the pending attempt.
-                guard self.state == .connecting else { return }
+                // The wait may have been superseded — either the user flipped off
+                // (→ .disconnected) or a newer connect() ran its own preflight and
+                // bumped the epoch. Proceed only if we're still the SAME pending
+                // attempt: state held at .connecting AND no newer connect intervened.
+                guard !Task.isCancelled,
+                      self.state == .connecting,
+                      self.connectEpoch == epochAtWaitStart else { return }
                 guard let (engine, details, port, settings, epoch) = self.preflight(record, isReconnect: false) else { return }
                 Task.detached { [weak self] in
                     await Self.runEngine(engine: engine, details: details,
@@ -667,10 +775,15 @@ final class TunnelManager: ObservableObject {
     /// listener (within `selfDisconnectGhostWindow`)? Reads live state on MainActor
     /// and delegates the verdict to the pure `shouldWaitForOwnPortRelease`.
     private func shouldWaitForOwnPortReleaseNow() -> Bool {
-        let port = UInt16(SettingsStore.shared.socksPort)
+        let configuredPort = SettingsStore.shared.socksPort
         let ago = TunnelManager.lastSelfDisconnectDate.map { Date().timeIntervalSince($0) }
-        return Self.shouldWaitForOwnPortRelease(portFree: PortAvailability.isFree(port),
-                                                selfDisconnectedAgo: ago)
+        return Self.shouldWaitForOwnPortRelease(
+            portFree: PortAvailability.isFree(UInt16(configuredPort)),
+            selfDisconnectedAgo: ago,
+            // #394: the busy port must be the one our last session released, else
+            // there's no ghost of ours to wait for → fail fast (#308).
+            configuredPort: configuredPort,
+            releasedPort: TunnelManager.lastSelfDisconnectPort)
     }
 
     /// #333: poll the SAME configured port until it frees up — up to
@@ -937,18 +1050,27 @@ final class TunnelManager: ObservableObject {
     /// the live room; the engine already leases an ephemeral port per probe).
     /// `onResult` fires on MainActor after each probe so the UI can badge rows as
     /// they complete rather than waiting for the whole group.
+    // #388/#390 was: pingGroup(_:connectedNode:onResult:) — the caller passed a
+    // snapshot of the connected node (`store.primary`, a UI selection that desyncs
+    // from the live node on a no-reconnect row tap, #388) and the loop snapshotted
+    // `state`/`connectedNode` ONCE before iterating (#390). Both let the skip miss
+    // the genuinely-live node and ping it as a 2nd client in its room. Now the live
+    // node is read from `connectedRecord` (the single source of truth) and re-read
+    // EACH iteration — across the `await ping` suspension points the live session
+    // can change, so a node that connects mid-batch is now correctly skipped.
     @discardableResult
     func pingGroup(_ group: [ConnectionRecord],
-                   connectedNode: ConnectionRecord?,
                    // No `@escaping`: `onResult` is called inline (never stored), and
                    // since `pingGroup` is `@MainActor`-isolated each callback already
                    // runs on the main actor — the UI can mutate @State directly.
                    onResult: (UUID, PingOutcome) -> Void) async -> [UUID: PingOutcome] {
         var results: [UUID: PingOutcome] = [:]
-        let state = self.state
         for record in group {
+            // #390: re-read live state EACH iteration — a node that connects mid-
+            // batch (the user hits Connect while a group ping runs) must be skipped.
             guard !Self.shouldSkipBatchPing(record: record,
-                                            connectedNode: connectedNode, state: state) else {
+                                            connectedNode: connectedRecord,
+                                            state: state) else {
                 continue
             }
             let probeRecord = Self.recordForBatchPing(

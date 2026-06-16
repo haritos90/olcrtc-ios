@@ -178,13 +178,9 @@ final class ConnectionStore: ObservableObject {
     /// Builds the protocol params for a subscription entry (#355 sei params
     /// carried through; #356 dedup uses the result).
     private static func connection(from entry: OlcrtcSubscription.Entry) -> OlcrtcConnection {
-        let p = entry.parsed
-        return OlcrtcConnection(
-            carrier: p.carrier, transport: p.transport, roomID: p.roomID,
-            key: p.key, clientID: p.clientID,
-            vp8FPS: p.vp8FPS, vp8BatchSize: p.vp8BatchSize,
-            seiFPS:   p.seiFPS   ?? 30, seiBatch: p.seiBatch ?? 10,
-            seiFrag:  p.seiFrag  ?? 1200, seiACK:  p.seiACK  ?? 1)
+        // #401: the Parsed → connection mapping (sei defaults 30/10/1200/1) now
+        // lives in OlcrtcConnection.init(from:), shared with the import paths.
+        OlcrtcConnection(from: entry.parsed)
     }
 
     /// Applies a (re-)import of `sub` fetched from `source`. Diffs against the
@@ -231,6 +227,62 @@ final class ConnectionStore: ObservableObject {
         return now.timeIntervalSince(meta.lastRefresh) >= interval
     }
 
+    // MARK: Refresh-due trigger (#362)
+    //
+    // #356 added `isRefreshDue` + the stored interval/lastRefresh but nothing
+    // ever called them. #362 wires a trigger: on app launch and from a manual
+    // pull-to-refresh, find the sources whose `#refresh` interval has elapsed
+    // and silently re-fetch + re-import them (the diff dedups, so this updates
+    // servers in place). The re-fetch is injectable for tests; it defaults to
+    // SubscriptionFetcher.fetch.
+
+    /// Every known subscription source whose `#refresh` interval has elapsed.
+    func dueSources(now: Date = Date()) -> [String] {
+        subscriptionMeta.keys.filter { isRefreshDue(source: $0, now: now) }
+    }
+
+    /// Re-fetches and re-imports every refresh-due source (#362). Each source's
+    /// canonical link is mapped to its HTTPS fetch URL the same way the initial
+    /// import does (`olcrtc-sub://` → https swap; a plain https source is fetched
+    /// as-is). A fetch/parse failure for one source is logged and skipped — it
+    /// must not abort the others or surface a modal on a background refresh.
+    /// Returns the sources that were successfully refreshed.
+    @discardableResult
+    func refreshDueSources(
+        now: Date = Date(),
+        fetch: (URL) async throws -> String = { try await SubscriptionFetcher.fetch(from: $0) }
+    ) async -> [String] {
+        var refreshed: [String] = []
+        for source in dueSources(now: now) {
+            guard let fetchURL = Self.fetchURL(for: source) else {
+                LogStore.shared.log(.connection,
+                    "⚠ subscription refresh: can't derive fetch URL for \(source) — skipped")
+                continue
+            }
+            do {
+                let body = try await fetch(fetchURL)
+                importSubscription(OlcrtcSubscription.parse(body), source: source)
+                refreshed.append(source)
+            } catch {
+                LogStore.shared.log(.connection,
+                    "✗ subscription refresh failed for \(fetchURL.host ?? source): \(error.localizedDescription)")
+            }
+        }
+        return refreshed
+    }
+
+    /// Maps a stored subscription `source` link to the HTTPS URL it is fetched
+    /// from: `olcrtc-sub://` is scheme-swapped to https (same as the import
+    /// path); a plain `https://` source is used directly. Anything else → nil.
+    static func fetchURL(for source: String) -> URL? {
+        guard let url = URL(string: source) else { return nil }
+        switch url.scheme?.lowercased() {
+        case "olcrtc-sub": return try? OlcrtcSubscription.httpsURL(from: url)
+        case "https":      return url
+        default:           return nil
+        }
+    }
+
     func grouped() -> [(group: String, items: [ConnectionRecord])] {
         Dictionary(grouping: connections, by: { $0.groupName })
             .sorted { $0.key < $1.key }
@@ -238,13 +290,63 @@ final class ConnectionStore: ObservableObject {
     }
 
     /// #363: the (source, meta) for a group, if any of its records came from a
-    /// subscription. Picks the first record in `items` carrying a `subSourceURL`
-    /// and looks its meta up — a group is normally backed by a single source.
-    /// Returns nil for a purely manual group so the UI shows no metadata section.
+    /// subscription. Returns nil for a purely manual group so the UI shows no
+    /// metadata section.
+    ///
+    /// #396 was: returned only the FIRST record's source + that one source's
+    /// meta. But groups are keyed by `#name`, so two subscriptions sharing a
+    /// `#name` land in one group — the footer then showed only one source's
+    /// quota plus a `serverCount` that mismatched the listed rows. Now the
+    /// returned info reflects ALL sources/records grouped under the name:
+    ///   • `source` — the single source if there's one, else a "N sources" label;
+    ///   • `serverCount` — the actual number of subscription-backed rows here
+    ///     (not one source's stored count);
+    ///   • `used`/`available` — joined across the distinct sources (server-
+    ///     provided free text; can't be summed, so they're listed);
+    ///   • `name` — the (shared) group name; `refreshInterval`/`lastRefresh` —
+    ///     the soonest-due source (smallest interval, then earliest refresh).
     func subscriptionInfo(for items: [ConnectionRecord]) -> (source: String, meta: SubscriptionMeta)? {
-        guard let source = items.lazy.compactMap({ $0.subSourceURL }).first,
-              let meta = subscriptionMeta[source] else { return nil }
-        return (source, meta)
+        // Distinct sources backing this group, in first-seen order.
+        var sources: [String] = []
+        for r in items {
+            if let s = r.subSourceURL, !sources.contains(s) { sources.append(s) }
+        }
+        let metas = sources.compactMap { subscriptionMeta[$0] }
+        guard let first = metas.first else { return nil }
+
+        // Rows that actually came from a subscription — the real server count for
+        // the group, independent of any single source's stored `serverCount`.
+        let backedCount = items.filter { $0.subSourceURL != nil }.count
+
+        if sources.count == 1 {
+            // Single-source group: correct the count to the listed rows, keep the
+            // rest of the stored meta as-is.
+            var meta = first
+            meta.serverCount = backedCount
+            return (sources[0], meta)
+        }
+
+        // Multi-source group sharing a `#name`. Synthesise an aggregate meta.
+        let usedParts      = metas.compactMap { $0.used }.filter { !$0.isEmpty }
+        let availableParts = metas.compactMap { $0.available }.filter { !$0.isEmpty }
+        // Soonest-due source drives the refresh display: smallest positive
+        // interval first, then the earliest lastRefresh.
+        let soonest = metas.min { a, b in
+            let ia = a.refreshInterval ?? .greatestFiniteMagnitude
+            let ib = b.refreshInterval ?? .greatestFiniteMagnitude
+            if ia != ib { return ia < ib }
+            return a.lastRefresh < b.lastRefresh
+        }
+        let aggregate = SubscriptionMeta(
+            refreshInterval: soonest?.refreshInterval,
+            lastRefresh:     soonest?.lastRefresh ?? first.lastRefresh,
+            name:            first.name,
+            used:            usedParts.isEmpty      ? nil : usedParts.joined(separator: ", "),
+            available:       availableParts.isEmpty ? nil : availableParts.joined(separator: ", "),
+            serverCount:     backedCount)
+        // `source` is shown as a host label; with several, surface the count
+        // instead of an arbitrary one.
+        return (L10n.subMetaMultipleSources_fmt.formatted(sources.count), aggregate)
     }
 
     /// Sorted unique group names already in use. Used by the connection

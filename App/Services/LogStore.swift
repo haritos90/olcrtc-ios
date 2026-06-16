@@ -432,6 +432,11 @@ final class LogStore: ObservableObject {
     /// #295: drops the in-memory buffer for one server's container log.
     func clearContainer(serverPrefix: String) {
         containerEntries[serverPrefix] = []
+        // #397: also drop the cached peer count for this server. The count is
+        // parsed only from rare "Current peers count:" lines (#367), so without
+        // this the Logs header keeps showing the stale "👥 N peers" long after
+        // the buffer is cleared, until the next (rare) count line arrives.
+        peerCounts[serverPrefix] = nil
         revision &+= 1
     }
 
@@ -530,7 +535,12 @@ final class LogStore: ObservableObject {
         }
         containerWriters[serverPrefix]?.write("\(Self.format(date: date)) \(safe)")
         // #367: track the latest server-reported peer count (a rare line).
-        if let n = Self.peerCount(in: safe) { peerCounts[serverPrefix] = n }
+        // #402: gate the NSRegularExpression behind a cheap literal pre-check —
+        // the "Current peers count:" marker is the exact prefix the regex anchors
+        // on, so this can't change matching, only skip the expensive scan on the
+        // vast majority of lines (incl. 200-line container fetches).
+        if safe.contains("Current peers count:"),
+           let n = Self.peerCount(in: safe) { peerCounts[serverPrefix] = n }
         // #332 was: revision &+= 1 — per-line UI invalidation.
         bumpRevisionCoalesced()
     }

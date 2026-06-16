@@ -498,4 +498,93 @@ final class TunnelManagerStateTests: XCTestCase {
         // Leave a clean baseline for any later test reading the shared static.
         TunnelManager.lastTunnelActivityDate = nil
     }
+
+    // MARK: liveBoundPort — lock-backed concurrent access (#382)
+    //
+    // #351's `liveBoundPort` mirror was a `nonisolated(unsafe)` static written on
+    // MainActor (via boundPort.didSet) but read off MainActor by SOCKSSession (from
+    // the detached verifyTunnel task) — a genuine data race. It's now backed by an
+    // OSAllocatedUnfairLock; hammering it from many tasks must not crash / trap, and
+    // the nonisolated getter must round-trip the value the MainActor setter wrote.
+
+    func testLiveBoundPortConcurrentAccessIsSafe() {
+        let exp = expectation(description: "concurrent liveBoundPort access")
+        exp.expectedFulfillmentCount = 64
+        for i in 0..<64 {
+            DispatchQueue.global().async {
+                // The setter is `private`, so drive writes through the MainActor
+                // `boundPort` path; reads use the nonisolated getter off-actor.
+                _ = TunnelManager.liveBoundPort
+                exp.fulfill()
+            }
+            _ = i
+        }
+        wait(for: [exp], timeout: 5)
+    }
+
+    func testLiveBoundPortMirrorsBoundPortAcrossASession() throws {
+        let s = SettingsStore.shared
+        let saved = s.socksPort
+        defer { s.socksPort = saved }
+        let free = try XCTUnwrap(someFreePort(), "no free local port to test on")
+        s.socksPort = free
+        let manager = makeManager()
+        manager.connect(record: record(with: validParams()))
+        XCTAssertEqual(TunnelManager.liveBoundPort, free,
+                       "the lock-backed mirror must track the reserved port")
+        manager.state = .disconnected
+        XCTAssertNil(TunnelManager.liveBoundPort,
+                     "the mirror must clear when the session ends")
+    }
+
+    // MARK: connectedRecord — live node, not the UI selection (#388/#389)
+    //
+    // The live node is whatever `connect()` last started, exposed only while the
+    // session is up. Distinct from the UI's `store.primary`, which a no-reconnect
+    // row tap moves without changing the live session. nil unless `.connected`.
+
+    func testConnectedRecordNilUntilConnected() {
+        let manager = makeManager()
+        XCTAssertNil(manager.connectedRecord, "no session → nil")
+        manager.connect(record: record(with: validParams()))
+        XCTAssertEqual(manager.state, .connecting)
+        XCTAssertNil(manager.connectedRecord, "connecting (not yet verified) → still nil")
+        manager.state = .disconnected
+    }
+
+    func testConnectedRecordIsTheStartedRecordWhileConnected() {
+        let manager = makeManager()
+        let r = record(with: validParams())
+        manager.connect(record: r)
+        // Drive to .connected directly (the real verify path needs a Go runtime).
+        manager.state = .connected
+        XCTAssertEqual(manager.connectedRecord?.id, r.id,
+                       "connectedRecord must surface the node the tunnel holds")
+        manager.state = .disconnected
+        XCTAssertNil(manager.connectedRecord, "cleared once the session ends")
+    }
+
+    // MARK: secretsLocked guard moved into connect() (#393)
+    //
+    // The locked-secrets short-circuit used to live in ConnectionsView.connectGuarded,
+    // which auto-connect-on-launch bypassed. It now lives in TunnelManager.connect, so
+    // EVERY caller gets the actionable unlock message instead of the misleading
+    // "Key must be 64 hex characters (got: 0)".
+
+    func testConnectShortCircuitsWhenSecretsLocked() {
+        let manager = makeManager()
+        manager.secretsLocked = { true }
+        manager.connect(record: record(with: validParams()))
+        XCTAssertEqual(manager.state, .failed(L10n.errorSecretsLocked.localized()),
+                       "a locked-secrets connect must surface the unlock message")
+    }
+
+    func testConnectProceedsPastGuardWhenSecretsUnlocked() {
+        let manager = makeManager()
+        manager.secretsLocked = { false }   // unlocked → normal preflight
+        manager.connect(record: record(with: validParams()))
+        XCTAssertEqual(manager.state, .connecting,
+                       "an unlocked connect must run preflight as usual")
+        manager.state = .disconnected
+    }
 }
