@@ -81,7 +81,56 @@ struct OlcrtcURI {
     // MARK: Parse
 
     /// Parses an `olcrtc://` URI into its constituent fields.
+    ///
+    /// #398: percent-decode normalization lives HERE now (it used to be a local
+    /// fallback only in `handleConnectionURL`, so paste/QR/subscription-body
+    /// callers normalized inconsistently). The OS percent-encodes the payload
+    /// delimiters (`[ ] , < > &`) when forming a URL from a deep link/QR, which
+    /// makes a strict parse either fail OR "succeed" while swallowing the encoded
+    /// payload into the transport name — so a raw-then-decoded fallback keyed on
+    /// failure alone isn't enough. Order: raw first; if it leaves a `%` in the
+    /// transport (a valid transport never contains one) or fails, restore just
+    /// the payload delimiters and retry; finally fall back to a full decode for a
+    /// wholly percent-encoded URL, else surface the strict diagnostic.
     static func parse(_ raw: String) throws -> Parsed {
+        // #398: a valid transport identifier never contains '%'; if a successful
+        // raw parse leaves one there, the payload delimiters were percent-encoded
+        // and got folded into the transport — so this raw parse isn't trustworthy.
+        if let parsed = try? parseStrict(raw), !parsed.transport.contains("%") {
+            return parsed
+        }
+        // #398: opportunistically restore ONLY the payload delimiters the OS
+        // escapes, leaving any legitimately-encoded octet elsewhere (e.g. a
+        // roomID's %20) intact, then retry.
+        let restored = decodingPayloadDelimiters(raw)
+        if restored != raw, let parsed = try? parseStrict(restored) {
+            return parsed
+        }
+        // #398 was: the only fallback. A wholly percent-encoded URL escapes the
+        // structural delimiters (? @ #) too, so fall back to a full decode; if
+        // nothing decodes, surface parseStrict's real diagnostic for a bad URI.
+        if let decoded = raw.removingPercentEncoding, decoded != raw {
+            return try parseStrict(decoded)
+        }
+        return try parseStrict(raw)
+    }
+
+    /// #398: percent-decodes ONLY the olcrtc payload delimiters (`[ ] , < > &`)
+    /// the OS escapes when forming a deep-link/QR URL. Unlike a blanket
+    /// `removingPercentEncoding`, it leaves every other escape (e.g. a roomID's
+    /// `%20`) untouched, so it can't corrupt a field that legitimately carries one.
+    private static func decodingPayloadDelimiters(_ s: String) -> String {
+        var out = s
+        for (enc, dec) in [("%5B", "["), ("%5D", "]"), ("%2C", ","),
+                           ("%3C", "<"), ("%3E", ">"), ("%26", "&")] {
+            out = out.replacingOccurrences(of: enc, with: dec, options: [.caseInsensitive])
+        }
+        return out
+    }
+
+    /// The exact field-by-field parse, with no percent-decode normalization
+    /// (that lives in `parse`, #398).
+    private static func parseStrict(_ raw: String) throws -> Parsed {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard s.hasPrefix("olcrtc://") else { throw ParseError.invalidScheme }
 

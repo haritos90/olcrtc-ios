@@ -471,6 +471,7 @@ enum L10n: String, CaseIterable {
     case subMetaRefreshInterval_fmt         // "every %@"
     case subMetaUsed                        // "Used"
     case subMetaAvailable                   // "Available"
+    case subMetaMultipleSources_fmt         // "%d sources" — #396: group sharing a #name across sources
 
     // MARK: #364 — batch "ping group"
     case pingGroupAction                    // "Ping all"

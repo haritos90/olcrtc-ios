@@ -64,38 +64,6 @@ enum NetPing {
     }
 }
 
-/// Single-shot gate. `fire()` returns `true` exactly once across all racing
-/// callers; every subsequent call returns `false`. Used by `NetPing.tcp` so
-/// that the `withCheckedContinuation` is resumed at most once when multiple
-/// asynchronous racers (NWConnection state callback, timeout DispatchWorkItem,
-/// possibly a third future signal) can fire concurrently — resuming twice
-/// crashes Swift Concurrency at runtime.
-///
-/// `@unchecked Sendable` safety invariant
-/// --------------------------------------
-/// The compiler can't verify this class is `Sendable` because it has a
-/// mutable stored property (`fired`). We claim Sendable manually because:
-///
-///   1. `fired` is only read or written while `lock` is held.
-///   2. `lock` is `NSLock` (which is itself thread-safe).
-///   3. There are no other stored properties to coordinate.
-///
-/// `fire()` is the only method that touches `fired`, and it does so under
-/// the lock. No other API reveals or mutates state. Therefore any number
-/// of threads can call `fire()` concurrently and observe a consistent
-/// single-true-then-all-false sequence. If a future change adds another
-/// stored property OR another method that reads/writes `fired` outside
-/// the lock, this annotation becomes a lie — drop `@unchecked` and let
-/// the compiler reject the build, then redesign.
-private final class ContinuationGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var fired = false
-
-    func fire() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if fired { return false }
-        fired = true
-        return true
-    }
-}
+// #400: `ContinuationGate` (the resume-at-most-once gate `NetPing.tcp` uses) now
+// lives in App/Utilities/ContinuationGate.swift, shared with the subscription
+// fetcher and CarrierEndpoints — previously each duplicated its own copy.

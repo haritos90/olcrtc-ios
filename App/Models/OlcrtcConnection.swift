@@ -60,6 +60,31 @@ struct OlcrtcConnection: Codable, Equatable {
         self.seiACK       = seiACK
     }
 
+    // #401: the OlcrtcURI.Parsed → OlcrtcConnection mapping (carrying the URI's
+    // vp8FPS/vp8BatchSize as-is and defaulting the sei params 30/10/1200/1 when a
+    // key was absent) was hand-inlined at ~5 call sites — the import paths in
+    // App.swift, the install / recover / rotate-key paths in ServersView. The
+    // sei `?? 30/10/1200/1` defaults now live HERE, in one place. `clientID`
+    // overrides the parsed value when non-nil (the recover path forces "default",
+    // since a recovered server.yaml has no client segment).
+    init(from parsed: OlcrtcURI.Parsed, clientID: String? = nil,
+         socksUser: String = "", socksPass: String = "") {
+        self.init(
+            carrier:      parsed.carrier,
+            transport:    parsed.transport,
+            roomID:       parsed.roomID,
+            key:          parsed.key,
+            clientID:     clientID ?? parsed.clientID,
+            vp8FPS:       parsed.vp8FPS,
+            vp8BatchSize: parsed.vp8BatchSize,
+            socksUser:    socksUser,
+            socksPass:    socksPass,
+            seiFPS:       parsed.seiFPS   ?? 30,
+            seiBatch:     parsed.seiBatch ?? 10,
+            seiFrag:      parsed.seiFrag  ?? 1200,
+            seiACK:       parsed.seiACK   ?? 1)
+    }
+
     // MARK: - Codable
 
     // socksPass and key are intentionally excluded — they are stored in Keychain

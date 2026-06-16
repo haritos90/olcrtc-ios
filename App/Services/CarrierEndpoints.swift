@@ -52,7 +52,7 @@ enum CarrierEndpoints {
     /// the system resolver via NWEndpoint — no extra entitlement needed.
     static func resolve(host: String, timeout: TimeInterval = 5) async -> [String] {
         await withCheckedContinuation { continuation in
-            let gate = ResolveGate()
+            let gate = ContinuationGate() // #400 was: ResolveGate (local copy)
             // Port is irrelevant for resolution; 443 is a valid placeholder.
             let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: 443)
             let conn = NWConnection(to: endpoint, using: .tcp)
@@ -104,15 +104,6 @@ enum CarrierEndpoints {
     }
 }
 
-/// Single-shot gate so the resolve continuation resumes at most once across
-/// the state callback and the timeout (mirrors NetPing.ContinuationGate).
-private final class ResolveGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var fired = false
-    func fire() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if fired { return false }
-        fired = true
-        return true
-    }
-}
+// #400: the resolve continuation's single-shot gate (resume-at-most-once across
+// the state callback and the timeout) is now the shared `ContinuationGate` in
+// App/Utilities/ContinuationGate.swift — previously a local `ResolveGate` copy.

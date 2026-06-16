@@ -94,7 +94,7 @@ enum L10nTable {
         .importByURI:                "Import from URI",
         .scanQRAction:               "Scan QR",
         .pasteURIAction:             "Paste URI",
-        .importHint:                 "If you have a URI from the server — paste it here and tap «Parse». The fields below will be filled in automatically.",
+        .importHint:                 "Tap Paste to import a URI or a subscription from the clipboard, or Scan QR. The fields below fill in automatically.", // #381 was: "If you have a URI from the server — paste it here and tap «Parse». The fields below will be filled in automatically." — buttons are Scan QR / Paste (Paste also imports subscriptions since #361), there is no "Parse" button.
         .clientIDFooter:             "Your device identifier in the room. 'default' works for single-device setups. Use a unique value when multiple devices share the same room.",
         .keyPlaceholder:             "64-char hex key",
         .roomIDLabel:                "Room ID",
@@ -512,6 +512,7 @@ enum L10nTable {
         .subMetaRefreshInterval_fmt: "every %@",
         .subMetaUsed:                "Used",
         .subMetaAvailable:           "Available",
+        .subMetaMultipleSources_fmt: "%d sources",   // #396
 
         // #364: batch "ping group"
         .pingGroupAction:            "Ping all",
@@ -635,7 +636,7 @@ enum L10nTable {
         .importByURI:                "Импорт по ссылке",
         .scanQRAction:               "Сканировать QR",
         .pasteURIAction:             "Вставить URI",
-        .importHint:                 "Если у тебя есть URI с сервера — вставь сюда и нажми «Распознать». Поля ниже заполнятся автоматически.",
+        .importHint:                 "Нажми «Вставить», чтобы импортировать URI или подписку из буфера обмена, либо «Сканировать QR». Поля ниже заполнятся автоматически.", // #381 was: "Если у тебя есть URI с сервера — вставь сюда и нажми «Распознать». Поля ниже заполнятся автоматически." — кнопки «Сканировать QR» / «Вставить» (с #361 «Вставить» импортирует и подписки), кнопки «Распознать» нет.
         .clientIDFooter:             "Идентификатор устройства в комнате. «default» подходит для одного устройства. Используй уникальное значение если несколько устройств подключаются к одной комнате.",
         .keyPlaceholder:             "64-символьный hex-ключ",
         .roomIDLabel:                "Идентификатор комнаты",
@@ -1054,6 +1055,7 @@ enum L10nTable {
         .subMetaRefreshInterval_fmt: "каждые %@",
         .subMetaUsed:                "Использовано",
         .subMetaAvailable:           "Доступно",
+        .subMetaMultipleSources_fmt: "%d источников",   // #396
 
         // #364: групповой пинг
         .pingGroupAction:            "Пинговать все",

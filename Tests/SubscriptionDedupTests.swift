@@ -215,6 +215,64 @@ final class SubscriptionDedupTests: XCTestCase {
         XCTAssertEqual(info.meta.refreshInterval, 600)
     }
 
+    // #396: a group keyed by a shared `#name` but fed by TWO sources must
+    // surface BOTH sources' quota and a server count matching the listed rows —
+    // not just the first source's meta with a mismatched count.
+    func testSubscriptionInfoAggregatesAcrossSourcesSharingAName() {
+        let store = ConnectionStore()
+        let srcA = "olcrtc-sub://a.example.org/sub"
+        let srcB = "olcrtc-sub://b.example.org/sub"
+        // Both lists share #name: Pool, so their records land in one group.
+        let listA = """
+        #name: Pool
+        #refresh: 10m
+        #used: 1gb/10gb
+        #available: 9gb
+        olcrtc://wbstream?datachannel@room-a#aa
+        ##name: A
+        olcrtc://wbstream?datachannel@room-b#bb
+        ##name: B
+        """
+        let listB = """
+        #name: Pool
+        #refresh: 1h
+        #used: 2gb/20gb
+        #available: 18gb
+        olcrtc://wbstream?datachannel@room-c#cc
+        ##name: C
+        """
+        store.importSubscription(sub(listA), source: srcA)
+        store.importSubscription(sub(listB), source: srcB)
+        store.connections.forEach { createdIDs.append($0.id) }
+
+        // All three nodes share group "Pool".
+        let pool = store.grouped().first { $0.group == "Pool" }
+        XCTAssertEqual(pool?.items.count, 3)
+        guard let info = store.subscriptionInfo(for: pool!.items) else {
+            return XCTFail("multi-source group must still expose subscription info")
+        }
+        // Server count reflects ALL listed subscription rows, not one source's 2.
+        XCTAssertEqual(info.meta.serverCount, 3)
+        // Both sources' quota are surfaced (not just the first).
+        XCTAssertEqual(info.meta.used, "1gb/10gb, 2gb/20gb")
+        XCTAssertEqual(info.meta.available, "9gb, 18gb")
+        // Soonest-due interval (10m < 1h) drives the refresh display.
+        XCTAssertEqual(info.meta.refreshInterval, 600)
+    }
+
+    // #396: a single-source group still shows that source, but its server count
+    // is corrected to the actual listed rows.
+    func testSubscriptionInfoSingleSourceCountsListedRows() {
+        let store = ConnectionStore()
+        store.importSubscription(sub(twoNodes), source: source)
+        store.connections.forEach { createdIDs.append($0.id) }
+        guard let info = store.subscriptionInfo(for: store.connections) else {
+            return XCTFail("single-source group must expose subscription info")
+        }
+        XCTAssertEqual(info.source, source)
+        XCTAssertEqual(info.meta.serverCount, 2)
+    }
+
     func testManualGroupHasNoSubscriptionInfo() {
         let store = ConnectionStore()
         let manual = ConnectionRecord(

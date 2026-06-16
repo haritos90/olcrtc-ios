@@ -174,7 +174,17 @@ enum SubscriptionFetcher {
         guard scheme == "https" else { throw URLError(.badURL) }
         let port = UInt16(url.port ?? 443)
         // Path + query, as sent on the request line.
-        var pathAndQuery = url.path.isEmpty ? "/" : url.path
+        // #391: `url.path` is percent-DECODED by Foundation, so an encoded path
+        // like `/my%20sub.md` would otherwise be written onto the request line
+        // as `GET /my sub.md` — a malformed request line the server rejects
+        // (400). Re-encode the path's reserved/space characters back to their
+        // percent form (`.urlPathAllowed` keeps `/` and already-safe chars).
+        // #391 was: `var pathAndQuery = url.path.isEmpty ? "/" : url.path`
+        let rawPath = url.path.isEmpty ? "/" : url.path
+        let encodedPath = rawPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? rawPath
+        var pathAndQuery = encodedPath
+        // url.query is NOT decoded by Foundation, so it is already wire-safe —
+        // leave it verbatim (re-encoding here would double-escape `%`/`&`/`=`).
         if let q = url.query, !q.isEmpty { pathAndQuery += "?\(q)" }
 
         let (data, status) = try await NWHTTPSGet.get(
@@ -258,8 +268,11 @@ enum NWHTTPSGet {
         let conn = NWConnection(to: endpoint, using: params)
 
         // The minimal HTTP/1.1 request: Host carries the original hostname,
-        // Connection: close so the server finishes the body and EOFs the
-        // stream, which is our read terminator.
+        // Connection: close asks the server to finish the body and EOF the
+        // stream. A well-behaved server EOFs (our fallback terminator); #392
+        // also stops as soon as Content-Length / the chunked terminator marks
+        // the body complete, so a keep-alive server that ignores `close` no
+        // longer makes us block until the timeout.
         let request =
             "GET \(pathAndQuery) HTTP/1.1\r\n" +
             "Host: \(host)\r\n" +
@@ -286,15 +299,25 @@ enum NWHTTPSGet {
                 cont.resume(returning: (body, status))
             }
 
-            // Drain the connection until EOF (Connection: close), then parse.
+            // boc #392: drain the connection until the body is complete OR EOF.
+            // We still send `Connection: close`, but a keep-alive server that
+            // ignores it would otherwise keep the stream open and we'd block on
+            // `receive` until the 15s timeout even though the full body has
+            // already arrived. So after each chunk, check whether the accumulated
+            // bytes already form a complete response (Content-Length satisfied,
+            // or the chunked terminator seen) and finish as soon as they do.
+            // EOF (`isComplete`) remains the fallback terminator for the
+            // Connection: close / identity-no-length case.
+            // #392 was: only `if isComplete { succeed(); return }`.
             func receiveLoop() {
                 conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { chunk, _, isComplete, error in
                     if let chunk, !chunk.isEmpty { collected.append(chunk) }
                     if let error { fail(HTTPError.connection(error)); return }
-                    if isComplete { succeed(); return }
+                    if isComplete || Self.isBodyComplete(collected) { succeed(); return }
                     receiveLoop()
                 }
             }
+            // eoc #392
 
             conn.stateUpdateHandler = { state in
                 switch state {
@@ -315,6 +338,55 @@ enum NWHTTPSGet {
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
         }
     }
+
+    // boc #392: completion predicate for an in-progress response read.
+    /// Returns `true` when `raw` (headers + however much body has arrived) already
+    /// contains the full HTTP/1.1 message body, so the caller can stop reading
+    /// without waiting for TCP EOF. Honors, in order:
+    ///   • `Transfer-Encoding: chunked` — complete once the zero-length terminator
+    ///     chunk (`0\r\n\r\n`) has been received;
+    ///   • `Content-Length: N` — complete once N body bytes have arrived;
+    ///   • neither header — `false` (the body length is delimited by connection
+    ///     close, so only EOF can mark completion).
+    /// Returns `false` until the header/body separator (CRLFCRLF) is present.
+    static func isBodyComplete(_ raw: Data) -> Bool {
+        let sep = Data("\r\n\r\n".utf8)
+        guard let range = raw.range(of: sep) else { return false }
+        let headerData = raw.subdata(in: raw.startIndex..<range.lowerBound)
+        guard let headerText = String(data: headerData, encoding: .utf8) else { return false }
+        let body = raw.subdata(in: range.upperBound..<raw.endIndex)
+
+        let lower = headerText.lowercased()
+        if lower.contains("transfer-encoding: chunked") {
+            // The chunked stream is finished once the terminating last-chunk
+            // (`0\r\n\r\n`, with an empty trailer block) has arrived — either at
+            // the very start of the body (a zero-length body) or after a prior
+            // chunk's CRLF. This is a stop-early heuristic; the authoritative
+            // de-frame happens later in `dechunk`, and EOF is the safety net, so
+            // a payload that happens to embed these bytes only ends the read a
+            // chunk early at worst (still benign for a text subscription body).
+            return body.range(of: Data("0\r\n\r\n".utf8))?.lowerBound == body.startIndex
+                || body.range(of: Data("\r\n0\r\n\r\n".utf8)) != nil
+        }
+        if let len = contentLength(in: headerText) {
+            return body.count >= len
+        }
+        // No explicit length framing — only EOF can delimit the body.
+        return false
+    }
+
+    /// Extracts the `Content-Length` header value, or nil when absent/malformed.
+    static func contentLength(in headerText: String) -> Int? {
+        for line in headerText.split(separator: "\r\n", omittingEmptySubsequences: false) {
+            let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2,
+                  parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length"
+            else { continue }
+            return Int(parts[1].trimmingCharacters(in: .whitespaces))
+        }
+        return nil
+    }
+    // eoc #392
 
     /// Splits a raw HTTP/1.1 response into (status code, body). Returns nil on a
     /// malformed status line or missing header/body separator. De-chunks a
@@ -362,16 +434,7 @@ enum NWHTTPSGet {
     }
 }
 
-/// Single-shot gate: `fire()` returns `true` exactly once across racing callers
-/// (NWConnection callbacks + the timeout work item), so the continuation is
-/// resumed at most once. Mirrors `NetPing.ContinuationGate`.
-private final class ContinuationGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var fired = false
-    func fire() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if fired { return false }
-        fired = true
-        return true
-    }
-}
+// #400: `ContinuationGate` (used above to resume the GET continuation at most
+// once across the receive/state callbacks and the timeout work item) now lives
+// in App/Utilities/ContinuationGate.swift, shared with NetPing and
+// CarrierEndpoints — previously each kept its own copy.
