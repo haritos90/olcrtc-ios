@@ -69,14 +69,12 @@ enum CarrierEndpoints {
 
             conn.stateUpdateHandler = { state in
                 switch state {
-                case .ready, .preparing:
-                    // Once the path is up (or being set up) the remote endpoint
-                    // carries the resolved address.
-                    if let ip = Self.resolvedIP(from: conn.currentPath?.remoteEndpoint) {
-                        finish([ip])
-                    } else if case .ready = state {
-                        finish([])
-                    }
+                case .ready:
+                    // #387: read the resolved address only once the path is
+                    // actually up. `.preparing` could still expose the unresolved
+                    // hostname, which `resolvedIP` would then hand back as a fake
+                    // "resolved IP". #387 was: also matched `.preparing`.
+                    finish(Self.resolvedIP(from: conn.currentPath?.remoteEndpoint).map { [$0] } ?? [])
                 case .failed, .cancelled:
                     finish([])
                 default:
@@ -96,7 +94,11 @@ enum CarrierEndpoints {
         switch host {
         case .ipv4(let addr): return "\(addr)".split(separator: "%").first.map(String.init)
         case .ipv6(let addr): return "\(addr)".split(separator: "%").first.map(String.init)
-        case .name(let name, _): return name.contains(".") || name.contains(":") ? name : nil
+        // #387 was: `.name(let name, _): return name.contains(".") ? name : nil`
+        // — a `.name` here means the endpoint is still the unresolved hostname
+        // (which has a dot), so returning it handed the domain back as a fake
+        // "resolved IP". Report no address instead so the card stays honest.
+        case .name: return nil
         @unknown default: return nil
         }
     }

@@ -116,11 +116,17 @@ final class UpdateChecker: ObservableObject {
 
     // MARK: Pure helpers (unit-tested)
 
-    /// The running app version. `CFBundleShortVersionString` (MARKETING_VERSION,
-    /// e.g. "1.3") is compared against the release tag, which is the same
-    /// marketing tag the release workflow tags with (`vX.Y`).
+    /// The running app version, as `MARKETING_VERSION.BUILD` (e.g. "1.3.253").
+    /// #404: releases are tagged `vMARKETING.BUILD` (the maintainer's annotated
+    /// `git tag -a v1.3.253`), so the comparison must include the build number.
+    /// #404 was: `CFBundleShortVersionString` alone (e.g. "1.3") — the tag's
+    /// trailing build segment then always read as a newer trailing version, so
+    /// `isNewer` returned true and the "Update available" sheet showed on every
+    /// launch even when the installed build IS the latest release.
     nonisolated static func currentVersion() -> String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+        let marketing = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return "\(marketing).\(build)"
     }
 
     /// True when `now` is at least `interval` after `lastCheck`. A nil
