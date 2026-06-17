@@ -472,6 +472,7 @@ enum L10n: String, CaseIterable {
     case subMetaUsed                        // "Used"
     case subMetaAvailable                   // "Available"
     case subMetaMultipleSources_fmt         // "%d sources" — #396: group sharing a #name across sources
+    case pullToRefreshSubscriptions         // #411: hint that the Connections pull-to-refresh re-fetches subscriptions
 
     // MARK: #364 — batch "ping group"
     case pingGroupAction                    // "Ping all"
@@ -515,6 +516,42 @@ enum L10n: String, CaseIterable {
     case updateInstallSideStore             // "Install with SideStore"
     case updateInstallLiveContainer         // "Install with LiveContainer"
     case updateLater                        // "Later"
+
+    // MARK: Bot settings (#416–#420)
+    case botPlatformTelegram, botPlatformMax            // platform names; ru = en
+    // status + recoverable errors (Provisioner / SSHRunner)
+    case botDeploying, botDeploySuccess, botChecking, botRemoving, botRemoveSuccess
+    case botErrorNoSystemd, botErrorNoPython, botErrorNoRoot, botErrorGeneric_fmt
+    case botErrorNotActive                  // #423: installed but the service didn't start
+    // per-server sheet (#419)
+    case botSheetTitle                      // "Bot" — sheet title + action button/menu label
+    case botSheetFooter                     // generic how-it-works line
+    case botSelectLabel                     // "Bot" — picker: which registry bot
+    case botCommandsHeader, botRepliesHeader
+    case botStartCmdLabel, botStopCmdLabel
+    case botStartReplyLabel, botStopReplyLabel, botUnknownReplyLabel
+    case botDefaultStartReply, botDefaultStopReply, botDefaultUnknownReply  // seed values
+    case botCheckAction                     // "Check server"
+    case botDeployAction                    // "Deploy bot"
+    case botRemoveAction                    // "Remove bot from server"
+    case botStatusRunning                   // "Running"
+    case botStatusInstalledIdle             // "Installed, not running"
+    case botStatusNone                      // "No bot on this server"
+    case botNoBotsTitle, botNoBotsHint      // empty-registry state
+    case botMissingTokenError               // selected bot has no token yet
+    case botUnknownFound_fmt                // "Found a bot “%@” that isn't in your Settings."
+    case botRemoveConfirmTitle, botRemoveConfirmBody
+    // settings registry (#420)
+    case sectionBots                        // "Bots" — Settings section + subscreen title
+    case botsFooter                         // detection / delete caveat
+    case botsEmptyHint                      // list empty
+    case botAddTitle, botEditTitle          // editor titles
+    case botAddAction, botDeleteAction
+    case botNameLabel, botNamePlaceholder, botPlatformLabel
+    case botTokenLabel, botTokenPlaceholder // masked, paste-only
+    case botTokenSavedHint, botTokenNoneHint
+    case botCopyTokenAction, botTokenCopied
+    case botNameTakenError
 }
 
 extension L10n {

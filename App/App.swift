@@ -49,11 +49,16 @@ final class LogsRouter: ObservableObject {
 }
 
 struct MainTabView: View {
-    @StateObject  private var store       = ConnectionStore()
-    @StateObject  private var tunnel      = TunnelManager()
+    // #412 was: `store`/`tunnel` had inline `= …` initializers and
+    // `tunnel.secretsLocked` was wired later in `.onAppear` — a forgettable step
+    // (a missed wiring reads as "never locked", #393). Both are now built in
+    // `init()`, with the locked-secrets check injected into TunnelManager.
+    @StateObject  private var store       : ConnectionStore
+    @StateObject  private var tunnel      : TunnelManager
     @StateObject  private var ipCheck     = IPChecker()
     @StateObject  private var speed       = SpeedTest()
     @StateObject  private var serverStore = ServerHostStore()
+    @StateObject  private var botStore    = BotStore()      // #417: bot registry (Manage VPS + Settings)
     @StateObject  private var logsRouter  = LogsRouter()   // #339
     @StateObject  private var updateChecker = UpdateChecker()   // #360
     @ObservedObject private var settings  = SettingsStore.shared
@@ -91,6 +96,16 @@ struct MainTabView: View {
     @State private var fullAccessPrompt: FullAccessShare?
     // eoc #111
 
+    // #412: build store + tunnel here so the locked-secrets check is injected into
+    // TunnelManager at construction — no forgettable `.onAppear` wiring step.
+    init() {
+        let store = ConnectionStore()
+        _store = StateObject(wrappedValue: store)
+        _tunnel = StateObject(wrappedValue: TunnelManager(secretsLocked: { [weak store] in
+            store?.secretsLocked ?? false
+        }))
+    }
+
     var body: some View {
         // #258 shell pass: every tab uses a large title + a single trailing slot
         // (Connections / VPS: +, Logs: ⋯ overflow, Settings: none). Dark-only is
@@ -103,7 +118,7 @@ struct MainTabView: View {
                 .tag(0)
 
             // #339: + logsRouter, so "Container logs" can route to the Logs tab.
-            ServersView(serverStore: serverStore, connections: store, logsRouter: logsRouter)
+            ServersView(serverStore: serverStore, connections: store, logsRouter: logsRouter, botStore: botStore)
                 .tabItem { Label(L10n.tabServers.localized(), systemImage: "server.rack") }
                 .tag(1)
 
@@ -126,7 +141,7 @@ struct MainTabView: View {
             // connection, not just the configured port number (#313: the
             // gate compares against `tunnel.boundPort`, the port the live
             // session actually bound).
-            SettingsView(tunnel: tunnel)
+            SettingsView(tunnel: tunnel, botStore: botStore)
                 .tabItem { Label(L10n.tabSettings.localized(), systemImage: "gearshape") }
                 .tag(4)
         }
@@ -192,12 +207,8 @@ struct MainTabView: View {
         }
         // eoc #111
         .onAppear {
-            // #393: wire the locked-secrets check into TunnelManager so EVERY
-            // connect path (incl. auto-connect below, which calls `connect`
-            // directly) gets the actionable "unlock the device" message instead
-            // of the misleading "Key must be 64 hex characters (got: 0)".
-            // `ConnectionStore` isn't a singleton, so it's injected as a closure.
-            tunnel.secretsLocked = { store.secretsLocked }
+            // #412 was: `tunnel.secretsLocked = { store.secretsLocked }` wired here
+            // (a forgettable step). It's now injected at construction in `init()`.
             guard !didAutoConnect else { return }
             didAutoConnect = true
             LogStore.shared.log(.connection, "▶ \(LogStore.appVersionString())")

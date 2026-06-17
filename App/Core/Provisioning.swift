@@ -563,6 +563,61 @@ final class Provisioner: ObservableObject {
         }
     }
 
+    // MARK: Bot control (#418)
+
+    /// Deploys (or re-deploys, replacing any existing one) a control bot on the
+    /// host as a systemd service.
+    func deployBot(on host: ServerHost, password: String, config: BotDeployConfig) async throws {
+        status = .running(L10n.botDeploying.localized())
+        LogStore.shared.startSession(.provisioning)
+        LogStore.shared.log(.provisioning,
+            "→ Deploy bot \(config.marker) (\(config.platform.rawValue)) on \(host.host)")
+        do {
+            try await ensureReachable(host)
+            try await SSHRunner.deployBot(host: host, password: password,
+                                          config: config, onStep: stepHandler())
+            status = .success(L10n.botDeploySuccess.localized())
+        } catch {
+            LogStore.shared.log(.provisioning, "✗ Deploy bot failed: \(error.localizedDescription)")
+            status = .failure(error.localizedDescription)
+            throw error
+        }
+    }
+
+    /// Detects bots on the host by probing every Settings bot name (`markers`)
+    /// plus anything already in the fixed bot dir. Read-only.
+    func checkBots(on host: ServerHost, password: String, markers: [String]) async throws -> [DeployedBot] {
+        status = .running(L10n.botChecking.localized())
+        LogStore.shared.startSession(.provisioning)
+        LogStore.shared.log(.provisioning, "→ Check bots on \(host.host) (\(markers.count) name(s))")
+        do {
+            try await ensureReachable(host)
+            let found = try await SSHRunner.checkBots(host: host, password: password,
+                                                      markers: markers, onStep: stepHandler())
+            LogStore.shared.log(.provisioning, "✓ Found \(found.count) bot(s) on \(host.host)")
+            status = .idle
+            return found
+        } catch {
+            status = .failure(error.localizedDescription)
+            throw error
+        }
+    }
+
+    func removeBot(on host: ServerHost, password: String, marker: String) async throws {
+        status = .running(L10n.botRemoving.localized())
+        LogStore.shared.startSession(.provisioning)
+        LogStore.shared.log(.provisioning, "→ Remove bot \(marker) on \(host.host)")
+        do {
+            try await ensureReachable(host)
+            try await SSHRunner.removeBot(host: host, password: password,
+                                          marker: marker, onStep: stepHandler())
+            status = .success(L10n.botRemoveSuccess.localized())
+        } catch {
+            status = .failure(error.localizedDescription)
+            throw error
+        }
+    }
+
     /// #338: HH:mm stamp for the container-fetch session divider (static —
     /// per-call DateFormatter allocation is the #203 anti-pattern).
     private static let fetchStamp: DateFormatter = {

@@ -31,6 +31,10 @@ targets:
       # "generate new key" fallback of the #303 recover-connection flow.
       - path: scripts/rotate-key.sh
         buildPhase: resources
+      # #416: olcrtc-bot.py — the server-side control bot, uploaded over SSH and
+      # installed as a systemd service by the bot-deploy flow (#418).
+      - path: scripts/olcrtc-bot.py
+        buildPhase: resources
     info:
       path: App/Info.plist
       properties:
@@ -51,7 +55,7 @@ targets:
         # bundle id, container, OLCRTC_* env) stay lowercase olcrtc.
         CFBundleDisplayName: OlcRTC
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "255"
+        CFBundleVersion: "259"
         CFBundleURLTypes:
           - CFBundleURLName: olcrtc
             CFBundleURLSchemes:

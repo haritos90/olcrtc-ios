@@ -94,10 +94,13 @@ enum SSHRunner {
         try loadBundledScript(named: "srv")
     }
 
-    /// Loads `<name>.sh` from the app bundle, falling back to the source tree
+    /// Loads `<name>.<ext>` from the app bundle, falling back to the source tree
     /// for simulator / development builds. Pure: no network, no async.
-    private static func loadBundledScript(named name: String) throws -> String {
-        let url: URL? = Bundle.main.url(forResource: name, withExtension: "sh")
+    // #416: generalized to take an extension so the bot script (`olcrtc-bot.py`)
+    // loads the same way srv.sh / rotate-key.sh do. `ext` defaults to "sh" so the
+    // existing callers are unchanged.
+    private static func loadBundledScript(named name: String, ext: String = "sh") throws -> String {
+        let url: URL? = Bundle.main.url(forResource: name, withExtension: ext)
             ?? {
                 let srcFile = URL(fileURLWithPath: #filePath)
                 // #314: third delete added — #filePath is App/Core/SSHRunner.swift,
@@ -106,12 +109,12 @@ enum SSHRunner {
                     .deletingLastPathComponent()  // App/Core/
                     .deletingLastPathComponent()  // App/
                     .deletingLastPathComponent()  // project root
-                let candidate = projectRoot.appendingPathComponent("scripts/\(name).sh")
+                let candidate = projectRoot.appendingPathComponent("scripts/\(name).\(ext)")
                 return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
             }()
         guard let url, let script = try? String(contentsOf: url, encoding: .utf8) else {
             throw ProvisionError.parseFailed(
-                "\(name).sh not found — rebuild the app (xcodegen + clean build)")
+                "\(name).\(ext) not found — rebuild the app (xcodegen + clean build)")
         }
         return script
     }
@@ -1238,5 +1241,231 @@ enum SSHRunner {
         rm -f ~/.olcrtc_key
         echo "OLCRTC_UNINSTALLED=ok"
         """#
+    }
+
+    // MARK: - Bot control (#416 / #418)
+    //
+    // Deploys `scripts/olcrtc-bot.py` to a VPS as a systemd service that starts/
+    // stops the server container. Server-side layout, all under the fixed dir:
+    //   /opt/olcrtc-bot/bot.py               — the shared bot script
+    //   /opt/olcrtc-bot/<marker>.json        — this bot's config (chmod 600)
+    //   /etc/systemd/system/<marker>.service — the unit (named by the bot name)
+    // One bot per server: deploy first removes any existing config + its unit.
+
+    static let botRemoteDir = "/opt/olcrtc-bot"
+
+    /// Shell script that installs the bot as a systemd service. Emits
+    /// `OLCRTC_BOT_DEPLOYED=ok` on success, or `OLCRTC_BOT_ERROR=<reason>` (and
+    /// exits 0 so the reason reaches the app) for the recoverable preconditions
+    /// no-root / no-systemd / no-python3. The config JSON + bot.py + unit file are
+    /// base64-embedded so the user's arbitrary reply text never has to be
+    /// shell-escaped (same channel as `uploadScript`).
+    static func deployBotScript(config: BotDeployConfig, botPy: String) -> String {
+        let marker = shellSafe(config.marker)
+        let json: [String: String] = [
+            "platform":      config.platform.rawValue,
+            "token":         config.token,
+            "start_cmd":     config.startCmd,
+            "stop_cmd":      config.stopCmd,
+            "start_reply":   config.startReply,
+            "stop_reply":    config.stopReply,
+            "unknown_reply": config.unknownReply,
+            "marker":        config.marker,
+        ]
+        let jsonB64 = ((try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])) ?? Data())
+            .base64EncodedString()
+        let botB64 = Data(botPy.utf8).base64EncodedString()
+        // /usr/bin/env keeps the unit portable across distros (python3 may live in
+        // /usr/bin or /usr/local/bin); env's own path is stable everywhere.
+        let unit = """
+        [Unit]
+        Description=olcrtc control bot (\(marker))
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=simple
+        ExecStart=/usr/bin/env python3 \(botRemoteDir)/bot.py \(botRemoteDir)/\(marker).json
+        Restart=always
+        RestartSec=5
+
+        [Install]
+        WantedBy=multi-user.target
+        """
+        let unitB64 = Data(unit.utf8).base64EncodedString()
+        return #"""
+        set -e
+        if [ "$(id -u)" -eq 0 ]; then SUDO="";
+        elif command -v sudo >/dev/null 2>&1; then SUDO="sudo";
+        elif command -v doas >/dev/null 2>&1; then SUDO="doas";
+        else echo "OLCRTC_BOT_ERROR=no-root"; exit 0; fi
+        command -v systemctl >/dev/null 2>&1 || { echo "OLCRTC_BOT_ERROR=no-systemd"; exit 0; }
+        if ! command -v python3 >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then $SUDO apt-get install -y --no-install-recommends python3 2>/dev/null || true;
+            elif command -v dnf >/dev/null 2>&1; then $SUDO dnf install -y python3 2>/dev/null || true;
+            elif command -v yum >/dev/null 2>&1; then $SUDO yum install -y python3 2>/dev/null || true;
+            elif command -v pacman >/dev/null 2>&1; then $SUDO pacman -Sy --noconfirm python 2>/dev/null || true; fi
+        fi
+        command -v python3 >/dev/null 2>&1 || { echo "OLCRTC_BOT_ERROR=no-python3"; exit 0; }
+        BOT_DIR="\#(botRemoteDir)"
+        $SUDO mkdir -p "$BOT_DIR"
+        for cfg in "$BOT_DIR"/*.json; do
+            [ -e "$cfg" ] || continue
+            old=$(basename "$cfg" .json)
+            $SUDO systemctl disable --now "$old.service" 2>/dev/null || true
+            $SUDO rm -f "/etc/systemd/system/$old.service" "$cfg"
+        done
+        printf '%s' '\#(botB64)' | base64 -d | $SUDO tee "$BOT_DIR/bot.py" >/dev/null
+        $SUDO chmod 644 "$BOT_DIR/bot.py"
+        printf '%s' '\#(jsonB64)' | base64 -d | $SUDO tee "$BOT_DIR/\#(marker).json" >/dev/null
+        $SUDO chmod 600 "$BOT_DIR/\#(marker).json"
+        printf '%s' '\#(unitB64)' | base64 -d | $SUDO tee "/etc/systemd/system/\#(marker).service" >/dev/null
+        $SUDO systemctl daemon-reload
+        $SUDO systemctl enable --now "\#(marker).service" 2>&1 || true
+        echo "OLCRTC_BOT_MARKER=\#(marker)"
+        echo "OLCRTC_BOT_ACTIVE=$($SUDO systemctl is-active "\#(marker).service" 2>/dev/null || echo inactive)"
+        echo "OLCRTC_BOT_DEPLOYED=ok"
+        """#
+    }
+
+    /// Maps an `OLCRTC_BOT_ERROR=<reason>` token to a user-facing message.
+    static func botErrorMessage(_ reason: String) -> String {
+        switch reason {
+        case "no-systemd": return L10n.botErrorNoSystemd.localized()
+        case "no-python3": return L10n.botErrorNoPython.localized()
+        case "no-root":    return L10n.botErrorNoRoot.localized()
+        default:           return L10n.botErrorGeneric_fmt.formatted(reason)
+        }
+    }
+
+    /// Shell script that reports any bot deployed on the server. Probes every
+    /// `markers` name AND any `*.json` already in the fixed dir, so a bot is found
+    /// even if its name was removed from Settings. The token is not part of the
+    /// read-back (`sed` drops it). Per bot, one BEGIN/END block.
+    static func checkBotsScript(markers: [String]) -> String {
+        let safe = markers.map(shellSafe).filter { !$0.isEmpty }.joined(separator: " ")
+        return #"""
+        if [ "$(id -u)" -eq 0 ]; then SUDO="";
+        elif command -v sudo >/dev/null 2>&1; then SUDO="sudo";
+        elif command -v doas >/dev/null 2>&1; then SUDO="doas";
+        else SUDO=""; fi
+        BOT_DIR="\#(botRemoteDir)"
+        CANDIDATES="\#(safe)"
+        for f in "$BOT_DIR"/*.json; do
+            [ -e "$f" ] || continue
+            CANDIDATES="$CANDIDATES $(basename "$f" .json)"
+        done
+        for m in $(printf '%s\n' $CANDIDATES | sort -u); do
+            [ -n "$m" ] || continue
+            st=$($SUDO systemctl is-active "$m.service" 2>/dev/null || echo unknown)
+            has_cfg=0; [ -f "$BOT_DIR/$m.json" ] && has_cfg=1
+            if [ "$has_cfg" = "1" ] || [ "$st" = "active" ] || [ "$st" = "activating" ] || [ "$st" = "failed" ]; then
+                echo "OLCRTC_BOT_BEGIN"
+                echo "marker=$m"
+                echo "active=$st"
+                if [ "$has_cfg" = "1" ]; then
+                    echo "config=$($SUDO cat "$BOT_DIR/$m.json" 2>/dev/null | sed 's/"token":"[^"]*"/"token":""/' | base64 | tr -d '\n')"
+                else
+                    echo "config="
+                fi
+                echo "OLCRTC_BOT_END"
+            fi
+        done
+        echo "OLCRTC_BOT_CHECK_DONE=ok"
+        """#
+    }
+
+    /// Parses `checkBotsScript` output into `DeployedBot`s. `config=` is base64 of
+    /// the JSON (without the token); absent/unreadable → defaults (telegram, empty
+    /// fields) so a found-but-unreadable bot still surfaces with its name.
+    static func parseBotStatus(from output: String) -> [DeployedBot] {
+        var result: [DeployedBot] = []
+        let blocks = output.components(separatedBy: "OLCRTC_BOT_BEGIN")
+        for block in blocks.dropFirst() {
+            guard let end = block.range(of: "OLCRTC_BOT_END") else { continue }
+            let body = String(block[..<end.lowerBound])
+            var marker = ""; var activeStr = ""; var configB64 = ""
+            for line in body.split(separator: "\n") {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("marker=")      { marker    = String(t.dropFirst("marker=".count)) }
+                else if t.hasPrefix("active=") { activeStr = String(t.dropFirst("active=".count)) }
+                else if t.hasPrefix("config=") { configB64 = String(t.dropFirst("config=".count)) }
+            }
+            guard !marker.isEmpty else { continue }
+            var platform: BotPlatform = .telegram
+            var startCmd = "", stopCmd = "", startReply = "", stopReply = "", unknownReply = ""
+            if !configB64.isEmpty,
+               let data = Data(base64Encoded: configB64),
+               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                if let p = obj["platform"] as? String, let pf = BotPlatform(rawValue: p) { platform = pf }
+                startCmd     = obj["start_cmd"]     as? String ?? ""
+                stopCmd      = obj["stop_cmd"]      as? String ?? ""
+                startReply   = obj["start_reply"]   as? String ?? ""
+                stopReply    = obj["stop_reply"]    as? String ?? ""
+                unknownReply = obj["unknown_reply"] as? String ?? ""
+            }
+            result.append(DeployedBot(marker: marker, platform: platform,
+                                      startCmd: startCmd, stopCmd: stopCmd,
+                                      startReply: startReply, stopReply: stopReply,
+                                      unknownReply: unknownReply,
+                                      active: activeStr == "active"))
+        }
+        return result
+    }
+
+    /// Shell script that stops + disables + removes one bot by marker.
+    static func removeBotScript(marker: String) -> String {
+        let m = shellSafe(marker)
+        return #"""
+        if [ "$(id -u)" -eq 0 ]; then SUDO="";
+        elif command -v sudo >/dev/null 2>&1; then SUDO="sudo";
+        elif command -v doas >/dev/null 2>&1; then SUDO="doas";
+        else SUDO=""; fi
+        $SUDO systemctl disable --now "\#(m).service" 2>/dev/null || true
+        $SUDO rm -f "/etc/systemd/system/\#(m).service" "\#(botRemoteDir)/\#(m).json"
+        $SUDO systemctl daemon-reload 2>/dev/null || true
+        echo "OLCRTC_BOT_REMOVED=ok"
+        """#
+    }
+
+    static func deployBot(host: ServerHost, password: String, config: BotDeployConfig,
+                          onStep: @Sendable @escaping (String) -> Void) async throws {
+        onStep(L10n.botDeploying.localized())
+        let botPy = try loadBundledScript(named: "olcrtc-bot", ext: "py")
+        await MainActor.run { LogStore.shared.log(.provisioning, "✓ olcrtc-bot.py \(botPy.count) bytes") }
+        let output = try await _withConnection(host: host, password: password) { client in
+            try await execute(client: client, label: "deploy-bot",
+                              command: deployBotScript(config: config, botPy: botPy))
+        }
+        guard extract(key: "OLCRTC_BOT_DEPLOYED", from: output) == "ok" else {
+            let reason = extract(key: "OLCRTC_BOT_ERROR", from: output) ?? "unknown"
+            throw ProvisionError.parseFailed(botErrorMessage(reason))
+        }
+        // #423: files written, but confirm the service actually started — the
+        // script guards `enable --now` with `|| true`, so a unit that failed to
+        // launch would otherwise read as a successful deploy.
+        let active = extract(key: "OLCRTC_BOT_ACTIVE", from: output) ?? ""
+        guard active == "active" || active == "activating" else {
+            throw ProvisionError.parseFailed(L10n.botErrorNotActive.localized())
+        }
+    }
+
+    static func checkBots(host: ServerHost, password: String, markers: [String],
+                          onStep: @Sendable @escaping (String) -> Void) async throws -> [DeployedBot] {
+        onStep(L10n.botChecking.localized())
+        let output = try await _withConnection(host: host, password: password) { client in
+            try await execute(client: client, label: "check-bots",
+                              command: checkBotsScript(markers: markers))
+        }
+        return parseBotStatus(from: output)
+    }
+
+    static func removeBot(host: ServerHost, password: String, marker: String,
+                          onStep: @Sendable @escaping (String) -> Void) async throws {
+        onStep(L10n.botRemoving.localized())
+        try await _withConnection(host: host, password: password) { client in
+            _ = try await execute(client: client, label: "remove-bot",
+                                  command: removeBotScript(marker: marker))
+        }
     }
 }

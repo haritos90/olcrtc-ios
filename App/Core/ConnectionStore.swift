@@ -241,19 +241,40 @@ final class ConnectionStore: ObservableObject {
         subscriptionMeta.keys.filter { isRefreshDue(source: $0, now: now) }
     }
 
-    /// Re-fetches and re-imports every refresh-due source (#362). Each source's
-    /// canonical link is mapped to its HTTPS fetch URL the same way the initial
-    /// import does (`olcrtc-sub://` → https swap; a plain https source is fetched
-    /// as-is). A fetch/parse failure for one source is logged and skipped — it
-    /// must not abort the others or surface a modal on a background refresh.
-    /// Returns the sources that were successfully refreshed.
+    /// #411: whether any subscription source is known. The manual pull-to-refresh
+    /// is offered (and its hint shown) only when this is true.
+    var hasSubscriptions: Bool { !subscriptionMeta.isEmpty }
+
+    /// Re-fetches + re-imports every refresh-due source (#362) — used by the
+    /// launch auto-refresh. Returns the sources that refreshed successfully.
     @discardableResult
     func refreshDueSources(
         now: Date = Date(),
         fetch: (URL) async throws -> String = { try await SubscriptionFetcher.fetch(from: $0) }
     ) async -> [String] {
+        await refresh(sources: dueSources(now: now), fetch: fetch)
+    }
+
+    /// #411: manual pull-to-refresh — re-fetch EVERY subscription source now,
+    /// ignoring each source's `#refresh` interval (the user pulled, so refresh).
+    @discardableResult
+    func refreshAllSources(
+        fetch: (URL) async throws -> String = { try await SubscriptionFetcher.fetch(from: $0) }
+    ) async -> [String] {
+        await refresh(sources: Array(subscriptionMeta.keys), fetch: fetch)
+    }
+
+    /// Re-fetches + re-imports the given subscription `sources`. Each source's
+    /// canonical link is mapped to its HTTPS fetch URL the same way the initial
+    /// import does (`olcrtc-sub://` → https swap; a plain https source is fetched
+    /// as-is). A fetch/parse failure for one source is logged and skipped — it
+    /// must not abort the others or surface a modal. Returns the sources that
+    /// refreshed successfully.
+    @discardableResult
+    private func refresh(sources: [String],
+                         fetch: (URL) async throws -> String) async -> [String] {
         var refreshed: [String] = []
-        for source in dueSources(now: now) {
+        for source in sources {
             guard let fetchURL = Self.fetchURL(for: source) else {
                 LogStore.shared.log(.connection,
                     "⚠ subscription refresh: can't derive fetch URL for \(source) — skipped")
