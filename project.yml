@@ -55,7 +55,7 @@ targets:
         # bundle id, container, OLCRTC_* env) stay lowercase olcrtc.
         CFBundleDisplayName: OlcRTC
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "259"
+        CFBundleVersion: "260"
         CFBundleURLTypes:
           - CFBundleURLName: olcrtc
             CFBundleURLSchemes:

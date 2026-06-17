@@ -70,7 +70,7 @@ When **Open** has no rows, keep the header + separator and leave a single placeh
 row — `| — | — | — | — | _(empty — promote one from Backlog)_ |` — instead of replacing
 the table with prose.
 
-**Next free ID:** 426
+**Next free ID:** 429
 
 ---
 
@@ -519,6 +519,9 @@ release notes use; `—` on rows closed before #315 or with nothing to announce.
 | 423 | reliability | 8f4abf5 review · #418: deploy reported success even when the service failed to start | `deployBot` now also asserts `OLCRTC_BOT_ACTIVE` — a unit that wrote its files but didn't start surfaces as an error (new `botErrorNotActive`) instead of a successful deploy | — |
 | 424 | tests | 8f4abf5 review · #416: olcrtc-bot.py had no automated coverage | Split the command-decision + update-parsing logic into pure helpers and added `scripts/test_olcrtc_bot.py` (python3 unittest, 13 cases — `python3 scripts/test_olcrtc_bot.py`) | — |
 | 425 | ux | 8f4abf5 review · #419: the per-server sheet auto-checked on open even with no password / empty registry | `BotSettingsView` now gates its on-open auto-check on a present password + non-empty registry — no password-missing alert on open and no hidden SSH round-trip when there are no bots | — |
+| 426 | ux | Connections / Manage VPS / Config cards sat ~16pt narrower per side than Settings (too much empty space at the sides) | `olcCardRow` listRowInsets leading/trailing 16→0, so design-system cards sit flush with the inset-grouped section margin (~20pt) — matching the native Form cards in Settings | Cards on Connections, Manage VPS and Config now use the full width, matching Settings |
+| 427 | ux | Bot control used a chat-bubble glyph; a robot icon reads better | Added a custom `RobotIcon` template asset (no robot SF Symbol exists) + `assetImage` support on `OlcIconButton`/`OlcOverflowMenu`; the Manage VPS bot button and overflow item now show the robot | The bot control now has a robot icon |
+| 428 | ux | Bot sheet polish: status + Check on two rows; the per-server sheet implied the token was editable there; no guidance on getting a token | Per-server bot sheet now shows status + Check on one row and a read-only token status (Saved / Not set) with a "set it in Settings → Bots" footer; the Settings token field gained a footer explaining the token comes from the platform first; token stays editable only in Settings | Clearer bot settings: status and Check share a row, and the token is managed in one place (Settings → Bots) |
 
 ---
 
