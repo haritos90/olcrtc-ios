@@ -22,6 +22,8 @@ struct SettingsView: View {
     // `tunnel.boundPort` — the port the session actually bound — so a live
     // port edit in Settings can't mislabel the check either.
     @ObservedObject var tunnel: TunnelManager
+    /// #420: bot registry (shared with Manage VPS). Managed in `BotsSettingsView`.
+    @ObservedObject var botStore: BotStore
 
     @State private var portCheck: PortAvailability.PortState?
     @State private var socksPassInput: String = ""
@@ -55,6 +57,7 @@ struct SettingsView: View {
                     dnsRowSection
                     transportSection
                     connectionSection
+                    botsSection
                     diagnosticsSection
                     logsSection
                     appearanceSection
@@ -284,6 +287,24 @@ struct SettingsView: View {
             Text(L10n.sectionConnection.localized())
         } footer: {
             Text(L10n.footerKeepAlive.localized()).font(.caption2)
+        }
+    }
+
+    // MARK: Bots (#420)
+
+    private var botsSection: some View {
+        Section {
+            NavigationLink {
+                BotsSettingsView(botStore: botStore)
+            } label: {
+                HStack {
+                    Text(L10n.sectionBots.localized())
+                    Spacer()
+                    Text("\(botStore.bots.count)")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
         }
     }
 
@@ -537,12 +558,160 @@ struct DNSSettingsView: View {
     }
 }
 
+// MARK: - BotsSettingsView (#420)
+//
+// Manages the bot registry: list bots (name + platform), add / edit / delete.
+
+struct BotsSettingsView: View {
+    @ObservedObject var botStore: BotStore
+    @State private var editorBot: BotIdentity?
+    @State private var addingNew = false
+
+    var body: some View {
+        Form {
+            Section {
+                if botStore.bots.isEmpty {
+                    Text(L10n.botsEmptyHint.localized()).foregroundStyle(.secondary)
+                } else {
+                    ForEach(botStore.bots) { bot in
+                        Button { editorBot = bot } label: {
+                            HStack {
+                                Text(bot.name).foregroundStyle(Theme.Palette.textPrimary)
+                                Spacer()
+                                Text(bot.platform.title).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .onDelete { botStore.remove(at: $0) }
+                }
+            } footer: {
+                Text(L10n.botsFooter.localized()).font(.caption2)
+            }
+        }
+        .navigationTitle(L10n.sectionBots.localized())
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { addingNew = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel(L10n.botAddTitle.localized())
+            }
+        }
+        .sheet(item: $editorBot) { bot in
+            BotEditorView(botStore: botStore, existing: bot)
+        }
+        .sheet(isPresented: $addingNew) {
+            BotEditorView(botStore: botStore, existing: nil)
+        }
+    }
+}
+
+// MARK: - BotEditorView (#420)
+//
+// Add / edit one registry bot: name, platform (Telegram first, Max second), and
+// token. The token field is masked and paste-only with a Copy button (no reveal).
+
+struct BotEditorView: View {
+    @ObservedObject var botStore: BotStore
+    var existing: BotIdentity?
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""
+    @State private var platform: BotPlatform = .telegram
+    @State private var token = ""
+    @State private var copied = false
+
+    private var isDuplicateName: Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return botStore.bots.contains {
+            $0.id != existing?.id && $0.name.lowercased() == trimmed.lowercased()
+        }
+    }
+    private var isValid: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isDuplicateName
+    }
+    private var hasAnyToken: Bool {
+        !token.isEmpty || (existing.map { botStore.hasToken($0) } ?? false)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    FormField(label: L10n.botNameLabel.localized(),
+                              placeholder: L10n.botNamePlaceholder.localized(), text: $name)
+                    if isDuplicateName {
+                        Text(L10n.botNameTakenError.localized())
+                            .font(.caption).foregroundStyle(Theme.Palette.red)
+                    }
+                    Picker(L10n.botPlatformLabel.localized(), selection: $platform) {
+                        ForEach(BotPlatform.allCases) { p in Text(p.title).tag(p) }
+                    }
+                }
+                Section {
+                    // Masked, paste-only token field — no reveal (a screenshot
+                    // shows only dots). Copy retrieves it without displaying it.
+                    SecureField(L10n.botTokenPlaceholder.localized(), text: $token)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if token.isEmpty {
+                        Text((existing.map { botStore.hasToken($0) } ?? false)
+                             ? L10n.botTokenSavedHint.localized()
+                             : L10n.botTokenNoneHint.localized())
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button { copyToken() } label: {
+                        Label(copied ? L10n.botTokenCopied.localized()
+                                     : L10n.botCopyTokenAction.localized(),
+                              systemImage: "doc.on.doc")
+                    }
+                    .disabled(!hasAnyToken)
+                } header: {
+                    Text(L10n.botTokenLabel.localized())
+                }
+            }
+            .navigationTitle(existing == nil ? L10n.botAddTitle.localized()
+                                             : L10n.botEditTitle.localized())
+            .navigationBarTitleDisplayMode(.inline)
+            .olcSheet(confirm: L10n.save.localized(), disabled: !isValid) { save() }
+            .onAppear { prefill() }
+        }
+    }
+
+    private func copyToken() {
+        let value = token.isEmpty ? (existing.map { botStore.token(for: $0) } ?? "") : token
+        guard !value.isEmpty else { return }
+        UIPasteboard.general.string = value
+        copied = true
+    }
+
+    private func save() {
+        var bot = existing ?? BotIdentity(name: "", platform: .telegram)
+        bot.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        bot.platform = platform
+        if existing == nil {
+            botStore.add(bot, token: token)
+        } else {
+            botStore.update(bot, token: token.isEmpty ? nil : token)
+        }
+        dismiss()
+    }
+
+    private func prefill() {
+        guard let e = existing else { return }
+        name = e.name
+        platform = e.platform
+        // Token left blank: paste to replace, blank keeps the stored one.
+    }
+}
+
 // #340: both appearance variants.
 #if DEBUG
 #Preview("Settings — Dark") {
-    SettingsView(tunnel: TunnelManager()).preferredColorScheme(.dark)
+    SettingsView(tunnel: TunnelManager(), botStore: BotStore()).preferredColorScheme(.dark)
 }
 #Preview("Settings — Light") {
-    SettingsView(tunnel: TunnelManager()).preferredColorScheme(.light)
+    SettingsView(tunnel: TunnelManager(), botStore: BotStore()).preferredColorScheme(.light)
 }
 #endif

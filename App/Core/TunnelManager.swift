@@ -383,7 +383,16 @@ final class TunnelManager: ObservableObject {
     /// auto-connect-on-launch (App.swift), which bypassed the view guard (#393).
     /// `ConnectionStore` isn't a singleton, so it's injected as a closure rather
     /// than referenced directly. nil (unwired, e.g. in tests) ⇒ never locked.
+    /// #412: injected at construction (see `init`) instead of a later `.onAppear`
+    /// assignment, so a missed wiring can't silently leave it nil.
     var secretsLocked: (() -> Bool)?
+
+    /// #412: inject the locked-secrets check at construction (default `nil`, so
+    /// `TunnelManager()` in tests/previews still means "never locked"). Replaces the
+    /// forgettable `.onAppear` wiring that risked a nil ⇒ never-locked bug.
+    init(secretsLocked: (() -> Bool)? = nil) {
+        self.secretsLocked = secretsLocked
+    }
 
     /// Starts a tunnel for the given record. Dispatches to a protocol-specific
     /// path based on `record.details`. Today only .olcrtc is supported; when

@@ -31,11 +31,15 @@ struct ServersView: View {
     /// Per-tab lifecycle, NOT a shared singleton — intentional split from
     /// `TunnelManager.shared` / `SettingsStore.shared` / `LogStore.shared`.
     @StateObject  private var provisioner = Provisioner()
+    /// #419: bot registry (shared with Settings). The per-server bot sheet picks
+    /// a bot from it; the token is read from the Keychain at deploy time.
+    @ObservedObject var botStore: BotStore
 
     @State private var showAdd        = false
     @State private var editHost       : ServerHost?
     @State private var installFor     : ServerHost?
     @State private var reconfigureFor : ServerHost?
+    @State private var botConfigFor   : ServerHost?   // #419: per-server bot sheet
     // #339 was: logsPayload (ContainerLogsPayload?) — the container-logs sheet
     // is gone; the action routes to the Logs tab instead.
     // #258 was: readiness[id] + activeHostID (two competing display sources).
@@ -126,6 +130,12 @@ struct ServersView: View {
                 ReconfigureOptionsView { options in
                     Task { await reconfigure(host, options: options) }
                 }
+            }
+            // #419: per-server bot settings sheet.
+            .sheet(item: $botConfigFor) { host in
+                BotSettingsView(host: host, botStore: botStore,
+                                provisioner: provisioner,
+                                password: serverStore.password(for: host))
             }
             // #339 was: .sheet(item: $logsPayload) { ContainerLogsView(payload:) }
             .sheet(item: $scanFor) { host in
@@ -696,6 +706,13 @@ struct ServersView: View {
             }
             .disabled(actionsDisabled || !hasContainer(host))
             .accessibilityLabel(L10n.actionChangeRoomTransport.localized())
+            // #419: bot control — LAST in the row, available regardless of
+            // container state. Adding it shrinks the fill-width primary button.
+            OlcIconButton(systemImage: "bubble.left.and.bubble.right", tint: Theme.Palette.accent) {
+                botConfigFor = host
+            }
+            .disabled(actionsDisabled)
+            .accessibilityLabel(L10n.botSheetTitle.localized())
         }
     }
 
@@ -789,6 +806,12 @@ struct ServersView: View {
                 Task { await scanContainers(host) }
             })
         }
+
+        // #419: bot settings — available whether or not a container is installed.
+        items.append(.divider)
+        items.append(.action(L10n.botSheetTitle.localized(), systemImage: "bubble.left.and.bubble.right") {
+            botConfigFor = host
+        })
 
         // Deep uninstall whenever there's something to wipe (Podman present).
         if currentBase(host) != .noPodman {
@@ -1202,12 +1225,12 @@ struct FullAccessShareRequest: Identifiable {
 #if DEBUG
 #Preview("Manage VPS — Dark") {
     ServersView(serverStore: ServerHostStore(), connections: ConnectionStore(),
-                logsRouter: LogsRouter())
+                logsRouter: LogsRouter(), botStore: BotStore())
         .preferredColorScheme(.dark)
 }
 #Preview("Manage VPS — Light") {
     ServersView(serverStore: ServerHostStore(), connections: ConnectionStore(),
-                logsRouter: LogsRouter())
+                logsRouter: LogsRouter(), botStore: BotStore())
         .preferredColorScheme(.light)
 }
 #endif

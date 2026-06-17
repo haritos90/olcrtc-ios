@@ -87,6 +87,12 @@ struct ConnectionsView: View {
     /// footer, run on every body pass.
     @State private var subInfoByGroup : [String: (source: String, meta: ConnectionStore.SubscriptionMeta)] = [:]
 
+    /// #413: cache the grouped connection list so the server section doesn't call
+    /// `store.grouped()` (Dictionary grouping + sort) on every `body` pass — rebuilt
+    /// only when the connection list / stored meta change, alongside the #403
+    /// sub-meta cache, in `recompute()`.
+    @State private var groups : [(group: String, items: [ConnectionRecord])] = []
+
     /// #330: the single sheet this view can present. `Identifiable` drives one
     /// `.sheet(item:)`; `edit`/`qr` carry an immutable record snapshot, so the
     /// editor binds a value, not the live store object that churns while a
@@ -158,12 +164,15 @@ struct ConnectionsView: View {
 
                 serversSection
             }
-            // #403: keep the subscription-meta cache in sync with its only inputs —
-            // the connection list (group membership / source URLs) and the stored
-            // subscription meta — rather than recomputing it inside `body`. `initial:`
-            // seeds it on first appearance.
-            .onChange(of: store.connections, initial: true) { _, _ in recomputeSubInfo() }
-            .onChange(of: store.subscriptionMeta) { _, _ in recomputeSubInfo() }
+            // #411: pull-to-refresh force-refreshes every subscription source now
+            // (ignoring each source's #refresh interval). serversSection shows a
+            // hint that the gesture refreshes subscriptions.
+            .refreshable { await refreshSubscriptions() }
+            // #403/#413: keep the cached grouped list + per-group subscription-meta
+            // map in sync with their inputs (the connection list + stored meta)
+            // rather than recomputing in `body`. `initial:` seeds them on appear.
+            .onChange(of: store.connections, initial: true) { _, _ in recompute() }
+            .onChange(of: store.subscriptionMeta) { _, _ in recompute() }
             .navigationTitle("OlcRTC")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -585,7 +594,18 @@ struct ConnectionsView: View {
                     .olcCardRow()
                 }
             } else {
-                ForEach(store.grouped(), id: \.group) { group in
+                // #411: hint that pulling the list down refreshes subscriptions —
+                // shown only when at least one subscription source exists.
+                if store.hasSubscriptions {
+                    Section {
+                        Label(L10n.pullToRefreshSubscriptions.localized(), systemImage: "arrow.down.circle")
+                            .font(.caption)
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .listRowBackground(Color.clear)
+                    }
+                }
+                ForEach(groups, id: \.group) { group in
                     Section {
                         ForEach(group.items) { conn in
                             serverRow(conn)
@@ -607,16 +627,26 @@ struct ConnectionsView: View {
         }
     }
 
-    /// #403: rebuild the per-group subscription-meta cache from the store. Runs only
-    /// when its inputs change (connections / subscriptionMeta), not on every render.
-    private func recomputeSubInfo() {
+    /// #403/#413: rebuild the cached grouped list + the per-group subscription-meta
+    /// map from the store. Runs only when the inputs change (connections /
+    /// subscriptionMeta), not on every render.
+    private func recompute() {
+        let grouped = store.grouped()
+        groups = grouped
         var map: [String: (source: String, meta: ConnectionStore.SubscriptionMeta)] = [:]
-        for group in store.grouped() {
+        for group in grouped {
             if let info = store.subscriptionInfo(for: group.items) {
                 map[group.group] = info
             }
         }
         subInfoByGroup = map
+    }
+
+    /// #411: manual pull-to-refresh — force-refresh every subscription source now.
+    /// A no-op when there are no subscriptions (the hint isn't shown then either).
+    private func refreshSubscriptions() async {
+        guard store.hasSubscriptions else { return }
+        _ = await store.refreshAllSources()
     }
 
     /// #364: group section header — the group name plus a "Ping all" action that

@@ -129,11 +129,7 @@ struct AddConnectionView: View {
                 .onChange(of: uriText) { _, newValue in
                     let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty, let cfg = try? OlcrtcURI.parse(trimmed) else { return }
-                    carrier = cfg.carrier; transport = cfg.transport; roomID = cfg.roomID
-                    key = cfg.key; clientID = cfg.clientID
-                    vp8FPS = cfg.vp8FPS; vp8BatchSize = cfg.vp8BatchSize
-                    applySEI(cfg)   // #355: keep parsed sei params
-                    if name.isEmpty { name = cfg.mimo.isEmpty ? "\(cfg.carrier) · \(cfg.transport)" : cfg.mimo }
+                    applyParsed(cfg)   // #414: shared Parsed→fields mapping
                     parseError = ""
                 }
 
@@ -318,13 +314,26 @@ struct AddConnectionView: View {
 
     // MARK: Logic
 
-    /// #355: copy parsed sei params into state, keeping the existing default
-    /// when a key was absent from the URI (parser returns nil for those).
-    private func applySEI(_ cfg: OlcrtcURI.Parsed) {
-        if let v = cfg.seiFPS   { seiFPS   = v }
-        if let v = cfg.seiBatch { seiBatch = v }
-        if let v = cfg.seiFrag  { seiFrag  = v }
-        if let v = cfg.seiACK   { seiACK   = v }
+    /// #414: the single Parsed→editor-fields mapping, via `OlcrtcConnection.init(from:)`
+    /// (which holds the sei/vp8 defaults). Shared by both URI-entry paths — the live
+    /// field auto-parse and `parseURI` — so the mapping isn't duplicated (#355's
+    /// `applySEI` is folded into `init(from:)`'s `?? default`).
+    private func applyParsed(_ cfg: OlcrtcURI.Parsed) {
+        let params = OlcrtcConnection(from: cfg)
+        carrier      = params.carrier
+        transport    = params.transport
+        roomID       = params.roomID
+        key          = params.key
+        clientID     = params.clientID
+        vp8FPS       = params.vp8FPS
+        vp8BatchSize = params.vp8BatchSize
+        seiFPS       = params.seiFPS
+        seiBatch     = params.seiBatch
+        seiFrag      = params.seiFrag
+        seiACK       = params.seiACK
+        if name.isEmpty {
+            name = cfg.mimo.isEmpty ? "\(cfg.carrier) · \(cfg.transport)" : cfg.mimo
+        }
     }
 
     /// #361: paste-and-import. Detects what the pasted blob is and routes it:
@@ -356,17 +365,7 @@ struct AddConnectionView: View {
         parseError = ""
         do {
             let cfg = try OlcrtcURI.parse(uriText)
-            carrier      = cfg.carrier
-            transport    = cfg.transport
-            roomID       = cfg.roomID
-            key          = cfg.key
-            clientID     = cfg.clientID
-            vp8FPS       = cfg.vp8FPS
-            vp8BatchSize = cfg.vp8BatchSize
-            applySEI(cfg)   // #355
-            if name.isEmpty {
-                name = cfg.mimo.isEmpty ? "\(cfg.carrier) · \(cfg.transport)" : cfg.mimo
-            }
+            applyParsed(cfg)   // #414: shared Parsed→fields mapping (via init(from:))
             LogStore.shared.log(.connection,
                 "✓ URI parsed: carrier=\(cfg.carrier) transport=\(cfg.transport) room=\(cfg.roomID.prefix(8))…")
         } catch {

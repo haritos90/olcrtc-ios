@@ -14,16 +14,21 @@ Task ledger for olcrtc-ios. Every task has a permanent numeric ID and flows
 3. **Finished** → move the row to **Closed**, fill the **Resolution** column (how
    it was resolved — or `Won't Do` / `Duplicate` for rejected tasks), fill the
    **Release note** column (#315 — see below), and **delete its Details block**.
-4. **Parked** → move the row to **Deferred** (the very end of the file) and fill
-   its **Reason** column — blocked on something external (paid dev account,
-   upstream-only work) or consciously postponed (low priority). Deferred tasks
-   keep their Details blocks; revive one by moving the row back to Backlog or
-   Open and dropping the Reason.
+4. **Parked** → move the row to the **Deferred** table (near the end of the file,
+   just above the Deferred Details) and fill its **Reason** column — blocked on
+   something external (paid dev account, upstream-only work) or consciously
+   postponed (low priority). Move the task's Details block (if any) out of **Details
+   (Open + Backlog)** and down into **Details (Deferred)**, the last section; revive
+   one by moving the row back to Backlog or Open, dropping the Reason, and moving its
+   Details block back up.
 
 A rejected or duplicate task is also closed (Resolution `Won't Do` / `Duplicate`);
 there is no separate "won't do" list. Detail blocks exist only for **Open +
-Backlog + Deferred** tasks. Closed tasks are title-only history plus the
-**Resolution** note — their full setup descriptions are intentionally not kept.
+Backlog + Deferred** tasks, kept in **two** sections: Open/Backlog descriptions in
+**Details (Open + Backlog)** right after the Backlog table, and Deferred
+descriptions in **Details (Deferred)** at the very end of the file. Closed tasks are
+title-only history plus the **Resolution** note — their full setup descriptions are
+intentionally not kept.
 
 **Release note** (#315) — one short, user-facing "what's new" sentence describing
 the change, filled in when the row is closed. `scripts/closed-tasks-since.py`
@@ -43,9 +48,12 @@ script then falls back to the task title. Rows closed before #315 carry `—`.
 **Sorting** — every table (Open, Backlog, Closed, Deferred) and the Details blocks
 are kept in **ascending ID** order.
 
-**Layout** — Open and Backlog come first, then their **Details** blocks, then the
-**Closed** history, then the **Deferred** table last — active work and its
-descriptions stay at the top, parked work sits at the very bottom.
+**Layout** — Open and Backlog come first, then the **Details (Open + Backlog)**
+block, then the **Closed** history, then the **Deferred** table, and finally the
+**Details (Deferred)** block last — active work and its descriptions stay at the
+top; parked work and its descriptions sit at the very bottom. The two Details
+sections are kept separate so the block after Backlog only ever describes
+Open/Backlog tasks.
 
 **Table formats** — never delete a section's table when it empties; keep the header
 rows so the structure survives and nothing has to be rebuilt from scratch. The columns are:
@@ -62,7 +70,7 @@ When **Open** has no rows, keep the header + separator and leave a single placeh
 row — `| — | — | — | — | _(empty — promote one from Backlog)_ |` — instead of replacing
 the table with prose.
 
-**Next free ID:** 415
+**Next free ID:** 426
 
 ---
 
@@ -82,146 +90,15 @@ Future / blocked / someday. Promote to Open when picked up.
 
 | ID | Pri | Eff | Theme | Title |
 |---|---|---|---|---|
-| 411 | P3 | S | features | #362 follow-up: wire a pull-to-refresh on the Connections list to ConnectionStore.refreshDueSources() — the launch auto-refresh shipped, but the manual trigger's natural UI home is ConnectionsView |
-| 412 | P3 | S | architecture | #393 follow-up: TunnelManager.secretsLocked is a closure wired only in MainTabView.onAppear — a future second TunnelManager owner (or a missed wiring) silently skips the locked-secrets guard (nil ⇒ never locked); prefer construction-time injection |
-| 413 | P3 | S | performance | #403 follow-up: ConnectionStore.grouped() (Dictionary grouping + sort) is still recomputed inside ConnectionsView.body's ForEach on every render — cache the grouped list the way #403 cached subscriptionInfo |
-| 414 | P3 | S | architecture | #401 follow-up: AddConnectionView.save builds OlcrtcConnection from editor @State fields, not from a Parsed — route the editor's URI-paste path through OlcrtcConnection.init(from:) so the mapping lives in exactly one place |
+| — | — | — | — | _(empty — promote one from Backlog, or file a new task)_ |
 
 ---
 
-## Details (Open + Backlog + Deferred only)
+## Details (Open + Backlog)
 
-### 112 — NetworkExtension packet tunnel
-
-Full-device VPN (route every app, not just SOCKS-aware ones) needs a NetworkExtension
-Packet Tunnel provider + the `packet-tunnel-provider` entitlement, which requires a paid
-($99/yr) Apple Developer account. The standard pattern is to keep running the olcrtc
-core as a local SOCKS5 and bridge TUN↔SOCKS5 with
-[`hev-socks5-tunnel`](https://github.com/heiher/hev-socks5-tunnel) inside the
-`PacketTunnelProvider`. This is high-effort / low-ROI and gated on the paid account.
-
-### 115 — TestFlight
-
-Stand up the App Store Connect app record and a TestFlight build for internal
-testing. Prerequisites: a real app icon (#248), the privacy manifest (#249), and
-signing (set `DEVELOPMENT_TEAM`). On-device testing over cellular and inside RU
-networks is already handled by the maintainer — this task is only the TestFlight
-pipeline (archive → upload → internal testers).
-
-### 235 — Failover profiles: multi-carrier iOS install
-
-**BLOCKED on #247.** Server-side failover is supported — `internal/config` parses
-`profiles:` / `failover:`, and `cmd/olcrtc/main.go` drives them through
-`internal/supervisor` (runs profiles in order; on a session drop it waits
-`retry_delay` and advances, up to `max_cycles`). `srv.sh` could emit a multi-profile
-`server.yaml`:
-
-```yaml
-mode: srv
-profiles:
-  - name: jitsi-primary
-    auth: { provider: jitsi }
-    room: { id: "https://meet1.arbitr.ru/myroom" }
-  - name: telemost-fallback
-    auth: { provider: telemost }
-    room: { id: "telemost-room-id" }
-failover: { retry_delay: 5s, max_cycles: 3 }
-```
-
-The blocker: client and server rendezvous in the **same conferencing room**, and a
-profile switch changes carrier *and* room (`config.ApplyProfile`). The bundled
-`Mobile.xcframework` is single-session only — `mobile/mobile.go` exposes
-`Start`/`StartWithTransport`/`Stop` and imports neither `config` nor `supervisor`, so
-the iOS client has no way to follow the server's switch; when the server moves it is
-left calling an empty room. A server-only multi-profile install is therefore *worse*
-than none on iOS. #247 (failover in the gomobile binding) must land first.
-
-Once unblocked, the iOS work is: `InstallOptions` gains a list of `FailoverProfile`
-(carrier + roomID); `InstallOptionsView` gets an "Add fallback carrier" button;
-`SSHRunner` generates multi-profile YAML; `ConnectionRecord` represents a
-multi-profile connection (which roomID/carrier to show); `TunnelManager` drives the
-client failover loop exposed by #247.
-
-### 247 — Failover/profiles in the gomobile binding
-
-Prerequisite for #235. The server cycles failover profiles (`internal/supervisor`,
-wired in `cmd/olcrtc/main.go`), but the iOS client binding
-(`olcrtc-upstream/mobile/mobile.go`) is single-session and has no way to follow a
-carrier/room switch. Expose a profile-aware client entry point — an ordered list of
-carrier/room/transport that the client cycles through, mirroring the server's
-`retry_delay` / `max_cycles` — or a lighter "reconnect across an ordered carrier list
-until the server is found" loop. Needs upstream Go work in `mobile/` (the existing
-`supervisor.Runner` is the *server* session runner; a client-side supervisor doesn't
-exist yet) plus a `Mobile.xcframework` rebuild. Until this lands, end-to-end failover
-on iOS is only achievable via an app-level Swift loop whose client/server convergence
-is best-effort (they can sit on different profiles during the detection-skew window).
-
-**Decision (2026-06-04): UPSTREAM-only — do not fork or patch the submodule locally.**
-CI (`ci.yml`), `release.yml`, and every cloner's `fetch-framework.sh` build the framework
-from the *pinned* upstream commit, so a local edit to `olcrtc-upstream/mobile/mobile.go`
-would build on the maintainer's machine but break CI and every clone (the published
-framework wouldn't carry the new symbol, and the Swift calling it wouldn't link). The
-client entry point — sketch `StartWithProfiles(profilesSpec, clientID, keyHex, socksPort,
-socksUser, socksPass, retryDelayMillis, maxCycles)`: cycle an ordered carrier/room/transport
-list in the existing singleton slot, reusing `client.RunWithReady` with a per-profile
-handshake-timeout advance, mirroring `internal/supervisor`'s `retry_delay`/`max_cycles` —
-must therefore land in **upstream** `mobile/mobile.go`. Re-check on each `olcrtc-upstream`
-pull (the #260-style integration); **close when upstream ships it**, after which the iOS
-side is only an `OlcrtcEngine` wiring + a framework rebuild.
-
-### 254 — CODE_OF_CONDUCT.md
-
-Adopt the standard Contributor Covenant. The only decision is the enforcement-contact
-method (a maintainer email, or "via GitHub private report") to fill the template
-placeholder. Community-health hygiene; not blocking the first push.
-
-### 257 — Privacy-policy document
-
-App Store submission requires a privacy-policy URL even when the app collects nothing.
-Write a short policy ("no personal data collected or transmitted; the encryption key and
-SSH credentials never leave the device / Keychain") and host it (GitHub Pages or a gist),
-then link it from App Store Connect and the README. Distinct from the in-bundle privacy
-manifest (#249).
-
-### 329 — Kick participants + close the room on server stop
-
-When the olcrtc server stops it only removes its own participant; the room and
-any other participants linger until the carrier's SFU idle/empty timeout.
-Wanted: on stop, actively kick everyone and end the room — gated by
-`OLCRTC_CLOSE_ROOM_ON_STOP` (default ON). **UPSTREAM-only**; the iOS side is a
-Settings toggle + the env var through `srv.sh` (boc-patched) once upstream lands.
-
-**Per-carrier reality (core at pin 9822def + operator's in-call observation):**
-- **jitsi** — feasible, and more broadly than first scoped. The olcrtc server
-  CREATES/joins the room early, so on Jitsi it commonly holds moderator (often
-  owner) affiliation — the operator confirms a "kick participant" control is shown
-  in-call even on a server-created room on public/default deployments, not just
-  self-hosted. The j library exposes only raw `Conn.Send`/`SendIQWait`, so the
-  clean path is new exported helpers on the `zarazaex69/j` fork: `KickAll(ctx)` —
-  for each occupant != self, a muc#admin IQ setting `role='none'` (needs the
-  MODERATOR role we already have) — and/or `DestroyRoom(ctx)` — a muc#owner
-  `<destroy/>` IQ that ends the room in one shot (needs OWNER). jitsi `Close()`
-  calls them (~2s budget) and falls back to today's graceful leave on
-  `<forbidden/>`/timeout for the rare locked-down host.
-- **telemost (goolom)** and **wbstream (livekit)** — join as SPEAKER / guest with
-  no end/kick API; they already self-leave on `Close()` and the SFU expires the
-  empty room. Under the flag these are documented no-ops (log once).
-
-**Fork-PR plan (operator does this in a fork, then closes this task):**
-1. j fork: add `func (s *Session) KickAll(ctx) error` (muc#admin `role='none'` per
-   occupant; needs moderator) and `func (s *Session) DestroyRoom(ctx) error`
-   (muc#owner `<destroy/>`; needs owner). Typed error on `<forbidden/>`; unit-test
-   the IQ XML. 2. olcrtc: add `CloseRoomOnStop bool` to engine/transport/server
-   Config, thread it through `internal/app/session` + `pkg/olcrtc/tunnel`, resolve
-   from `OLCRTC_CLOSE_ROOM_ON_STOP` (default true, only `0`/`false`/`no` disables);
-   bump go.mod to the new j. 3. jitsi `Close()`: when the flag is set, try
-   `DestroyRoom`, fall back to `KickAll`, then to today's graceful leave on
-   forbidden/timeout. 4. goolom/livekit: log the no-op. Tests: jitsi_test
-   (kick/destroy IQ on Close when on, not when off, fallback on forbidden) + a
-   config env-default test.
-5. iOS (separate, once landed): `SettingsStore.closeRoomOnStop` (default true) +
-   a Settings toggle + export `OLCRTC_CLOSE_ROOM_ON_STOP` via `srv.sh` inside
-   `# boc #329` markers (parity-checked). Close this task when upstream ships it.
+_None right now — the current Open/Backlog rows are self-describing. When an Open or
+Backlog task needs a fuller write-up, add its `### NNN — title` block here.
+Deferred task descriptions live in **Details (Deferred)** at the end of the file._
 
 ---
 
@@ -627,6 +504,21 @@ release notes use; `—` on rows closed before #315 or with nothing to announce.
 | 408 | ux | Manage VPS stat strip wasted space on "·" separators and truncated Disk/RAM values | metricsStrip dropped the dot separators and tightened spacing — the label/value colour contrast already delineates each stat, freeing the width that was clipping the values | VPS Ping/Disk/RAM/Up stats are packed tighter and no longer cut off |
 | 409 | reliability | Disconnecting froze the whole UI for seconds | TunnelManager.disconnect() flips state synchronously and runs the blocking MobileStop() off the MainActor in a detached task (cancelled by the next connect), so the UI updates immediately | Disconnecting is instant — the app no longer freezes while the session tears down |
 | 410 | ux | Connection rows sat ~16 pt wider per side than the cards above them | Each connection is now its own OlcCard on a cleared, 16 pt-inset row — matching the hero/diagnostics and Manage VPS host cards — instead of a full-width inset-grouped cell | Connection rows now line up with the other cards |
+| 411 | features | #362 follow-up: a manual pull-to-refresh for subscriptions on the Connections list | Connections list gains pull-to-refresh that force-refreshes every subscription source now — new `ConnectionStore.refreshAllSources` (ignores each source's `#refresh` interval, unlike the launch path's due-only `refreshDueSources`); a hint that the gesture refreshes subscriptions shows only when a subscription exists | Pull the Connections list down to refresh your subscriptions |
+| 412 | architecture | #393 follow-up: TunnelManager.secretsLocked was wired only in MainTabView.onAppear (a missed wiring read as never-locked) | TunnelManager gained `init(secretsLocked:)`; MainTabView builds store + tunnel in its own `init()` and injects `{ store.secretsLocked }` at construction, dropping the forgettable `.onAppear` assignment | — |
+| 413 | performance | #403 follow-up: ConnectionsView recomputed store.grouped() in body's ForEach every render | The grouped list is cached in `@State` and rebuilt only when connections / subscription meta change (alongside the #403 sub-meta cache, in `recompute()`); the server section reads the cache | — |
+| 414 | architecture | #401 follow-up: AddConnectionView's URI-paste path duplicated the Parsed→OlcrtcConnection mapping | parseURI now fills the editor fields via `OlcrtcConnection.init(from:)` (the single Parsed→connection mapping incl. sei/vp8 defaults); the redundant `applySEI` helper was removed | — |
+| 415 | tests | 9b85770 review · #362: refreshDueSources / fetchURL(for:) shipped untested | Added `Tests/SubscriptionRefreshTests.swift` — `fetchURL(for:)` scheme mapping (olcrtc-sub→https / https passthrough / reject others) and the refresh loop's skip-on-failure + due-vs-force behaviour | — |
+| 416 | features | Server-side bot: `scripts/olcrtc-bot.py` (python3 stdlib) long-polls a bot and starts/stops the server container by command; Telegram + Max; bundle in project.yml | python3-stdlib bot (no pip) reads a JSON config, long-polls Telegram/Max, runs `podman start`/`podman stop` on the `olcrtc-server-*` container on an exact command match and replies with the configured text (unknown commands get a configurable reply); bundled via project.yml and uploaded over SSH | — |
+| 417 | features | Bot registry: `BotPlatform` + `BotIdentity` model + `BotStore` (list in UserDefaults, token in Keychain), seeded default `olcrtc_server_bot` | New `BotPlatform`/`BotIdentity` + `BotStore` mirroring `ServerHostStore` (list in UserDefaults, token in Keychain); seeds one default bot on first run | — |
+| 418 | features | Bot lifecycle over SSH: `BotDeployConfig` + deploy (systemd unit) / check-all-names / remove scripts + parsers in SSHRunner; Provisioner methods; tests | Added `BotDeployConfig`/`DeployedBot` + `deployBotScript`/`checkBotsScript`/`removeBotScript` + `parseBotStatus` in SSHRunner and `Provisioner.deployBot`/`checkBots`/`removeBot`; deploy installs a systemd service (one bot per server), check probes every configured name; 14 unit tests | — |
+| 419 | features | Per-server bot sheet `BotSettingsView` (pick bot, set commands/replies, check/deploy/remove) + Manage-VPS wiring (bot button last in the action row, overflow item) | New `BotSettingsView`: pick a registry bot, set start/stop commands + replies + unknown-command reply, then check / deploy / remove; reached from a bot button last in the Manage VPS action row and a matching overflow item | New per-server Bot settings on Manage VPS — deploy a Telegram or Max bot that starts/stops the server on command, and check or remove it |
+| 420 | settings | Settings bot-registry UI: add/edit/delete bots (name, platform Telegram-first/Max, token with Copy) + detection footer | New Settings → Bots screen: add/edit/delete bots (name, platform [Telegram/Max], token field with a Copy button); used by the per-server sheet and by detection | New Settings → Bots to manage the bots (name, platform, token) you deploy to servers |
+| 421 | reliability | 8f4abf5 review · #416: verify the bot path end-to-end against a live bot | Done — end-to-end test completed against a live bot (receives the command and replies); works, no code change needed | — |
+| 422 | reliability | 8f4abf5 review · #416: olcrtc-bot.py kept the update cursor in memory only, so a (re)started bot could replay the pending backlog | `olcrtc-bot.py` now primes the update cursor at startup (drains/skips the pending backlog) before the poll loop, so a restarted bot doesn't re-run old commands; pure `decide`/`*_extract` helpers split out | — |
+| 423 | reliability | 8f4abf5 review · #418: deploy reported success even when the service failed to start | `deployBot` now also asserts `OLCRTC_BOT_ACTIVE` — a unit that wrote its files but didn't start surfaces as an error (new `botErrorNotActive`) instead of a successful deploy | — |
+| 424 | tests | 8f4abf5 review · #416: olcrtc-bot.py had no automated coverage | Split the command-decision + update-parsing logic into pure helpers and added `scripts/test_olcrtc_bot.py` (python3 unittest, 13 cases — `python3 scripts/test_olcrtc_bot.py`) | — |
+| 425 | ux | 8f4abf5 review · #419: the per-server sheet auto-checked on open even with no password / empty registry | `BotSettingsView` now gates its on-open auto-check on a present password + non-empty registry — no password-missing alert on open and no hidden SSH round-trip when there are no bots | — |
 
 ---
 
@@ -634,21 +526,161 @@ release notes use; `—` on rows closed before #315 or with nothing to announce.
 
 Parked indefinitely — blocked on something external or consciously postponed.
 Not part of active planning. Revive a task by moving its row back to Backlog
-(or Open) and dropping the Reason; its Details block (if any) lives on in the
-Details section meanwhile.
+(or Open), dropping the Reason, and moving its Details block (if any) back up from
+**Details (Deferred)** to **Details (Open + Backlog)**.
 
 | ID | Pri | Eff | Theme | Title | Reason |
 |---|---|---|---|---|---|
-| 112 | P3 | XL | features | NetworkExtension packet tunnel | no paid dev account — `packet-tunnel-provider` entitlement needs the $99/yr program |
+| 112 | P3 | XL | features | NetworkExtension packet tunnel | no paid dev account |
 | 113 | P3 | M | features | SOCKS port per-profile (multiple simultaneous tunnels) | low priority |
 | 114 | P3 | L | features | New protocols — vless / xray / reality / rprx-vision / awg 2.0 | low priority |
-| 115 | P2 | M | build | TestFlight: App Store Connect record + internal-testing build | no paid dev account — App Store Connect needs the $99/yr program |
+| 115 | P2 | M | build | TestFlight: App Store Connect record + internal-testing build | no paid dev account |
 | 235 | P3 | L | features | Failover profiles — multi-profile install | depends on #247, which is UPSTREAM-only |
-| 247 | P3 | L | build | Failover/profiles in the gomobile binding (rebuild xcframework; unblocks #235) | UPSTREAM-only — needs upstream binding work before any iOS side exists |
+| 247 | P3 | L | build | Failover/profiles in the gomobile binding (rebuild xcframework; unblocks #235) | UPSTREAM-only |
 | 254 | P3 | XS | docs | CODE_OF_CONDUCT.md (Contributor Covenant) | low priority |
 | 257 | P3 | S | docs | Privacy-policy document (App Store needs a hosted URL) | low priority |
-| 329 | P2 | L | features | On server stop: kick all participants + close the room, behind a setting (default ON) | UPSTREAM-only — needs core room-control support at server shutdown; the iOS side (Settings toggle + OLCRTC_* env var) is trivial once upstream lands |
+| 329 | P2 | L | features | On server stop: kick all participants + close the room, behind a setting (default ON) | UPSTREAM-only |
 | 368 | P3 | M | observability | #331 follow-up: split the install-poll startup tail by line origin | blocked — the poll body is summarised via onStep (not line-by-line logged to provisioning), srv.sh is parity-locked (no origin markers), and there is no real install capture to validate a heuristic; re-verified during the batch run, all three blockers unchanged |
 | 378 | P2 | M | observability | Wire the server OLC-2xxx diagnostic codes (#279 follow-up) | blocked — needs the maintainer's real container/podman captures to map server conditions to codes |
-| 379 | P3 | L | features | Real in-app live peer count over the control stream | UPSTREAM-only — needs a new control-frame message + a mobile.go binding addition (the peer counter is server-only/log-only today); the log-scrape path #367 is the cheap alternative |
-| 380 | P3 | S | reliability | Upstream: expose MobileStopAndWait() / a listener-closed signal, or set SO_REUSEADDR on the SOCKS listener, so reconnect needn't poll the port (#333 follow-up) | UPSTREAM-only — olcrtc-upstream/mobile change; would retire the #333 client-side wait |
+| 379 | P3 | L | features | Real in-app live peer count over the control stream | UPSTREAM-only |
+| 380 | P3 | S | reliability | Upstream: expose MobileStopAndWait() / a listener-closed signal, or set SO_REUSEADDR on the SOCKS listener, so reconnect needn't poll the port (#333 follow-up) | UPSTREAM-only; would retire the #333 client-side wait |
+
+---
+
+## Details (Deferred)
+
+Full write-ups for the parked **Deferred** tasks above, kept separate from the
+Open/Backlog Details (which sit right after the Backlog table) so that block only
+ever describes active work. When a Deferred task is revived, move its block back up.
+
+### 112 — NetworkExtension packet tunnel
+
+Full-device VPN (route every app, not just SOCKS-aware ones) needs a NetworkExtension
+Packet Tunnel provider + the `packet-tunnel-provider` entitlement, which requires a paid
+($99/yr) Apple Developer account. The standard pattern is to keep running the olcrtc
+core as a local SOCKS5 and bridge TUN↔SOCKS5 with
+[`hev-socks5-tunnel`](https://github.com/heiher/hev-socks5-tunnel) inside the
+`PacketTunnelProvider`. This is high-effort / low-ROI and gated on the paid account.
+
+### 115 — TestFlight
+
+Stand up the App Store Connect app record and a TestFlight build for internal
+testing. Prerequisites: a real app icon (#248), the privacy manifest (#249), and
+signing (set `DEVELOPMENT_TEAM`). On-device testing over cellular and inside RU
+networks is already handled by the maintainer — this task is only the TestFlight
+pipeline (archive → upload → internal testers).
+
+### 235 — Failover profiles: multi-carrier iOS install
+
+**BLOCKED on #247.** Server-side failover is supported — `internal/config` parses
+`profiles:` / `failover:`, and `cmd/olcrtc/main.go` drives them through
+`internal/supervisor` (runs profiles in order; on a session drop it waits
+`retry_delay` and advances, up to `max_cycles`). `srv.sh` could emit a multi-profile
+`server.yaml`:
+
+```yaml
+mode: srv
+profiles:
+  - name: jitsi-primary
+    auth: { provider: jitsi }
+    room: { id: "https://meet1.arbitr.ru/myroom" }
+  - name: telemost-fallback
+    auth: { provider: telemost }
+    room: { id: "telemost-room-id" }
+failover: { retry_delay: 5s, max_cycles: 3 }
+```
+
+The blocker: client and server rendezvous in the **same conferencing room**, and a
+profile switch changes carrier *and* room (`config.ApplyProfile`). The bundled
+`Mobile.xcframework` is single-session only — `mobile/mobile.go` exposes
+`Start`/`StartWithTransport`/`Stop` and imports neither `config` nor `supervisor`, so
+the iOS client has no way to follow the server's switch; when the server moves it is
+left calling an empty room. A server-only multi-profile install is therefore *worse*
+than none on iOS. #247 (failover in the gomobile binding) must land first.
+
+Once unblocked, the iOS work is: `InstallOptions` gains a list of `FailoverProfile`
+(carrier + roomID); `InstallOptionsView` gets an "Add fallback carrier" button;
+`SSHRunner` generates multi-profile YAML; `ConnectionRecord` represents a
+multi-profile connection (which roomID/carrier to show); `TunnelManager` drives the
+client failover loop exposed by #247.
+
+### 247 — Failover/profiles in the gomobile binding
+
+Prerequisite for #235. The server cycles failover profiles (`internal/supervisor`,
+wired in `cmd/olcrtc/main.go`), but the iOS client binding
+(`olcrtc-upstream/mobile/mobile.go`) is single-session and has no way to follow a
+carrier/room switch. Expose a profile-aware client entry point — an ordered list of
+carrier/room/transport that the client cycles through, mirroring the server's
+`retry_delay` / `max_cycles` — or a lighter "reconnect across an ordered carrier list
+until the server is found" loop. Needs upstream Go work in `mobile/` (the existing
+`supervisor.Runner` is the *server* session runner; a client-side supervisor doesn't
+exist yet) plus a `Mobile.xcframework` rebuild. Until this lands, end-to-end failover
+on iOS is only achievable via an app-level Swift loop whose client/server convergence
+is best-effort (they can sit on different profiles during the detection-skew window).
+
+**Decision (2026-06-04): UPSTREAM-only — do not fork or patch the submodule locally.**
+CI (`ci.yml`), `release.yml`, and every cloner's `fetch-framework.sh` build the framework
+from the *pinned* upstream commit, so a local edit to `olcrtc-upstream/mobile/mobile.go`
+would build on the maintainer's machine but break CI and every clone (the published
+framework wouldn't carry the new symbol, and the Swift calling it wouldn't link). The
+client entry point — sketch `StartWithProfiles(profilesSpec, clientID, keyHex, socksPort,
+socksUser, socksPass, retryDelayMillis, maxCycles)`: cycle an ordered carrier/room/transport
+list in the existing singleton slot, reusing `client.RunWithReady` with a per-profile
+handshake-timeout advance, mirroring `internal/supervisor`'s `retry_delay`/`max_cycles` —
+must therefore land in **upstream** `mobile/mobile.go`. Re-check on each `olcrtc-upstream`
+pull (the #260-style integration); **close when upstream ships it**, after which the iOS
+side is only an `OlcrtcEngine` wiring + a framework rebuild.
+
+### 254 — CODE_OF_CONDUCT.md
+
+Adopt the standard Contributor Covenant. The only decision is the enforcement-contact
+method (a maintainer email, or "via GitHub private report") to fill the template
+placeholder. Community-health hygiene; not blocking the first push.
+
+### 257 — Privacy-policy document
+
+App Store submission requires a privacy-policy URL even when the app collects nothing.
+Write a short policy ("no personal data collected or transmitted; the encryption key and
+SSH credentials never leave the device / Keychain") and host it (GitHub Pages or a gist),
+then link it from App Store Connect and the README. Distinct from the in-bundle privacy
+manifest (#249).
+
+### 329 — Kick participants + close the room on server stop
+
+When the olcrtc server stops it only removes its own participant; the room and
+any other participants linger until the carrier's SFU idle/empty timeout.
+Wanted: on stop, actively kick everyone and end the room — gated by
+`OLCRTC_CLOSE_ROOM_ON_STOP` (default ON). **UPSTREAM-only**; the iOS side is a
+Settings toggle + the env var through `srv.sh` (boc-patched) once upstream lands.
+
+**Per-carrier reality (core at pin 9822def + operator's in-call observation):**
+- **jitsi** — feasible, and more broadly than first scoped. The olcrtc server
+  CREATES/joins the room early, so on Jitsi it commonly holds moderator (often
+  owner) affiliation — the operator confirms a "kick participant" control is shown
+  in-call even on a server-created room on public/default deployments, not just
+  self-hosted. The j library exposes only raw `Conn.Send`/`SendIQWait`, so the
+  clean path is new exported helpers on the `zarazaex69/j` fork: `KickAll(ctx)` —
+  for each occupant != self, a muc#admin IQ setting `role='none'` (needs the
+  MODERATOR role we already have) — and/or `DestroyRoom(ctx)` — a muc#owner
+  `<destroy/>` IQ that ends the room in one shot (needs OWNER). jitsi `Close()`
+  calls them (~2s budget) and falls back to today's graceful leave on
+  `<forbidden/>`/timeout for the rare locked-down host.
+- **telemost (goolom)** and **wbstream (livekit)** — join as SPEAKER / guest with
+  no end/kick API; they already self-leave on `Close()` and the SFU expires the
+  empty room. Under the flag these are documented no-ops (log once).
+
+**Fork-PR plan (operator does this in a fork, then closes this task):**
+1. j fork: add `func (s *Session) KickAll(ctx) error` (muc#admin `role='none'` per
+   occupant; needs moderator) and `func (s *Session) DestroyRoom(ctx) error`
+   (muc#owner `<destroy/>`; needs owner). Typed error on `<forbidden/>`; unit-test
+   the IQ XML. 2. olcrtc: add `CloseRoomOnStop bool` to engine/transport/server
+   Config, thread it through `internal/app/session` + `pkg/olcrtc/tunnel`, resolve
+   from `OLCRTC_CLOSE_ROOM_ON_STOP` (default true, only `0`/`false`/`no` disables);
+   bump go.mod to the new j. 3. jitsi `Close()`: when the flag is set, try
+   `DestroyRoom`, fall back to `KickAll`, then to today's graceful leave on
+   forbidden/timeout. 4. goolom/livekit: log the no-op. Tests: jitsi_test
+   (kick/destroy IQ on Close when on, not when off, fallback on forbidden) + a
+   config env-default test.
+5. iOS (separate, once landed): `SettingsStore.closeRoomOnStop` (default true) +
+   a Settings toggle + export `OLCRTC_CLOSE_ROOM_ON_STOP` via `srv.sh` inside
+   `# boc #329` markers (parity-checked). Close this task when upstream ships it.
