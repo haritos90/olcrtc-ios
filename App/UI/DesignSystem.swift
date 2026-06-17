@@ -313,13 +313,16 @@ struct OlcMenuItem: Identifiable {
     let id = UUID()
     var title: String = ""
     var systemImage: String? = nil
+    var assetImage: String? = nil   // #427: custom asset symbol (e.g. the robot), used in place of systemImage
     var kind: Kind
 
     static func action(_ title: String,
                        systemImage: String? = nil,
+                       assetImage: String? = nil,
                        role: ButtonRole? = nil,
                        _ action: @escaping () -> Void) -> OlcMenuItem {
-        OlcMenuItem(title: title, systemImage: systemImage, kind: .button(role: role, action: action))
+        OlcMenuItem(title: title, systemImage: systemImage, assetImage: assetImage,
+                    kind: .button(role: role, action: action))
     }
     static func share(_ title: String, systemImage: String? = nil, item: String) -> OlcMenuItem {
         OlcMenuItem(title: title, systemImage: systemImage, kind: .share(item))
@@ -344,7 +347,9 @@ struct OlcOverflowMenu: View {
                     Divider()
                 case let .button(role, action):
                     Button(role: role, action: action) {
-                        if let img = item.systemImage {
+                        if let asset = item.assetImage {   // #427: custom asset symbol
+                            Label { Text(item.title) } icon: { Image(asset).renderingMode(.template) }
+                        } else if let img = item.systemImage {
                             Label(item.title, systemImage: img)
                         } else {
                             Text(item.title)
@@ -515,16 +520,26 @@ struct FlowLayout: Layout {
 // Check / Container logs / Reconfigure). Parent `.disabled` dims to 0.35.
 
 struct OlcIconButton: View {
-    let systemImage: String
+    // #427: a button now shows either an SF Symbol or a custom asset symbol (e.g.
+    // the robot — there is no robot SF Symbol). Exactly one is set per init.
+    private let systemImage: String?
+    private let assetImage: String?
     var tint: Color = Theme.Palette.accent
     let action: () -> Void
+
+    init(systemImage: String, tint: Color = Theme.Palette.accent, action: @escaping () -> Void) {
+        self.systemImage = systemImage; self.assetImage = nil; self.tint = tint; self.action = action
+    }
+    // #427: custom template asset (asset catalog), rendered + tinted like a symbol.
+    init(assetImage: String, tint: Color = Theme.Palette.accent, action: @escaping () -> Void) {
+        self.systemImage = nil; self.assetImage = assetImage; self.tint = tint; self.action = action
+    }
 
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .semibold))
+            glyph
                 .foregroundStyle(tint)
                 .frame(width: Theme.Metrics.controlHeight,
                        height: Theme.Metrics.controlHeight)
@@ -534,6 +549,20 @@ struct OlcIconButton: View {
         }
         .buttonStyle(OlcPressStyle())
         .opacity(isEnabled ? 1 : 0.35)
+    }
+
+    @ViewBuilder
+    private var glyph: some View {
+        if let assetImage {
+            Image(assetImage)
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .frame(width: 23, height: 23)
+        } else if let systemImage {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .semibold))
+        }
     }
 }
 
@@ -696,7 +725,12 @@ extension View {
     /// routing / diagnostics / host cards / empty states).
     func olcCardRow() -> some View {
         listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            // #426: leading/trailing 0 (was 16) so our cards sit flush with the
+            // inset-grouped section margin — matching the native Form cards in
+            // Settings. The 16pt stacked *on top* of that ~20pt section inset, so
+            // Connections / Manage VPS / Config cards were ~16pt narrower per side.
+            // #426 was: .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
             .listRowSeparator(.hidden)
     }
 

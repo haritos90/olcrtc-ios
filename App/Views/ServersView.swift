@@ -708,7 +708,8 @@ struct ServersView: View {
             .accessibilityLabel(L10n.actionChangeRoomTransport.localized())
             // #419: bot control — LAST in the row, available regardless of
             // container state. Adding it shrinks the fill-width primary button.
-            OlcIconButton(systemImage: "bubble.left.and.bubble.right", tint: Theme.Palette.accent) {
+            // #427: robot glyph (custom asset — no robot SF Symbol). was: bubble.left.and.bubble.right
+            OlcIconButton(assetImage: "RobotIcon", tint: Theme.Palette.accent) {
                 botConfigFor = host
             }
             .disabled(actionsDisabled)
@@ -809,7 +810,8 @@ struct ServersView: View {
 
         // #419: bot settings — available whether or not a container is installed.
         items.append(.divider)
-        items.append(.action(L10n.botSheetTitle.localized(), systemImage: "bubble.left.and.bubble.right") {
+        // #427: robot glyph (custom asset). was: systemImage "bubble.left.and.bubble.right"
+        items.append(.action(L10n.botSheetTitle.localized(), assetImage: "RobotIcon") {
             botConfigFor = host
         })
 

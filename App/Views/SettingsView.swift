@@ -669,6 +669,9 @@ struct BotEditorView: View {
                     .disabled(!hasAnyToken)
                 } header: {
                     Text(L10n.botTokenLabel.localized())
+                } footer: {
+                    // #428: tell the user the token comes from the platform first.
+                    Text(L10n.botTokenCreateHint.localized()).font(.caption2)
                 }
             }
             .navigationTitle(existing == nil ? L10n.botAddTitle.localized()

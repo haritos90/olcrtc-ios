@@ -552,6 +552,9 @@ enum L10n: String, CaseIterable {
     case botTokenSavedHint, botTokenNoneHint
     case botCopyTokenAction, botTokenCopied
     case botNameTakenError
+    case botTokenStatusSaved, botTokenStatusMissing // #428: read-only status in the per-server sheet
+    case botTokenManageHint                 // #428: "token is set in Settings → Bots"
+    case botTokenCreateHint                 // #428: "create the bot on the platform first"
 }
 
 extension L10n {

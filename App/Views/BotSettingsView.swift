@@ -93,21 +93,23 @@ struct BotSettingsView: View {
 
     private var statusSection: some View {
         Section {
-            HStack {
+            // #428: status and the Check button share one row (was a status row
+            // above a full-width Check button). The button's own spinner covers
+            // the busy state, so the separate ProgressView is gone.
+            HStack(spacing: 12) {
                 Text(statusLabel).foregroundStyle(statusTone)
-                Spacer()
-                if busy { ProgressView() }
+                Spacer(minLength: 8)
+                OlcButton(L10n.botCheckAction.localized(),
+                          systemImage: "antenna.radiowaves.left.and.right",
+                          role: .secondary, isBusy: busy) {
+                    Task { await check() }
+                }
+                .disabled(!canOperate)
             }
             if let d = deployed, !botStore.bots.contains(where: { $0.name == d.marker }) {
                 Text(L10n.botUnknownFound_fmt.formatted(d.marker))
                     .font(.caption).foregroundStyle(Theme.Palette.orange)
             }
-            OlcButton(L10n.botCheckAction.localized(),
-                      systemImage: "antenna.radiowaves.left.and.right",
-                      role: .secondary, isBusy: busy, fillWidth: true) {
-                Task { await check() }
-            }
-            .disabled(!canOperate)
         } header: {
             Text(L10n.botSheetTitle.localized())
         } footer: {
@@ -132,12 +134,20 @@ struct BotSettingsView: View {
                     Spacer()
                     Text(bot.platform.title).foregroundStyle(Theme.Palette.textSecondary)
                 }
-                Text(botStore.hasToken(bot) ? L10n.botTokenSavedHint.localized()
-                                            : L10n.botTokenNoneHint.localized())
-                    .font(.caption)
-                    .foregroundStyle(botStore.hasToken(bot) ? Theme.Palette.textSecondary
-                                                            : Theme.Palette.orange)
+                // #428: token is read-only here — only its status shows (the token
+                // itself is entered in Settings → Bots). was: a token hint line.
+                HStack {
+                    Text(L10n.botTokenLabel.localized())
+                    Spacer()
+                    Text(botStore.hasToken(bot) ? L10n.botTokenStatusSaved.localized()
+                                                : L10n.botTokenStatusMissing.localized())
+                        .foregroundStyle(botStore.hasToken(bot) ? Theme.Palette.textSecondary
+                                                                : Theme.Palette.orange)
+                }
             }
+        } footer: {
+            // #428: point the user to where the token lives (it's not editable here).
+            Text(L10n.botTokenManageHint.localized()).font(.caption2)
         }
     }
 
