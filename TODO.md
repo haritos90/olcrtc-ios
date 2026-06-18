@@ -70,7 +70,7 @@ When **Open** has no rows, keep the header + separator and leave a single placeh
 row — `| — | — | — | — | _(empty — promote one from Backlog)_ |` — instead of replacing
 the table with prose.
 
-**Next free ID:** 429
+**Next free ID:** 432
 
 ---
 
@@ -522,6 +522,9 @@ release notes use; `—` on rows closed before #315 or with nothing to announce.
 | 426 | ux | Connections / Manage VPS / Config cards sat ~16pt narrower per side than Settings (too much empty space at the sides) | `olcCardRow` listRowInsets leading/trailing 16→0, so design-system cards sit flush with the inset-grouped section margin (~20pt) — matching the native Form cards in Settings | Cards on Connections, Manage VPS and Config now use the full width, matching Settings |
 | 427 | ux | Bot control used a chat-bubble glyph; a robot icon reads better | Added a custom `RobotIcon` template asset (no robot SF Symbol exists) + `assetImage` support on `OlcIconButton`/`OlcOverflowMenu`; the Manage VPS bot button and overflow item now show the robot | The bot control now has a robot icon |
 | 428 | ux | Bot sheet polish: status + Check on two rows; the per-server sheet implied the token was editable there; no guidance on getting a token | Per-server bot sheet now shows status + Check on one row and a read-only token status (Saved / Not set) with a "set it in Settings → Bots" footer; the Settings token field gained a footer explaining the token comes from the platform first; token stays editable only in Settings | Clearer bot settings: status and Check share a row, and the token is managed in one place (Settings → Bots) |
+| 429 | reliability | Per-deploy work dirs pile up on the VPS — WORK_DIR moved to /root (survives reboot) but the cleanup paths still targeted /tmp, so reinstall/uninstall never removed them | `srv.sh` now sweeps stale `/root` (and legacy `/tmp`) `olcrtc-deploy-*` dirs right after the existing old-container sweep, excluding the freshly built one; `SSHRunner.uninstallScript`/`deepUninstallScript` now `rm -rf /root/olcrtc-deploy-*` too. 2 tests added | Reinstalling or removing a server no longer leaves old build folders piling up on the VPS |
+| 430 | docs | README had no map of what an install leaves on the VPS (work dir, container, bot) — and the `/root` vs upstream `/tmp` choice was undocumented | Added a **Server-side layout** subsection to README → Architecture notes: the `/root/olcrtc-deploy-<id>` work dir (and why `/root` not upstream's `/tmp`), the `olcrtc-server-<id>` container, the `/opt/olcrtc-bot` control bot + its systemd unit, and the #429 self-cleaning behavior | — |
+| 431 | architecture | Server WORK_DIR sat in /root (our reboot-persistence patch) while the bot lived in /opt — inconsistent and not FHS-tidy | Moved `srv.sh` `WORK_DIR` to `/opt/olcrtc-deploy-<id>` (same parent as `/opt/olcrtc-bot`); the #429 deploy sweep and `SSHRunner.uninstallScript`/`deepUninstallScript` now cover `/opt` plus legacy `/root` + `/tmp`, so prior installs migrate on the next reinstall/uninstall; README + the 2 cleanup tests updated | Server build files now live under /opt (alongside the bot) instead of /root |
 
 ---
 

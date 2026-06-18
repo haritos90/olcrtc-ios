@@ -345,4 +345,24 @@ final class SSHRunnerExtractTests: XCTestCase {
         XCTAssertFalse(script.contains("olcrtc-srv-"),
                       "stale `olcrtc-srv-` prefix must not leak back")
     }
+
+    // #431: WORK_DIR moved to /opt (scripts/srv.sh) for FHS tidiness — see #429 for
+    // the earlier /tmp→/root move. Both cleanup scripts must sweep the current /opt
+    // location plus the legacy /root dirs left by installs that predate the move.
+    func testUninstallScriptRemovesWorkDirs() {
+        let script = SSHRunner.uninstallScript(containerName: "olcrtc-server-abc123")
+        XCTAssertTrue(script.contains("/opt/olcrtc-deploy-*"),
+                      "uninstall must remove the /opt work dirs created by srv.sh")
+        XCTAssertTrue(script.contains("/root/olcrtc-deploy-*"),
+                      "uninstall must still sweep legacy /root work dirs")
+    }
+
+    func testDeepUninstallScriptRemovesWorkDirs() {
+        let script = SSHRunner.deepUninstallScript(containerName: "olcrtc-server-abc123",
+                                                   removeImage: false)
+        XCTAssertTrue(script.contains("/opt/olcrtc-deploy-*"),
+                      "deep uninstall must remove the /opt work dirs created by srv.sh")
+        XCTAssertTrue(script.contains("/root/olcrtc-deploy-*"),
+                      "deep uninstall must still sweep legacy /root work dirs")
+    }
 }
