@@ -333,6 +333,36 @@ User taps Install
   → parse the URI → save a ConnectionRecord
 ```
 
+### Server-side layout
+
+What an install leaves on the VPS (everything runs as `root`, driving root's
+podman — this matches the default root-SSH install; rootless podman is not handled):
+
+```
+/opt/olcrtc-deploy-<id>/              build/work dir: shallow git clone + the built `olcrtc`
+                                      binary + server.yaml; bind-mounted into the container at /app
+olcrtc-server-<id>                    the podman container (one per host, --restart unless-stopped)
+/opt/olcrtc-bot/                      optional control bot: bot.py + <name>.json (mode 600)
+/etc/systemd/system/<name>.service    the control bot's systemd unit (named after the bot)
+```
+
+- **Work dir lives under `/opt`, not upstream's `/tmp`.** Upstream's `srv.sh` builds
+  under `/tmp/olcrtc-deploy-$PODMAN_ID`, but `/tmp` is cleared on reboot — wiping the
+  built binary and leaving the container unable to restart. A `# boc olcrtc-ios` patch
+  moves `WORK_DIR` to `/opt/olcrtc-deploy-$PODMAN_ID` — a persistent location, and the
+  same parent as the control bot, so all server-side artifacts sit together; the
+  upstream `/tmp` line is kept verbatim as a rejected block. `<id>` is a random 8-char
+  token shared with the matching `olcrtc-server-<id>` container. (Installs before #431
+  used `/root/olcrtc-deploy-<id>`; those migrate on the next reinstall/uninstall.)
+- **Work dirs are self-cleaning (#429).** Each deploy creates a fresh `<id>` dir. A
+  reinstall sweeps the superseded ones — across `/opt`, legacy `/root`, and `/tmp` —
+  right after `srv.sh` drops the old container, and uninstall removes them
+  (`SSHRunner.uninstallScript` / `deepUninstallScript`); both always keep the dir of
+  the live container.
+- **The control bot is independent of the server.** It deploys under `/opt/olcrtc-bot/`
+  as its own systemd service (one bot per host, named after the bot) and runs regardless
+  of whether the server container is up — it starts/stops that container by message.
+
 ### Key design decisions
 
 - **gomobile singleton** — the Go runtime is a package-level singleton; `TunnelManager` mirrors this so parallel connect attempts bail early.
