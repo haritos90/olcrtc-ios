@@ -14,10 +14,15 @@ IMAGE_NAME="docker.io/library/golang:1.26-alpine3.22"
 REPO_URL="https://github.com/openlibrecommunity/olcrtc.git"
 # boc olcrtc-ios
 # /tmp is cleared on VPS reboot, wiping the binary and making the container
-# unrestartable. Use /root which persists across reboots.
-WORK_DIR="/root/olcrtc-deploy-$PODMAN_ID"
+# unrestartable. Use a persistent location under /opt — the FHS home for add-on
+# packages, and the same parent as the control bot (/opt/olcrtc-bot) — so all
+# olcrtc server-side artifacts sit together.
+# #431 was: WORK_DIR="/root/olcrtc-deploy-$PODMAN_ID" (our earlier reboot-persistence
+#   fix); relocated to /opt for FHS tidiness. Old /root dirs from prior installs are
+#   swept by the cleanup below + uninstall.
+WORK_DIR="/opt/olcrtc-deploy-$PODMAN_ID"
 # eoc olcrtc-ios
-# boc olcrtc-ios-rejected: upstream keeps WORK_DIR under /tmp — cleared on VPS reboot, wiping the binary; replaced by the /root boc above
+# boc olcrtc-ios-rejected: upstream keeps WORK_DIR under /tmp — cleared on VPS reboot, wiping the binary; replaced by the /opt boc above
 # WORK_DIR="/tmp/olcrtc-deploy-$PODMAN_ID"
 # eoc olcrtc-ios-rejected
 BRANCH="master"
@@ -492,8 +497,15 @@ if [ "$TRANSPORT" = "videochannel" ]; then
 fi
 # boc olcrtc-ios: drop any prior olcrtc-server-* container so a re-install on the
 # same host replaces it instead of accumulating (the iOS app tracks one per host).
+# #429: also remove superseded work dirs. WORK_DIR persists (now under /opt — see
+# above) so each deploy's dir would otherwise pile up one-per-install. The containers
+# that held those dirs were just removed, so they are now unreferenced; the freshly
+# built $WORK_DIR is excluded by name. /root and /tmp are swept too for legacy
+# installs that predate the /opt (#431) and /root moves.
 OLD_CONTAINERS=$(podman ps -aq --filter "name=olcrtc-server-" 2>/dev/null)
 [ -n "$OLD_CONTAINERS" ] && podman rm -f $OLD_CONTAINERS >/dev/null 2>&1 || true
+find /opt /root /tmp -maxdepth 1 -type d -name 'olcrtc-deploy-*' \
+    ! -name "olcrtc-deploy-$PODMAN_ID" -exec rm -rf {} + 2>/dev/null || true
 # eoc olcrtc-ios
 podman run -d \
     --network host \

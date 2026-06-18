@@ -1210,7 +1210,10 @@ enum SSHRunner {
             lines.append("podman ps -a --filter 'name=olcrtc-server-' --format '{{.Names}}' | xargs -r podman stop 2>/dev/null || true")
             lines.append("podman ps -a --filter 'name=olcrtc-server-' --format '{{.Names}}' | xargs -r podman rm 2>/dev/null || true")
         }
-        lines.append("rm -rf /tmp/olcrtc-deploy-* 2>/dev/null || true")
+        // #431 was: rm -rf /root/olcrtc-deploy-* /tmp/olcrtc-deploy-* — WORK_DIR moved
+        //   to /opt in scripts/srv.sh, so the work dirs live there now; sweep all three
+        //   (/root + /tmp kept for legacy pre-move installs).
+        lines.append("rm -rf /opt/olcrtc-deploy-* /root/olcrtc-deploy-* /tmp/olcrtc-deploy-* 2>/dev/null || true")
         lines.append("rm -rf ~/.cache/olcrtc 2>/dev/null || true")
         lines.append("rm -f ~/.olcrtc_key 2>/dev/null || true")
         if removeImage {
@@ -1237,7 +1240,9 @@ enum SSHRunner {
                 podman rm   "$c" 2>/dev/null
             done
         fi
-        rm -rf /tmp/olcrtc-deploy /tmp/olcrtc-build /tmp/olcrtc-deploy-*
+        # #431: WORK_DIR is /opt/olcrtc-deploy-$PODMAN_ID (scripts/srv.sh) — sweep /opt
+        # so uninstall removes the work dir; /root + /tmp kept for legacy installs.
+        rm -rf /opt/olcrtc-deploy-* /root/olcrtc-deploy-* /tmp/olcrtc-deploy /tmp/olcrtc-build /tmp/olcrtc-deploy-*
         rm -f ~/.olcrtc_key
         echo "OLCRTC_UNINSTALLED=ok"
         """#
