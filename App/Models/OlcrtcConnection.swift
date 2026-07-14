@@ -28,6 +28,10 @@ struct OlcrtcConnection: Codable, Equatable {
     var vp8BatchSize: Int?   = nil
     var socksUser   : String = ""
     var socksPass   : String = ""
+    // #436: wbstream carrier account token (auth.token). A secret shared with the
+    // server config, so — like `key`/`socksPass` — it is Keychain-only, never
+    // serialised to UserDefaults. Empty for every other carrier / anonymous guest.
+    var wbToken     : String = ""
 
     // SEI channel parameters — only sent to the server when transport == "seichannel",
     // but stored unconditionally so switching transport doesn't lose the values.
@@ -43,7 +47,7 @@ struct OlcrtcConnection: Codable, Equatable {
 
     init(carrier: String, transport: String, roomID: String, key: String, clientID: String,
          vp8FPS: Int? = nil, vp8BatchSize: Int? = nil,
-         socksUser: String = "", socksPass: String = "",
+         socksUser: String = "", socksPass: String = "", wbToken: String = "",
          seiFPS: Int = 30, seiBatch: Int = 10, seiFrag: Int = 1200, seiACK: Int = 1) {
         self.carrier      = carrier
         self.transport    = transport
@@ -54,6 +58,7 @@ struct OlcrtcConnection: Codable, Equatable {
         self.vp8BatchSize = vp8BatchSize
         self.socksUser    = socksUser
         self.socksPass    = socksPass
+        self.wbToken      = wbToken
         self.seiFPS       = seiFPS
         self.seiBatch     = seiBatch
         self.seiFrag      = seiFrag
@@ -109,9 +114,10 @@ struct OlcrtcConnection: Codable, Equatable {
         seiBatch     = try c.decodeIfPresent(Int.self,    forKey: .seiBatch) ?? 10
         seiFrag      = try c.decodeIfPresent(Int.self,    forKey: .seiFrag)  ?? 1200
         seiACK       = try c.decodeIfPresent(Int.self,    forKey: .seiACK)   ?? 1
-        // socksPass and key are never decoded from persistent storage;
-        // callers must restore them from ConnectionSecretStore after decoding.
+        // socksPass, key and wbToken (#436) are never decoded from persistent
+        // storage; callers restore them from ConnectionSecretStore after decoding.
         socksPass = ""
         key       = ""
+        wbToken   = ""
     }
 }

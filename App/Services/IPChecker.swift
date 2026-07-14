@@ -94,6 +94,57 @@ final class IPChecker: ObservableObject {
         }
     }
 
+    // MARK: - Exit geo (#439)
+    //
+    // On connect the log shows the exit IP but not WHERE it is — yet the location
+    // governs what the exit can reach (e.g. some destinations are blocked from some
+    // regions), so it's the difference between "the app is broken" and "this exit
+    // can't reach X". One line at connect time — `→ exit = <ip> (<city>, <CC> ·
+    // <org>)` — makes the exit's country obvious at a glance in the connection log.
+
+    /// Parsed geo for the tunnel exit (any field may be absent).
+    struct ExitGeo: Equatable {
+        var ip: String?
+        var city: String?
+        var country: String?     // ISO-2, e.g. "RU"
+        var org: String?         // e.g. "AS9123 JSC TIMEWEB"
+    }
+
+    /// Pure (unit-tested) parse of an `ipinfo.io/json` body. Returns nil only when
+    /// nothing usable is present, so a rate-limited/garbage response is silent.
+    static func parseGeo(_ data: Data) -> ExitGeo? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        func field(_ key: String) -> String? {
+            guard let s = (obj[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !s.isEmpty else { return nil }
+            return s
+        }
+        let geo = ExitGeo(ip: field("ip"), city: field("city"),
+                          country: field("country"), org: field("org"))
+        return geo == ExitGeo() ? nil : geo
+    }
+
+    /// Pure (unit-tested) one-line rendering for the connection log. Logs are never
+    /// IP-masked (#337), so the full value is shown.
+    static func exitGeoLine(_ geo: ExitGeo) -> String {
+        var paren: [String] = []
+        let place = [geo.city, geo.country].compactMap { $0 }.joined(separator: ", ")
+        if !place.isEmpty { paren.append(place) }
+        if let org = geo.org { paren.append(org) }
+        let suffix = paren.isEmpty ? "" : " (\(paren.joined(separator: " · ")))"
+        return "→ exit = \(geo.ip ?? "?")\(suffix)"
+    }
+
+    /// Fetches `ipinfo.io/json` through the given (tunnel) session and parses it.
+    /// Best-effort: any failure returns nil and is not logged as an error.
+    static func fetchExitGeo(session: URLSession) async -> ExitGeo? {
+        guard let url = URL(string: "https://ipinfo.io/json") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("curl/8", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await session.data(for: req) else { return nil }
+        return parseGeo(data)
+    }
+
     /// Strict IP parsing via Apple's Network framework — rejects garbage like
     /// "Hello.World" or "Error: 500" that the old `contains(".")` check accepted.
     ///

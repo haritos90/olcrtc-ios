@@ -96,6 +96,7 @@ final class SettingsStore: ObservableObject {
         static let fontSizeIndex        = 3
         static let vpsAutoPingEnabled   = true
         static let vpsAutoPingInterval  = 30
+        static let earlyRestartOnWedge  = false   // #440: opt-in, brittle log-signature feature
         static let vpsAutoPingRange     = 10...300
         static let updateCheckEnabled   = true          // #360: opt-out
     }
@@ -214,6 +215,10 @@ final class SettingsStore: ObservableObject {
     @Published var vpsAutoPingEnabled: Bool {
         didSet { Self.persist(vpsAutoPingEnabled, forKey: Keys.vpsAutoPingEnabled) }
     }
+    /// #440: opt-in early restart of a wedged session from core log signatures.
+    @Published var earlyRestartOnWedge: Bool {
+        didSet { Self.persist(earlyRestartOnWedge, forKey: Keys.earlyRestartOnWedge) }
+    }
     @Published var vpsAutoPingInterval: Int {
         didSet {
             let v = vpsAutoPingInterval.clamped(to: Defaults.vpsAutoPingRange)
@@ -296,6 +301,7 @@ final class SettingsStore: ObservableObject {
         appearanceMode           = AppearanceMode(rawValue: d.string(forKey: Keys.appearanceMode) ?? "") ?? .dark   // #340
         keepAliveSeconds    = (d.object(forKey: Keys.keepAlive)           as? Int)  .map { $0.clamped(to: Defaults.keepAliveRange) }         ?? Defaults.keepAliveSeconds
         vpsAutoPingEnabled  = (d.object(forKey: Keys.vpsAutoPingEnabled)  as? Bool)                                                          ?? Defaults.vpsAutoPingEnabled
+        earlyRestartOnWedge = (d.object(forKey: Keys.earlyRestartOnWedge) as? Bool)                                                          ?? Defaults.earlyRestartOnWedge
         vpsAutoPingInterval = (d.object(forKey: Keys.vpsAutoPingInterval) as? Int)  .map { $0.clamped(to: Defaults.vpsAutoPingRange) }       ?? Defaults.vpsAutoPingInterval
         if let arr = d.object(forKey: Keys.enabledIPSources) as? [String] {
             enabledIPSources = Set(arr)
@@ -331,6 +337,7 @@ final class SettingsStore: ObservableObject {
         keepAliveSeconds       = Defaults.keepAliveSeconds
         vpsAutoPingEnabled     = Defaults.vpsAutoPingEnabled
         vpsAutoPingInterval    = Defaults.vpsAutoPingInterval
+        earlyRestartOnWedge    = Defaults.earlyRestartOnWedge
         enabledIPSources       = AppConstants.defaultEnabledIPCheckLabels
         speedTestProviderID    = AppConstants.SpeedTest.defaultProviderID
         updateCheckEnabled     = Defaults.updateCheckEnabled   // #360
@@ -383,6 +390,7 @@ final class SettingsStore: ObservableObject {
         static let keepAlive                 = "settings.keepAliveSeconds"
         static let vpsAutoPingEnabled        = "settings.vpsAutoPingEnabled"
         static let vpsAutoPingInterval       = "settings.vpsAutoPingInterval"
+        static let earlyRestartOnWedge       = "settings.earlyRestartOnWedge"
         static let enabledIPSources          = "settings.enabledIPSources"
         static let speedTestProviderID       = "settings.speedTestProviderID"
         static let updateCheckEnabled        = "settings.updateCheckEnabled"   // #360

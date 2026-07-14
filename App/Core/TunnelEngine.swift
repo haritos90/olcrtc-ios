@@ -114,9 +114,17 @@ final class OlcrtcEngine: TunnelEngine, @unchecked Sendable {
 
     private let logCapture = LogCapture()
 
+    /// #440: optional observer of every core log line, on the MainActor. Set by
+    /// `TunnelManager` to feed its wedge detector; nil ⇒ no-op. Kept here (the one
+    /// place core lines surface) so the manager doesn't have to tail LogStore.
+    @MainActor static var coreLineObserver: ((String) -> Void)?
+
     private init() {
         logCapture.onLog = { msg in
-            Task { @MainActor in LogStore.shared.log(.connection, msg) }
+            Task { @MainActor in
+                LogStore.shared.log(.connection, msg)
+                Self.coreLineObserver?(msg)   // #440: feed the wedge detector
+            }
         }
         MobileSetLogWriter(logCapture)
         MobileSetProviders()
@@ -209,6 +217,12 @@ final class OlcrtcEngine: TunnelEngine, @unchecked Sendable {
         // not pre-empts — verifyTunnel(); the two layers catch different deaths
         // (control-stream vs data-path/TURN).
         MobileSetLivenessOptions(30_000, 10_000, 3)
+        // #436: wbstream carrier account token (auth.token). Only wbstream uses it;
+        // empty for every other carrier. Set before Start so the handshake carries
+        // it (upstream mobile.go feeds AuthToken into Start/Check/Ping).
+        if !params.wbToken.isEmpty {
+            MobileSetWBToken(params.wbToken)
+        }
 
         let (socksUser, socksPass): (String, String) = s.localSocksAuthEnabled
             ? (s.localSocksUser, s.localSocksPass)

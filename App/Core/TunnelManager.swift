@@ -167,6 +167,8 @@ final class TunnelManager: ObservableObject {
             switch state {
             case .connected:
                 startKeepAliveIfEnabled()
+                wedge.reset()       // #440: fresh session — drop any stale failure window
+                logExitGeoAsync()   // #439: record exit IP + country in the log
                 if SettingsStore.shared.backgroundAudio {
                     do {
                         try bgKeeper.start()
@@ -231,6 +233,132 @@ final class TunnelManager: ObservableObject {
     /// (bumping `connectEpoch` last), connecting the wrong exit node.
     private var pendingStartTask: Task<Void, Never>?
     private let bgKeeper = BackgroundRuntimeKeeper()
+
+    // MARK: App-lifecycle logging (#432)
+    //
+    // The user's #1 diagnostic question was "do logs keep being written when the
+    // app is backgrounded?". The honest answer depends on whether keep-alive is
+    // holding the app up: with `backgroundAudio` OFF (the default) a backgrounded
+    // app is suspended within seconds — the Go core stops emitting and the SOCKS
+    // proxy stops serving — so logging simply pauses until the app returns. These
+    // notes make that transition explicit in the connection log so a gap is never a
+    // mystery, and warn loudly when a *connected* app backgrounds without keep-alive.
+
+    private var backgroundedAt: Date?
+    /// #432: heartbeat while backgrounded — see `noteBackground`.
+    private var backgroundHeartbeat: Task<Void, Never>?
+    /// #432: heartbeat cadence. 60 s ≈ one line/minute — negligible cost, plenty to
+    /// see whether background execution kept going or the app was suspended.
+    static let backgroundHeartbeatSeconds = 60
+
+    /// Log entering the background, stating whether keep-alive should hold the app up,
+    /// and — when connected — start a heartbeat that PROVES it. Evenly-spaced
+    /// heartbeats through the background window mean the app really stayed alive
+    /// (logs were being written); a gap in them is the app being suspended despite
+    /// keep-alive. This is what makes "were logs written in the background?"
+    /// answerable from the log itself, instead of assuming a cause.
+    func noteBackground() {
+        let start = Date()
+        backgroundedAt = start
+        let connected = state.isConnected
+        let keeper = bgKeeper.isRunning
+        LogStore.shared.log(.connection,
+                            Self.backgroundEnterMessage(connected: connected, keeperRunning: keeper),
+                            level: connected && !keeper ? .warn : .info)
+
+        backgroundHeartbeat?.cancel()
+        guard connected else { return }   // idle-in-background needs no aliveness proof
+        backgroundHeartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.backgroundHeartbeatSeconds))
+                if Task.isCancelled { break }
+                guard let self else { break }
+                LogStore.shared.log(.connection,
+                    Self.backgroundHeartbeatMessage(elapsedSeconds: Date().timeIntervalSince(start),
+                                                    keeperRunning: self.bgKeeper.isRunning))
+                // #432: fsync each tick so the newest proof-of-life survives even if
+                // iOS suspends/kills the app right after.
+                LogStore.shared.flush()
+            }
+        }
+    }
+
+    /// Log returning to the foreground with how long the app was backgrounded, so a
+    /// quiet stretch in the log lines up against a visible "was backgrounded Nm" marker.
+    func noteForeground() {
+        backgroundHeartbeat?.cancel()
+        backgroundHeartbeat = nil
+        guard let since = backgroundedAt else { return }
+        backgroundedAt = nil
+        LogStore.shared.log(.connection,
+            Self.foregroundEnterMessage(backgroundSeconds: Date().timeIntervalSince(since)))
+    }
+
+    /// Pure (unit-tested) — one heartbeat line while backgrounded.
+    nonisolated static func backgroundHeartbeatMessage(elapsedSeconds: Double, keeperRunning: Bool) -> String {
+        "• still alive in background +\(formatBackgroundDuration(elapsedSeconds)) — keep-alive \(keeperRunning ? "ON" : "OFF")"
+    }
+
+    // MARK: Exit geo (#439)
+
+    /// #439: fetch the exit IP + geo through the freshly-verified tunnel and log one
+    /// line (`→ exit = <ip> (<city>, <CC> · <org>)`), so the exit's country is
+    /// obvious at a glance. Fire-and-forget and best-effort — a failure is silent
+    /// (the tunnel is already verified; this is only annotation).
+    private func logExitGeoAsync() {
+        let session = SOCKSSession.make(mode: .tunnel)
+        Task {
+            guard let geo = await IPChecker.fetchExitGeo(session: session) else { return }
+            LogStore.shared.log(.connection, IPChecker.exitGeoLine(geo))
+            SOCKSSession.noteTunnelActivity()
+        }
+    }
+
+    // MARK: Wedge detection (#440)
+
+    /// #440: sliding-window detector over the core's own log lines (7 failure
+    /// signatures within 10 s ⇒ wedged). Fed by `observeCoreLine`.
+    private var wedge = WedgeDetector(threshold: 7, window: 10)
+
+    /// Feeds a core log line to the wedge detector, but only when the opt-in setting
+    /// is on AND a session is live — so it costs nothing otherwise. A trip restarts
+    /// the session early via the shared recovery sink (which is itself idempotent, so
+    /// this can't stack on an in-flight reconnect).
+    private func observeCoreLine(_ line: String) {
+        guard SettingsStore.shared.earlyRestartOnWedge, state.isConnected else { return }
+        if wedge.record(line: line, now: ProcessInfo.processInfo.systemUptime) {
+            LogStore.shared.log(.connection, L10n.wedgeRestartLog.localized(), level: .warn)
+            requestReconnect(reason: L10n.wedgeRestartReason.localized())
+        }
+    }
+
+    /// Pure (unit-tested) — the background-entry line, keyed on live state.
+    nonisolated static func backgroundEnterMessage(connected: Bool, keeperRunning: Bool) -> String {
+        switch (connected, keeperRunning) {
+        case (true, true):
+            return "▶ app entered background — connected, keep-alive ON (heartbeat below confirms whether it stays alive)"
+        case (true, false):
+            return "⚠ app entered background — connected but keep-alive is OFF; iOS may suspend the app, "
+                 + "which stops the SOCKS proxy and pauses logging. Enable Background audio in Settings to stay alive."
+        default:
+            return "▶ app entered background — not connected"
+        }
+    }
+
+    /// Pure (unit-tested) — the foreground-return line.
+    nonisolated static func foregroundEnterMessage(backgroundSeconds: Double) -> String {
+        "▶ app returned to foreground after \(formatBackgroundDuration(backgroundSeconds)) in background"
+    }
+
+    /// Pure (unit-tested) — compact human duration: `45s`, `3m`, `3m20s`, `1h5m`.
+    nonisolated static func formatBackgroundDuration(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        if total < 60 { return "\(total)s" }
+        let m = total / 60, s = total % 60
+        if m < 60 { return s == 0 ? "\(m)m" : "\(m)m\(s)s" }
+        let h = m / 60, mm = m % 60
+        return mm == 0 ? "\(h)h" : "\(h)h\(mm)m"
+    }
 
     // MARK: Recovery (#270) — capped exponential-backoff auto-reconnect
     //
@@ -387,11 +515,23 @@ final class TunnelManager: ObservableObject {
     /// assignment, so a missed wiring can't silently leave it nil.
     var secretsLocked: (() -> Bool)?
 
+    /// #437: the live manager, so an App Intent (Shortcuts / automation) can reach
+    /// connect/disconnect without the SwiftUI view tree. Weak — the real instance is
+    /// retained by `App`'s `@StateObject`; throwaway test/preview instances just
+    /// overwrite it harmlessly (intents never run there). App wiring sets it in
+    /// `init`; the last (real) one created wins.
+    @MainActor static weak var shared: TunnelManager?
+
     /// #412: inject the locked-secrets check at construction (default `nil`, so
     /// `TunnelManager()` in tests/previews still means "never locked"). Replaces the
     /// forgettable `.onAppear` wiring that risked a nil ⇒ never-locked bug.
     init(secretsLocked: (() -> Bool)? = nil) {
         self.secretsLocked = secretsLocked
+        Self.shared = self   // #437: App Intents reach the live manager here
+        // #440: observe the core's own log lines for the wedge detector. Cheap and
+        // always installed; `observeCoreLine` is a no-op unless the feature is on
+        // AND a session is live, so it costs nothing when disabled/disconnected.
+        OlcrtcEngine.coreLineObserver = { [weak self] line in self?.observeCoreLine(line) }
     }
 
     /// Starts a tunnel for the given record. Dispatches to a protocol-specific
@@ -557,7 +697,9 @@ final class TunnelManager: ObservableObject {
             defer { self.recoveryTask = nil }
             var attempt = 0
             while !Task.isCancelled {
-                let delay = Self.backoffDelaySeconds(attempt: attempt)
+                // #438: jittered so simultaneously-dropped clients don't rejoin the
+                // carrier room in lockstep.
+                let delay = Self.jitteredBackoffSeconds(attempt: attempt, random: .random(in: 0..<1))
                 LogStore.shared.log(.connection,
                     L10n.reconnectAttempt_fmt.formatted(attempt + 1, Self.maxReconnectAttempts, Int(delay)))
                 try? await Task.sleep(for: .seconds(delay))
@@ -583,6 +725,18 @@ final class TunnelManager: ObservableObject {
         let shift = min(max(attempt, 0), 20)            // clamp so 1<<shift can't overflow
         let delay = reconnectBaseDelaySeconds * Double(1 << shift)
         return min(delay, maxReconnectDelaySeconds)
+    }
+
+    /// #438: the same capped backoff with de-correlating jitter. When many clients
+    /// drop together (a shared carrier-room or network outage), an identical
+    /// deterministic backoff makes them all rejoin in lockstep and stampede the
+    /// room; subtracting up to 25% spreads the attempts across a window without ever
+    /// exceeding the cap or collapsing to ~0. `random` in [0,1) is injected so the
+    /// spread is unit-testable (the caller passes `.random(in: 0..<1)`).
+    nonisolated static func jitteredBackoffSeconds(attempt: Int, random: Double) -> Double {
+        let base = backoffDelaySeconds(attempt: attempt)
+        let r = min(max(random, 0), 1)
+        return base * (1 - 0.25 * r)                    // in [0.75·base, base]
     }
 
     // MARK: Network-path reconnect (#269)

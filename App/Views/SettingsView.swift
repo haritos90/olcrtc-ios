@@ -273,6 +273,9 @@ struct SettingsView: View {
                                    Preset(value: 60, label: "60")],
                          unit: "s")
             Toggle(L10n.backgroundAudioLabel.localized(), isOn: $settings.backgroundAudio)
+            // #440: opt-in early restart of a stuck session (off by default). Label
+            // is self-explanatory, so the §7 one-footer rule (keep-alive) survives.
+            Toggle(L10n.earlyRestartWedgeLabel.localized(), isOn: $settings.earlyRestartOnWedge)
             // #360: opt-out of the daily, anonymous GitHub-Releases update
             // check. Self-explanatory label keeps the §7 one-footer rule (the
             // keep-alive footer survives); the full privacy note lives in the

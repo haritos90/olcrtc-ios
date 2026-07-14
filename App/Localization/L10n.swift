@@ -224,6 +224,20 @@ enum L10n: String, CaseIterable {
     // MARK: #332 — rendered-line cap
     case logsRenderTruncated_fmt            // "Showing the newest %d lines…" — notice above a capped log body
 
+    // MARK: #432 — self-describing log export
+    case logsShareThisAction                // "Share this log" — Logs overflow menu
+    case logsExportAllAction                // "Export all logs" — Logs overflow menu
+
+    // MARK: #440 — early restart of a wedged session
+    case earlyRestartWedgeLabel             // Settings toggle
+    case wedgeRestartLog                    // connection-log line when a wedge is detected
+    case wedgeRestartReason                 // reason shown in the "↻ Reconnecting (…)" line
+
+    // MARK: #436 — wbstream account token (install sheet)
+    case wbTokenHeader                      // section header
+    case wbTokenFieldLabel                  // SecureField placeholder
+    case wbTokenFooter                      // help text
+
     // MARK: SettingsView
     case settingsTitle
     case sectionSOCKS5, sectionDNS, sectionVP8, sectionConnection

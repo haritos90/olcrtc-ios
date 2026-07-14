@@ -217,6 +217,18 @@ final class LogFileWriter {
         }
     }
 
+    /// #432: drain the async write queue and fsync the handles. The `sync` barrier
+    /// waits for every queued `write` to land, then `synchronizeFile()` forces it
+    /// out of the kernel buffer to disk. Called on background entry so the newest
+    /// lines survive even if iOS suspends then kills the process — the ordinary
+    /// `.utility` async writes would otherwise be lost mid-queue.
+    func flush() {
+        Self.ioQueue.sync { [handle, mirrorHandle] in
+            try? handle?.synchronizeFile()
+            try? mirrorHandle?.synchronizeFile()
+        }
+    }
+
     deinit {
         // #332: close on the same serial queue so every queued write lands
         // before the handle closes (writing to a closed FileHandle raises).
@@ -407,6 +419,15 @@ final class LogStore: ObservableObject {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         return "olcrtc-ios \(v) build \(b)"
+    }
+
+    /// #432: force every category + per-server container writer to drain its async
+    /// queue and fsync to disk. Called on background entry (App.swift scenePhase)
+    /// so a following suspend/kill can't drop the most recent lines still queued on
+    /// the shared I/O queue.
+    func flush() {
+        for w in writers.values { w.flush() }
+        for w in containerWriters.values { w.flush() }
     }
 
     /// Drops every in-memory entry across all categories, including every
@@ -644,6 +665,11 @@ final class LogStore: ObservableObject {
     // `pass` substrings — `bypass=`, `compass:`, `surpass=` — keep their value.
     // (#385 was: no `\b`, so those got their value <redacted> on every line.)
     private static let _passwordRegex = try! NSRegularExpression(pattern: #"(?i)\b(pass(?:wd|word)?\s*[=:]\s*)\S+"#)
+    // #436: wbstream account token. Redact `OLCRTC_WB_TOKEN=<v>` (install-command
+    // preview) and YAML `token: "<v>"` (auth.token in a config echo) — defence in
+    // depth, gated on a cheap "token" pre-check like the password pass.
+    private static let _wbTokenEnvRegex  = try! NSRegularExpression(pattern: #"(OLCRTC_WB_TOKEN=)\S+"#)
+    private static let _wbTokenYamlRegex = try! NSRegularExpression(pattern: #"(?i)(\btoken:\s*")[^"]*(")"#)
     static func redactSecrets(_ s: String) -> String {
         var out = s
         let r = NSRange(out.startIndex..<out.endIndex, in: out)
@@ -656,6 +682,14 @@ final class LogStore: ObservableObject {
         if out.range(of: "pass", options: .caseInsensitive) != nil {
             let r3 = NSRange(out.startIndex..<out.endIndex, in: out)
             out = _passwordRegex.stringByReplacingMatches(in: out, range: r3, withTemplate: "$1<redacted>")
+        }
+        // #436: wbstream token — both `OLCRTC_WB_TOKEN=` and YAML `token:` carry the
+        // literal "token", so one cheap pre-check gates both passes.
+        if out.range(of: "token", options: .caseInsensitive) != nil {
+            let r4 = NSRange(out.startIndex..<out.endIndex, in: out)
+            out = _wbTokenEnvRegex.stringByReplacingMatches(in: out, range: r4, withTemplate: "$1<redacted>")
+            let r5 = NSRange(out.startIndex..<out.endIndex, in: out)
+            out = _wbTokenYamlRegex.stringByReplacingMatches(in: out, range: r5, withTemplate: "$1<redacted>$2")
         }
         return out
     }

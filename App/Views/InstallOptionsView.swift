@@ -25,6 +25,9 @@ struct InstallOptionsView: View {
     @State private var seiFrag : Int = 1200
     @State private var seiACK  : Int = 1
 
+    // #436: wbstream account token (auth.token) — visible only for wbstream.
+    @State private var wbToken = ""
+
     let onConfirm: (InstallOptions) -> Void
 
     private var requiresRoomID: Bool { CarrierTransportMatrix.requiresRoomID(carrier: carrier) }
@@ -40,6 +43,7 @@ struct InstallOptionsView: View {
                 transportSection
                 roomIDSection
                 jitsiSection
+                wbTokenSection
                 seiSection
                 defaultsInfoSection
             }
@@ -122,6 +126,26 @@ struct InstallOptionsView: View {
         }
     }
 
+    // #436: wbstream account token → server `auth.token`. Optional (empty = an
+    // anonymous guest); needed for datachannel, which requires publish rights.
+    // Masked, like other secret entry — the value goes to the server config and
+    // the connection's Keychain, never to logs.
+    @ViewBuilder
+    private var wbTokenSection: some View {
+        if carrier == "wbstream" {
+            Section {
+                SecureField(L10n.wbTokenFieldLabel.localized(), text: $wbToken)
+                    .font(.system(.body, design: .monospaced))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            } header: {
+                Text(L10n.wbTokenHeader.localized())
+            } footer: {
+                Text(L10n.wbTokenFooter.localized()).font(.caption2)
+            }
+        }
+    }
+
     @ViewBuilder
     private var seiSection: some View {
         if transport == "seichannel" {
@@ -165,7 +189,8 @@ struct InstallOptionsView: View {
             seiFPS:       seiFPS,
             seiBatch:     seiBatch,
             seiFrag:      seiFrag,
-            seiACK:       seiACK
+            seiACK:       seiACK,
+            wbToken:      carrier == "wbstream" ? wbToken.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         ))
         dismiss()
     }

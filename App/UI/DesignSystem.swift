@@ -308,6 +308,10 @@ struct OlcMenuItem: Identifiable {
         // large export string (e.g. the whole Logs buffer) isn't constructed on
         // every body refresh of the view that *holds* the menu.
         case shareLazy(() -> String)
+        // #432: share a FILE (URL) rather than a String, so iOS preserves a real
+        // filename instead of dropping it as "text.txt". Built lazily on menu-open
+        // like `.shareLazy`; nil (an I/O failure) renders a disabled item.
+        case shareFileLazy(() -> URL?)
         case divider
     }
     let id = UUID()
@@ -331,6 +335,11 @@ struct OlcMenuItem: Identifiable {
     static func shareLazy(_ title: String, systemImage: String? = nil,
                           item: @escaping () -> String) -> OlcMenuItem {
         OlcMenuItem(title: title, systemImage: systemImage, kind: .shareLazy(item))
+    }
+    /// #432: deferred-content FILE share — `url` is only built when the menu opens.
+    static func shareFileLazy(_ title: String, systemImage: String? = nil,
+                              url: @escaping () -> URL?) -> OlcMenuItem {
+        OlcMenuItem(title: title, systemImage: systemImage, kind: .shareFileLazy(url))
     }
     static var divider: OlcMenuItem { OlcMenuItem(kind: .divider) }
 }
@@ -369,6 +378,21 @@ struct OlcOverflowMenu: View {
                         ShareLink(item: text) { Label(item.title, systemImage: img) }
                     } else {
                         ShareLink(item: text) { Text(item.title) }
+                    }
+                case let .shareFileLazy(makeURL):
+                    // #432: build the temp file on menu-open; share its URL so iOS
+                    // keeps the filename. A nil (I/O failure) degrades to a disabled
+                    // item rather than vanishing, keeping the menu shape stable.
+                    if let url = makeURL() {
+                        if let img = item.systemImage {
+                            ShareLink(item: url) { Label(item.title, systemImage: img) }
+                        } else {
+                            ShareLink(item: url) { Text(item.title) }
+                        }
+                    } else if let img = item.systemImage {
+                        Button {} label: { Label(item.title, systemImage: img) }.disabled(true)
+                    } else {
+                        Button {} label: { Text(item.title) }.disabled(true)
                     }
                 }
             }

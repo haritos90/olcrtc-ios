@@ -124,6 +124,9 @@ final class ServerScriptParityTests: XCTestCase {
             // SOCKS5 egress proxy — read with ${VAR:-default} in a boc patch;
             // off by default and not exposed in the UI, so installEnv omits it.
             "OLCRTC_SOCKS_PROXY_ADDR", "OLCRTC_SOCKS_PROXY_PORT",
+            // #436: wbstream token — read as ${OLCRTC_WB_TOKEN:-}; installEnv sets it
+            // only for wbstream with a non-empty token, so the default covers the rest.
+            "OLCRTC_WB_TOKEN",
             // deferred transports — read with defaults in boc patches
             "OLCRTC_SEI_FPS", "OLCRTC_SEI_BATCH", "OLCRTC_SEI_FRAG", "OLCRTC_SEI_ACK",
             "OLCRTC_VIDEO_W", "OLCRTC_VIDEO_H", "OLCRTC_VIDEO_FPS", "OLCRTC_VIDEO_BITRATE",

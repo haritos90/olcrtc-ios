@@ -39,7 +39,15 @@ final class ConnectionStore: ObservableObject {
         return connections.first
     }
 
-    init() { load() }
+    /// #437: the live store, so an App Intent can read `primary` to connect. Weak —
+    /// the real instance is retained by `App`'s `@StateObject`; throwaway
+    /// test/preview instances overwrite it harmlessly. See `TunnelManager.shared`.
+    @MainActor static weak var shared: ConnectionStore?
+
+    init() {
+        load()
+        Self.shared = self   // #437
+    }
 
     func add(_ r: ConnectionRecord) {
         connections.append(r)
@@ -395,8 +403,12 @@ final class ConnectionStore: ObservableObject {
                 if !p.socksPass.isEmpty {
                     ConnectionSecretStore.setSocksPass(connectionID: r.id, pass: p.socksPass)
                 }
-                p.key      = ""
+                if !p.wbToken.isEmpty {   // #436
+                    ConnectionSecretStore.setWBToken(connectionID: r.id, token: p.wbToken)
+                }
+                p.key       = ""
                 p.socksPass = ""
+                p.wbToken   = ""   // #436: never persisted to UserDefaults
                 r.details = .olcrtc(p)
             }
             return r
@@ -485,6 +497,7 @@ final class ConnectionStore: ObservableObject {
             case .failure:          readError = true   // locked / unreadable — retry on foreground
             }
             if let sp = ConnectionSecretStore.socksPass(for: r.id) { p.socksPass = sp }
+            if let wt = ConnectionSecretStore.wbToken(for: r.id)  { p.wbToken   = wt }   // #436
             r.details = .olcrtc(p)
         }
         return (r, readError)

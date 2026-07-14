@@ -10,24 +10,26 @@ import SwiftUI
 // `~` (unstable, may work) → .question, `-` (fail / unsupported) → .fail.
 //
 // #357: re-synced to the upstream E2E ground truth (the realE2ECaseExpectation
-// table in `olcrtc-upstream/internal/e2e/tunnel_test.go` @ pin 9822def), which is
-// now more current than docs/settings.md for jitsi: the two jitsi keepalive fixes
-// (upstream 2614169 "keep byte-stream sessions alive with RTP" + 1f72c87 "remove
-// RTCP keepalive reconnect loop") flipped jitsi/vp8channel to ExpectPass (95dc660),
-// and be6428b set jitsi's non-datachannel transports to ExpectFail. E2E mapping:
-// ExpectPass → .ok, ExpectUnstable → .question, ExpectFail → .fail.
+// table in `olcrtc-upstream/internal/e2e/tunnel_test.go`), which is now more current
+// than docs/settings.md for jitsi. E2E mapping: ExpectPass → .ok, ExpectUnstable →
+// .question, ExpectFail → .fail.
+//
+// #434: re-synced again to upstream master (42ae4e0). Jitsi's RTP-keepalive work
+// landed for the remaining transports too — the E2E `case "jitsi"` now returns
+// ExpectPass for ALL transports ("videochannel and seichannel now stable after RTP
+// keepalive fixes"), so jitsi seichannel and videochannel flip .fail → .ok.
+// telemost and wbstream rows are unchanged from master's table.
 //
 //   | transport    | telemost | wbstream | jitsi |
 //   | datachannel  |    -     |    ~     |   +   |
 //   | vp8channel   |    +     |    +     |   +   |
-//   | seichannel   |    -     |    +     |   -   |
-//   | videochannel |    +     |    +     |   -   |
+//   | seichannel   |    -     |    +     |   +   |
+//   | videochannel |    +     |    +     |   +   |
 //
 // Upstream notes: Telemost dropped DataChannel (fail) and never supported sei;
 // videochannel works but is slow. WBStream runs everything except datachannel
 // (guest tokens set canPublishData=false → unstable). Jitsi's datachannel is the
-// one stable, recommended combo; vp8channel is now a stable fallback (#357), while
-// seichannel and videochannel are expected-fail on jitsi per the E2E suite.
+// one stable, recommended combo; every other jitsi transport now passes E2E (#434).
 
 /// Compatibility level between a carrier and a transport, based on observed test results.
 enum Compat {
@@ -114,10 +116,10 @@ enum CarrierTransportMatrix {
         ],
         "jitsi": [
             "datachannel":  .recommended,  // the one stable combo upstream recommends everywhere
-            // #357: re-synced to upstream E2E (internal/e2e/tunnel_test.go @ 9822def).
-            "vp8channel":   .ok,           // #357 was: .question — E2E ExpectPass since 95dc660 (jitsi RTP keepalive fix)
-            "seichannel":   .fail,         // #357 was: .question — E2E ExpectFail (be6428b: jitsi non-data transports fail)
-            "videochannel": .fail,         // #357 was: .question — E2E ExpectFail (be6428b)
+            "vp8channel":   .ok,           // #357: E2E ExpectPass since 95dc660 (jitsi RTP keepalive fix)
+            // #434: master's E2E `case "jitsi"` returns ExpectPass for every transport.
+            "seichannel":   .ok,           // #434 was: .fail — now E2E ExpectPass (RTP keepalive fixes landed for sei)
+            "videochannel": .ok,           // #434 was: .fail — now E2E ExpectPass (RTP keepalive fixes landed for video)
         ],
     ]
 

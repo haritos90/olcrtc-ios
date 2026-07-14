@@ -75,6 +75,11 @@ struct InstallOptions: Sendable, Equatable {
     var seiFrag : Int = 1200
     var seiACK  : Int = 1
 
+    /// #436: wbstream account token → server config `auth.token` (via
+    /// `OLCRTC_WB_TOKEN`). Only emitted when `carrier == "wbstream"` and non-empty;
+    /// a secret, so it's never logged (installEnv redacts it in the command preview).
+    var wbToken : String = ""
+
     static let `default` = InstallOptions(carrier: "wbstream",
                                           transport: "datachannel",
                                           roomID: "")

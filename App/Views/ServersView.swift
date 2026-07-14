@@ -888,7 +888,11 @@ struct ServersView: View {
             // defaults; nil payload fields fall back to OlcrtcConnection's own
             // defaults, same as the recover path.
             // #401: via the shared Parsed → connection mapping.
-            let params = OlcrtcConnection(from: cfg)
+            var params = OlcrtcConnection(from: cfg)
+            // #436: the wbstream token isn't in the URI (upstream keeps it out), so
+            // carry it from the install options onto the connection — the client
+            // must send the same auth.token it just wrote into the server config.
+            params.wbToken = options.wbToken
             let record = ConnectionRecord(name: host.label, details: .olcrtc(params))
             connections.add(record)
             var updated = host

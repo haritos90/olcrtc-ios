@@ -251,6 +251,14 @@ enum L10nTable {
         .logsPhaseReceiving:         "Receiving output…",
         // #332: rendered-line cap notice
         .logsRenderTruncated_fmt:    "Showing the newest %d lines — Share or Copy all exports the full history.",
+        .logsShareThisAction:        "Share this log",
+        .logsExportAllAction:        "Export all logs",
+        .earlyRestartWedgeLabel:     "Auto-restart a stuck session",
+        .wedgeRestartLog:            "⚠ Session appears wedged — restarting early",
+        .wedgeRestartReason:         "stuck session",
+        .wbTokenHeader:              "wbstream token",
+        .wbTokenFieldLabel:          "Account token (optional)",
+        .wbTokenFooter:              "Paste the wbstream account token. Leave empty for an anonymous guest; a token is required for datachannel.",
 
         // SettingsView
         .settingsTitle:              "Settings",
@@ -855,6 +863,14 @@ enum L10nTable {
         .logsPhaseReceiving:         "Получение вывода…",
         // #332: rendered-line cap notice
         .logsRenderTruncated_fmt:    "Показаны последние %d строк — «Поделиться» или «Копировать всё» выгружает полную историю.",
+        .logsShareThisAction:        "Поделиться этим логом",
+        .logsExportAllAction:        "Выгрузить все логи",
+        .earlyRestartWedgeLabel:     "Автоперезапуск зависшей сессии",
+        .wedgeRestartLog:            "⚠ Похоже, сессия зависла — ранний перезапуск",
+        .wedgeRestartReason:         "зависшая сессия",
+        .wbTokenHeader:              "Токен wbstream",
+        .wbTokenFieldLabel:          "Токен аккаунта (необязательно)",
+        .wbTokenFooter:              "Вставьте токен аккаунта wbstream. Пусто — анонимный гость; для datachannel токен обязателен.",
 
         // SettingsView
         .settingsTitle:              "Настройки",

@@ -101,21 +101,31 @@ struct LogsView: View {
                     // #353 was: `let plain = LogRendering.plain(currentEntries.reversed())`
                     // built the entire export string on every toolbar refresh,
                     // even though it's only needed when the user opens Share or
-                    // taps Copy. Both now build it on demand — Share via
-                    // `.shareLazy` (Menu-open-time), Copy inside its own action.
+                    // taps Copy. Both now build it on demand.
+                    // #432: Share now hands iOS a real FILE (named + self-describing
+                    // header) instead of a bare String, plus "Export all logs"
+                    // bundles every category + per-server container buffer into one
+                    // file. Copy prepends the same header so pasted text is just as
+                    // identifiable. The menu stays enabled whenever ANY log has
+                    // content, so "Export all" works even from an empty tab.
                     OlcOverflowMenu(items: [
-                        .shareLazy(L10n.shareAction.localized(), systemImage: "square.and.arrow.up") {
-                            LogRendering.plain(currentEntries.reversed())
+                        .shareFileLazy(L10n.logsShareThisAction.localized(), systemImage: "square.and.arrow.up") {
+                            LogExport.exportCurrent(title: currentLogTitle, label: currentLogLabel,
+                                                    displayFileName: currentFileName, entries: currentEntries)
+                        },
+                        .shareFileLazy(L10n.logsExportAllAction.localized(), systemImage: "square.and.arrow.up.on.square") {
+                            LogExport.exportAll(sections: allLogSections)
                         },
                         .action(L10n.copyAllAction.localized(), systemImage: "doc.on.doc") {
-                            UIPasteboard.general.string = LogRendering.plain(currentEntries.reversed())
+                            UIPasteboard.general.string = LogExport.rendered(
+                                title: currentLogTitle, displayFileName: currentFileName, entries: currentEntries)
                         },
                         .divider,
                         .action(L10n.clearCategoryAction.localized(), systemImage: "trash", role: .destructive) {
                             clearCurrent()
                         },
                     ])
-                    .disabled(currentEntries.isEmpty)
+                    .disabled(!hasAnyLogs)
                 }
             }
             // #332: visibility-gated refresh — hidden tabs skip the tick and
@@ -194,6 +204,50 @@ struct LogsView: View {
             return "\(host.logFilePrefix)_container.log"
         }
         return selection.logFileName
+    }
+
+    /// #432: human name of the selected log for the export header ("Log:" row) —
+    /// the category title, or the host's container log.
+    private var currentLogTitle: String {
+        if selection == .containerLogs {
+            guard let host = selectedHost else { return selection.title }
+            return "\(host.label) — \(selection.title)"
+        }
+        return selection.title
+    }
+
+    /// #432: filename-safe label for the selected log's export file.
+    private var currentLogLabel: String {
+        if selection == .containerLogs {
+            return "container-\(selectedHost?.logFilePrefix ?? "server")"
+        }
+        return selection.rawValue
+    }
+
+    /// #432: every non-empty log — fixed categories plus each per-server container
+    /// buffer — assembled for the combined "Export all" file.
+    private var allLogSections: [LogExport.Section] {
+        var out: [LogExport.Section] = []
+        for cat in LogCategory.allCases where cat != .containerLogs {
+            let entries = store.entries[cat] ?? []
+            if !entries.isEmpty {
+                out.append(.init(title: cat.title, file: cat.logFileName, entries: entries))
+            }
+        }
+        let labels = serverStore.hosts.reduce(into: [String: String]()) { $0[$1.logFilePrefix] = $1.label }
+        for (prefix, entries) in store.containerEntries where !entries.isEmpty {
+            let name = labels[prefix] ?? prefix
+            out.append(.init(title: "\(name) — \(LogCategory.containerLogs.title)",
+                             file: "\(prefix)_container.log", entries: entries))
+        }
+        return out
+    }
+
+    /// #432: any log with content — gates the whole export menu (so "Export all"
+    /// stays reachable from an empty tab).
+    private var hasAnyLogs: Bool {
+        store.entries.values.contains { !$0.isEmpty }
+            || store.containerEntries.values.contains { !$0.isEmpty }
     }
 
     /// #316: LogTabHeader's per-category description moved into the empty state.

@@ -452,6 +452,12 @@ enum SSHRunner {
             // verbatim and this base is ignored.
             vars.append("OLCRTC_JITSI_URL=\(shellSafe(options.jitsiBaseURL))")
         }
+        // #436: wbstream account token → server config `auth.token`. Only for
+        // wbstream and only when set; srv.sh reads OLCRTC_WB_TOKEN and appends it
+        // under `auth:`. A secret — never logged (redacted in the command preview).
+        if options.carrier == "wbstream", !options.wbToken.isEmpty {
+            vars.append("OLCRTC_WB_TOKEN=\(shellSafe(options.wbToken))")
+        }
         if options.transport == "vp8channel" {
             vars.append("OLCRTC_VP8_FPS=\(SettingsStore.shared.vp8FPS)")
             vars.append("OLCRTC_VP8_BATCH=\(SettingsStore.shared.vp8BatchSize)")

@@ -434,6 +434,21 @@ cat > "$CONFIG_FILE" <<EOF
 mode: srv
 auth:
   provider: "$CARRIER"
+EOF
+
+# boc olcrtc-ios: wbstream auth.token arrives as OLCRTC_WB_TOKEN (no interactive
+# prompt). Upstream (adopted at the master pin move, #433) splits the config heredoc
+# after `provider:` to conditionally append `auth.token`; we adopt that split and
+# source the value from the env var the app sends (#436).
+WB_TOKEN="${OLCRTC_WB_TOKEN:-}"
+# eoc olcrtc-ios
+if [ -n "$WB_TOKEN" ]; then
+    cat >> "$CONFIG_FILE" <<EOF
+  token: "$WB_TOKEN"
+EOF
+fi
+
+cat >> "$CONFIG_FILE" <<EOF
 room:
   id: "$ROOM_ID"
 crypto:

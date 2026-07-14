@@ -12,6 +12,7 @@ import Foundation
 enum ConnectionSecretStore {
     private static let keyService      = "olcrtc.connection.key"
     private static let socksPassService = "olcrtc.connection.sockspass"
+    private static let wbTokenService   = "olcrtc.connection.wbtoken"   // #436
 
     // MARK: Encryption key
 
@@ -42,10 +43,21 @@ enum ConnectionSecretStore {
         KeychainHelper.get(service: socksPassService, account: connectionID.uuidString)
     }
 
+    // MARK: wbstream token (#436)
+
+    static func setWBToken(connectionID: UUID, token: String) {
+        KeychainHelper.set(token, service: wbTokenService, account: connectionID.uuidString)
+    }
+
+    static func wbToken(for connectionID: UUID) -> String? {
+        KeychainHelper.get(service: wbTokenService, account: connectionID.uuidString)
+    }
+
     // MARK: Removal
 
     static func remove(connectionID: UUID) {
-        KeychainHelper.delete(service: keyService,      account: connectionID.uuidString)
+        KeychainHelper.delete(service: keyService,       account: connectionID.uuidString)
         KeychainHelper.delete(service: socksPassService, account: connectionID.uuidString)
+        KeychainHelper.delete(service: wbTokenService,   account: connectionID.uuidString)   // #436
     }
 }

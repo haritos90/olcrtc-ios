@@ -169,7 +169,20 @@ struct MainTabView: View {
         // left empty (which would later surface as the misleading "key length 0");
         // re-hydrating after the user unlocks restores it before they Connect.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { store.rehydrateSecrets() }
+            switch phase {
+            case .active:
+                store.rehydrateSecrets()
+                tunnel.noteForeground()   // #432: log return + time spent backgrounded
+            case .background:
+                // #432: record the transition (loud if connected without keep-alive),
+                // then fsync the logs so a following suspend/kill can't drop the tail.
+                tunnel.noteBackground()
+                LogStore.shared.flush()
+            case .inactive:
+                break
+            @unknown default:
+                break
+            }
         }
         // boc #111: subscription links. olcrtc-sub://host/path → fetch
         // https://host/path (SubscriptionFetcher), parse the sub.md body,
