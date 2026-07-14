@@ -87,6 +87,21 @@ final class BackgroundRuntimeKeeper {
         player.play()
     }
 
+    /// #441: tear down and rebuild the whole audio stack (fresh engine + player),
+    /// then re-arm the session and restart the silent loop. Shared by
+    /// interruption-resume and media-reset recovery: a full rebuild is the one path
+    /// that guarantees the engine starts before the player plays AND the looped
+    /// buffer is scheduled — resuming a stopped engine in place can leave the
+    /// player with an empty queue (keep-alive alive on paper, silently doing nothing).
+    private func rebuildAndRestart() throws {
+        player.stop(); engine.stop(); engine.detach(player)
+        engine = AVAudioEngine()
+        player = AVAudioPlayerNode()
+        silentBuffer = nil
+        try armSession()
+        try buildAndPlay()
+    }
+
     // MARK: Interruption / reset resilience (#432)
 
     /// What to do for an AVAudioSession interruption notification. Pure so the
@@ -125,8 +140,12 @@ final class BackgroundRuntimeKeeper {
                 "⚠ keep-alive: audio interrupted — app may suspend until it resumes", level: .warn)
         case .resume:
             do {
-                try armSession()
-                if !engine.isRunning { player.play(); try engine.start() }
+                // #441 was: `try armSession(); if !engine.isRunning { player.play();
+                // try engine.start() }` — play() on a stopped engine raises an
+                // uncatchable ObjC exception, and even in the right order the looped
+                // buffer may have been dropped by the interruption, leaving keep-alive
+                // silently dead. Rebuild from scratch instead, like a media reset.
+                try rebuildAndRestart()
                 LogStore.shared.log(.connection, "✓ keep-alive: audio resumed after interruption")
             } catch {
                 LogStore.shared.log(.connection,
@@ -144,13 +163,10 @@ final class BackgroundRuntimeKeeper {
         guard running else { return }
         LogStore.shared.log(.connection, "⚠ keep-alive: media services reset — rebuilding audio", level: .warn)
         // A reset invalidates the whole audio stack; start over with fresh objects.
-        player.stop(); engine.stop(); engine.detach(player)
-        engine = AVAudioEngine()
-        player = AVAudioPlayerNode()
-        silentBuffer = nil
         do {
-            try armSession()
-            try buildAndPlay()
+            // #441 was: the teardown + fresh-objects + armSession + buildAndPlay
+            // sequence inlined here — now shared with interruption resume.
+            try rebuildAndRestart()
             LogStore.shared.log(.connection, "✓ keep-alive: audio rebuilt after media reset")
         } catch {
             running = false

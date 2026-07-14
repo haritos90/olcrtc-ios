@@ -70,7 +70,7 @@ When **Open** has no rows, keep the header + separator and leave a single placeh
 row — `| — | — | — | — | _(empty — promote one from Backlog)_ |` — instead of replacing
 the table with prose.
 
-**Next free ID:** 441
+**Next free ID:** 444
 
 ---
 
@@ -91,14 +91,21 @@ Future / blocked / someday. Promote to Open when picked up.
 | ID | Pri | Eff | Theme | Title |
 |---|---|---|---|---|
 | 435 | P2 | S | ux | Name shared connection URIs via `$mimo` so imports auto-name |
+| 442 | P3 | XS | reliability | 7ea3407 review · #432: BackgroundRuntimeKeeper observers not removed when the media-reset rebuild fails — next start() installs a duplicate set |
+| 443 | P3 | S | l10n | 7ea3407 review · #437: App Intents / Shortcuts strings are English-only — localize via `{en,ru}.lproj` `Localizable.strings` |
 
 ---
 
 ## Details (Open + Backlog)
 
-_None right now — the current Open/Backlog rows are self-describing. When an Open or
-Backlog task needs a fuller write-up, add its `### NNN — title` block here.
-Deferred task descriptions live in **Details (Deferred)** at the end of the file._
+### 442 — 7ea3407 review · #432: observer leak on a failed media-reset rebuild
+
+In `handleMediaReset`'s failure branch `running` flips to false but the two
+NotificationCenter observers stay installed; the following `stop()` is a no-op
+(guarded on `running`), so the next `start()` installs a second set — duplicate
+handlers and duplicated log lines, accumulating one extra set per failure
+cycle. Fix: remove the observers in the failure branch (share a helper with
+`stop()`), or make `installObservers()` remove-before-add idempotent.
 
 ---
 
@@ -533,6 +540,7 @@ release notes use; `—` on rows closed before #315 or with nothing to announce.
 | 438 | reliability | Reconnect backoff was deterministic, so many clients dropped by one outage rejoined the carrier room in lockstep | Added a pure, unit-tested `jitteredBackoffSeconds(attempt:random:)` (base·[0.75,1], injectable random) used by the recovery loop; the fixed `backoffDelaySeconds` ceiling is unchanged | Reconnects are spread slightly so simultaneously-dropped clients don't retry in lockstep |
 | 439 | diagnostics | On connect the log showed the exit IP but not its country, so "the exit can't reach X" looked like an app failure | After a verified connect, fetch `ipinfo.io/json` through the tunnel and log `→ exit = <ip> (<city>, <CC> · <org>)`; pure `parseGeo`/`exitGeoLine` helpers + tests | The connection log now shows the exit IP and its country right after connecting |
 | 440 | reliability | A wedged native session (carrier stuck, core reconnect looping) was only recovered after the full ~120 s keep-alive/verify budget | Opt-in `earlyRestartOnWedge` (default off): a pure, tested `WedgeDetector` over the core's own log lines (7 failure signatures within 10 s) triggers an early `requestReconnect`; core lines are tapped via `OlcrtcEngine.coreLineObserver`; Settings toggle added | Optional setting to restart a stuck session early instead of waiting out the timeout |
+| 441 | reliability | 7ea3407 review · #432: keep-alive interruption resume called `player.play()` before `engine.start()` — an uncatchable exception (crash) when returning from a phone call / Siri with Background audio on | `.resume` now takes the new shared `rebuildAndRestart()` path (fresh engine + player → `armSession` → `buildAndPlay`) instead of play-before-start — no exception, and the looped buffer is always re-scheduled; `handleMediaReset` reuses the same helper | Fixed a possible crash when background keep-alive resumed after a phone call or Siri |
 
 ---
 
