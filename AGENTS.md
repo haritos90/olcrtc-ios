@@ -15,12 +15,13 @@ proxy core ships as a gomobile-built `App/Mobile.xcframework`.
 
 ## 1. Where the work is defined
 
-All tasks live in [`TODO.md`](TODO.md). **Read its "How this file works" section
-first** — it is the source of truth for the `Backlog → Open → Closed` lifecycle,
-the `Pri` / `Eff` / `Theme` columns, the priority scheme, and the next-free-ID
-counter. Work the task you were handed, or an **Open** one.
+Work is organized as numbered tasks in a **Backlog.md** ledger (`backlog/`, driven
+by the `backlog` CLI). The ledger is maintainer-local and not committed, so you are
+handed a task — or its id — to work; when you have the ledger, read it with
+`backlog task <id> --plain`. Lifecycle: **To Do → In Progress → Done** (plus
+**Deferred** for parked work). Implement exactly what the task states; discovered
+work becomes a new task (`backlog task create …`), not scope-creep on the current one.
 
-- **New idea** → add a row to **Backlog** (+ an optional **Details** block).
 - **Closing** a task → see §5 below.
 
 ---
@@ -87,9 +88,9 @@ build, and happens exactly once per build — not once per agent or per change.*
   `xcodegen generate`, then build and run the tests.
 - **If you are a sub-agent / one of several parallel agents** whose work someone
   else integrates: **do not** bump `CFBundleVersion`, run `xcodegen` /
-  `xcodebuild`, edit `TODO.md`, or commit. Make your code change (with the task
+  `xcodebuild`, edit the task ledger, or commit. Make your code change (with the task
   markers from §2.1) and report what you changed. The integrating session applies
-  the single bump + build + tests + TODO update. This is how concurrent work never
+  the single bump + build + tests + ledger update. This is how concurrent work never
   competes over the counter.
 - **`MARKETING_VERSION`** changes only on an explicit release decision — never
   automatically.
@@ -100,14 +101,13 @@ build, and happens exactly once per build — not once per agent or per change.*
 
 ## 5. Finishing a task
 
-Per `TODO.md` → *How this file works* (done by the integrating session — see §4):
-move the task's row from **Open** to **Closed**, fill its **Resolution** column
-(how it was resolved, or `Won't Do` / `Duplicate`), fill its **Release note**
-column (#315: one short user-facing "what's new" sentence —
-`scripts/closed-tasks-since.py` puts it verbatim into the GitHub Release notes;
-`—` if there's nothing to announce), and **delete its Details block**. If you
-built, report the new build number and test result
-(`BUILD SUCCEEDED — <marketing>.<build> | N/N tests passed`).
+Done by the integrating session (see §4): mark the task Done
+(`backlog task edit <id> -s Done`) and record the outcome in its Implementation
+Notes — a **Resolution** line (how it was resolved, or `Won't Do` / `Duplicate`)
+and a **Release note** line: one short user-facing "what's new" sentence, because
+`scripts/cut-release.py` reads it into the GitHub Release notes when a tag is cut
+(`—` / omit if there's nothing to announce). If you built, report the new build
+number and test result (`BUILD SUCCEEDED — <marketing>.<build> | N/N tests passed`).
 
 Committing is the user's job — an agent commits only on explicit request.
 
@@ -118,7 +118,7 @@ Committing is the user's job — an agent commits only on explicit request.
 - Don't hand-edit `Info.plist` or `olcrtc-ios.xcodeproj` (both generated).
 - Don't bump `MARKETING_VERSION` unless explicitly asked.
 - Don't — as a parallel/sub-agent — bump the build number, build, commit, or edit
-  `TODO.md` (§4).
+  the task ledger (§4).
 - Don't `git push` / publish to a remote — the user always does the push.
 - Don't rely on guidance (including this file) that contradicts the actual code or
   the symbols the framework exports. Verify a function or flag exists before

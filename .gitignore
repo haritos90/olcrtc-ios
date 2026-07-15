@@ -176,3 +176,5 @@ local/
 # Project-specific
 olcrtc-ios.xcodeproj/
 App/Mobile.xcframework/
+# local Backlog.md task ledger (not tracked)
+backlog/

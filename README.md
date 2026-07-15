@@ -286,7 +286,7 @@ CARRIER=${OLCRTC_CARRIER:-telemost}
 
 A **rejected block** (#325) carries upstream lines we deliberately do *not* adopt — commented out so they never run, verbatim so they stay machine-checkable, with the reason on the `boc` line.
 
-`scripts/parity_check.py` runs as an Xcode pre-build phase and classifies every line in **both directions**: each unmarked line of ours must still appear verbatim in upstream, and each executable upstream line must be either adopted (present in our copy) or explicitly rejected. If upstream changes a command we depend on **or adds lines we have no decision for**, the build fails until `srv.sh` is deliberately updated — adopt the new lines or reject them with a reason, and file a TODO.md task recording the triage.
+`scripts/parity_check.py` runs as an Xcode pre-build phase and classifies every line in **both directions**: each unmarked line of ours must still appear verbatim in upstream, and each executable upstream line must be either adopted (present in our copy) or explicitly rejected. If upstream changes a command we depend on **or adds lines we have no decision for**, the build fails until `srv.sh` is deliberately updated — adopt the new lines or reject them with a reason, and file a backlog task recording the triage.
 
 ### Updating the olcrtc-upstream submodule
 
@@ -462,7 +462,7 @@ Client log lines carry a stable code such as `[OLC-1026]`. Open the **Logs** tab
 Contributions are welcome. Before opening a PR:
 
 - Read [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions (Conventional Commits, English-only, task markers), and [AGENTS.md](AGENTS.md) if you work with an AI coding agent.
-- Work is tracked in [TODO.md](TODO.md) — pick an **Open** task or file a new one.
+- Work is tracked in a local Backlog.md ledger (maintainer-side); open an issue or PR to propose a change.
 - `xcodebuild test` and the `scripts/srv.sh` parity check run in [CI](.github/workflows/ci.yml) on every PR; keep them green.
 
 Bug reports and feature requests use the [issue templates](.github/ISSUE_TEMPLATE).

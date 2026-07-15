@@ -2,7 +2,7 @@
 
 ## What & why
 
-<!-- What does this change and why. Link the TODO.md task id if there is one (e.g. "#231"). -->
+<!-- What does this change and why. Link the task id if there is one (e.g. "#231"). -->
 
 ## Type
 

@@ -18,7 +18,7 @@ excluded:
 disabled_rules:
   - identifier_name          # short names are idiomatic here (s, e, t, p, ms, id)
   - type_name                # a few intentional names (L10n, …)
-  - todo                     # work is tracked in TODO.md, not inline // TODO / FIXME
+  - todo                     # work is tracked in the backlog, not inline // TODO / FIXME
   - line_length              # long doc-comments are intentional
   - function_body_length
   - type_body_length

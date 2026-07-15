@@ -98,21 +98,11 @@ jobs:
             fi
             echo
           } >> notes.md
-          # 2b. #305: tasks closed since the previous tag, from TODO.md's Closed
-          #     table (diff this tag's TODO.md against $PREV's). Omitted on the
-          #     first release or when nothing new was closed.
-          if [ -n "$PREV" ]; then
-            CLOSED=$(python3 scripts/closed-tasks-since.py --since "$PREV" 2>/dev/null || true)
-            if [ -n "$CLOSED" ]; then
-              {
-                echo
-                echo "**Tasks closed since $PREV**"
-                echo
-                echo "$CLOSED"
-                echo
-              } >> notes.md
-            fi
-          fi
+          # 2b. #305 was: python3 scripts/closed-tasks-since.py appended a
+          #     "tasks closed since $PREV" section here, read from the committed
+          #     TODO.md. The task ledger is now local (Backlog.md), so that
+          #     section is written into the annotated tag message by
+          #     scripts/cut-release.py and is already captured by step 1 above.
           # 2c. #349: ready-to-paste SideStore/LiveContainer install links for the
           #     .ipa asset. GitHub strips non-https schemes from markdown links,
           #     so they are code spans the reader copies into Safari on the iPhone.

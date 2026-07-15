@@ -15,7 +15,7 @@ accessible to every contributor and consistent with upstream
 | Where | Rule |
 |---|---|
 | **Code comments** | All `//` and `///` comments in English. |
-| **Documentation** | README, `docs/`, this file, `TODO.md`, doc-comments — English. |
+| **Documentation** | README, `docs/`, this file, task notes, doc-comments — English. |
 | **Commit messages** | English, Conventional Commits format (see below). |
 | **Identifiers** | Types, functions, variables, enum cases — English. |
 | **User-facing strings** | Authored in English as the source language, then localized. |
@@ -127,7 +127,7 @@ we deliberately do **not** adopt carried as commented-out copies inside
 `scripts/parity_check.py` runs as an Xcode pre-build phase and fails the build in
 **both directions**: if any line outside the markers drifts from upstream, or if an
 upstream line is neither adopted nor explicitly rejected — new upstream lines must be
-adopted or rejected-with-reason, plus a TODO.md task for the triage decision. After
+adopted or rejected-with-reason, plus a backlog task for the triage decision. After
 touching `srv.sh`, run it directly — it must pass:
 
 ```bash
@@ -140,26 +140,23 @@ See [How srv.sh works](README.md#how-srvsh-works) for the full patching workflow
 
 ## Task tracking
 
-Work is tracked in `TODO.md`, which flows `Backlog → Open → Closed`. Its **How
-this file works** section is the source of truth for the lifecycle, columns, and
-priority scheme — don't restate it here. In short: new tasks start in Backlog with
-an optional detail block; closing a task moves its row to Closed, fills the
-**Resolution** column (how it was resolved, or `Won't Do` / `Duplicate`) **and**
-the **Release note** column, and deletes its detail block.
+Work is organized as tasks in a **Backlog.md** ledger (`backlog/`, driven by the
+`backlog` CLI). The ledger is maintainer-local (not committed). Lifecycle:
+**To Do → In Progress → Done**, plus **Deferred** for parked work. Closing a task
+marks it Done and records the outcome in its Implementation Notes as two lines.
 
-The two closing columns serve different readers (#315): **Resolution** is the
-engineering record — as detailed as it needs to be; **Release note** is one
-short, user-facing "what's new" sentence, because
-`scripts/closed-tasks-since.py` copies it verbatim into the GitHub Release notes
-(`release.yml`). Write it for someone who installs the app, not for someone who
-read the diff; put `—` when there's nothing to announce (the release notes then
-fall back to the task title).
+Those two lines serve different readers: **Resolution** is the engineering record
+— as detailed as it needs to be; **Release note** is one short, user-facing
+"what's new" sentence, because `scripts/cut-release.py` reads it into the GitHub
+Release notes when it cuts a tag. Write it for someone who installs the app, not
+for someone who read the diff; omit it (or write `—`) when there's nothing to
+announce.
 
 ---
 
 ## Marking task-driven changes
 
-When you change code to implement a numbered `TODO.md` task, leave an inline trail
+When you change code to implement a numbered task, leave an inline trail
 tying the change back to that task. Commits are coarse-grained — several tasks
 often land in one commit — so these comments, not git history, are the per-task
 change record the code itself carries: *what* changed, *for which task*, and *why*.

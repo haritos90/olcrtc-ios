@@ -81,7 +81,7 @@ Invariants checked
 4. Every executable upstream line is accounted: positionally matched by a base
    line, replaced by an `# boc` patch, or present in the rejected set. An
    unaccounted line (a new env var, install step, …) fails the build: adopt it,
-   or reject-it-with-a-reason, AND file a TODO.md triage task.
+   or reject-it-with-a-reason, AND file a backlog triage task.
 
 Blank lines and pure-comment lines are ignored on both sides. (Edge case:
 a genuinely-new upstream line that lands inside a gap we already patch is
@@ -394,7 +394,7 @@ if unaccounted:
     print("       Upstream added or changed lines we have no decision for. For each one:")
     print("       ADOPT it (copy it into scripts/srv.sh at the matching spot), or REJECT it")
     print("       (add it, commented with '# ', to a `# boc olcrtc-ios-rejected: <reason>`")
-    print("       block) — and file a TODO.md task recording the triage decision")
+    print("       block) — and file a backlog task recording the triage decision")
     print("       (what we take, what we skip, and why).")
     print()
     for idx, text in unaccounted[:10]:
