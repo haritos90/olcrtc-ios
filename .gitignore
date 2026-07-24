@@ -21,8 +21,6 @@ $RECYCLE.BIN/
 # Editors / IDEs / tooling
 .idea/
 .vscode-test/
-.claude/
-CLAUDE.md
 *.swp
 *.swo
 *.orig
@@ -176,5 +174,3 @@ local/
 # Project-specific
 olcrtc-ios.xcodeproj/
 App/Mobile.xcframework/
-# local Backlog.md task ledger (not tracked)
-backlog/

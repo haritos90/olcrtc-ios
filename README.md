@@ -286,7 +286,7 @@ CARRIER=${OLCRTC_CARRIER:-telemost}
 
 A **rejected block** (#325) carries upstream lines we deliberately do *not* adopt — commented out so they never run, verbatim so they stay machine-checkable, with the reason on the `boc` line.
 
-`scripts/parity_check.py` runs as an Xcode pre-build phase and classifies every line in **both directions**: each unmarked line of ours must still appear verbatim in upstream, and each executable upstream line must be either adopted (present in our copy) or explicitly rejected. If upstream changes a command we depend on **or adds lines we have no decision for**, the build fails until `srv.sh` is deliberately updated — adopt the new lines or reject them with a reason, and file a backlog task recording the triage.
+`scripts/parity_check.py` runs as an Xcode pre-build phase and classifies every line in **both directions**: each unmarked line of ours must still appear verbatim in upstream, and each executable upstream line must be either adopted (present in our copy) or explicitly rejected. If upstream changes a command we depend on **or adds lines we have no decision for**, the build fails until `srv.sh` is deliberately updated — adopt the new lines or reject them with a reason, and record the triage decision.
 
 ### Updating the olcrtc-upstream submodule
 
